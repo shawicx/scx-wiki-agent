@@ -11,6 +11,7 @@ export interface GraphEdge {
   target: string;
   type: string;
   filePath: string;
+  callLine?: number | null;
 }
 
 export interface GraphPath {

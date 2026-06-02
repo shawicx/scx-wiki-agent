@@ -12,6 +12,10 @@ import type {
   TroubleshootingContext,
 } from './types.js';
 
+function sanitizeMermaid(name: string): string {
+  return name.replace(/[^a-zA-Z0-9_]/g, '_');
+}
+
 export class WikiFallbackBuilder {
   buildOverview(ctx: OverviewContext): string {
     const builder = new WikiBuilder()
@@ -66,16 +70,36 @@ export class WikiFallbackBuilder {
     const builder = new WikiBuilder()
       .addTitle('Data Flow');
 
-    if (ctx.pipelines.length === 0) {
-      builder.addParagraph('No execution pipelines traced.');
+    if (ctx.sequences.length === 0) {
+      builder.addParagraph('No execution sequences traced.');
       return builder.build();
     }
 
-    for (const pipeline of ctx.pipelines) {
-      const steps = pipeline.steps
-        .map(s => `${s.symbol} @ ${s.filePath}:${s.startLine}`)
-        .join(' → ');
-      builder.addSection(pipeline.name, steps);
+    for (const seq of ctx.sequences) {
+      // Build Mermaid sequenceDiagram
+      const lines: string[] = ['sequenceDiagram'];
+      for (const p of seq.participants) {
+        lines.push(`    participant ${sanitizeMermaid(p.name)}`);
+      }
+      for (const msg of seq.messages) {
+        lines.push(`    ${sanitizeMermaid(msg.from)}->>${sanitizeMermaid(msg.to)}: ${sanitizeMermaid(msg.label)}`);
+      }
+
+      builder.addSection(seq.name, '');
+      builder.addCodeBlock('mermaid', lines.join('\n'));
+
+      // Call-step table for reference
+      if (seq.messages.length > 0) {
+        builder.addTable(
+          ['From', 'To', 'Call', 'Location'],
+          seq.messages.map(m => [
+            m.from,
+            m.to,
+            m.label,
+            `${m.filePath}:${m.callLine}`,
+          ]),
+        );
+      }
     }
 
     return builder.build();

@@ -75,8 +75,32 @@ export function createDatabase(dbPath: string): DatabaseConnection {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA);
+  runMigrations(db);
 
   return db;
+}
+
+const MIGRATIONS: Array<{ version: number; sql: string }> = [
+  {
+    version: 1,
+    sql: [
+      'ALTER TABLE relations ADD COLUMN call_line INTEGER',
+      'CREATE INDEX IF NOT EXISTS idx_relations_call_line ON relations(call_line)',
+    ].join(';'),
+  },
+];
+
+function runMigrations(db: DatabaseConnection): void {
+  db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)');
+  const row = db.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number | null } | undefined;
+  const current = row?.v ?? 0;
+
+  for (const m of MIGRATIONS) {
+    if (m.version > current) {
+      db.exec(m.sql);
+      db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(m.version);
+    }
+  }
 }
 
 export function closeDatabase(db: DatabaseConnection): void {

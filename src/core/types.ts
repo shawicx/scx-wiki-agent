@@ -55,6 +55,7 @@ export interface Relation {
   target: string;
   type: RelationType;
   filePath: string;
+  callLine?: number | null;
 }
 
 export interface ModuleInfo {

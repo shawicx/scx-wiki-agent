@@ -281,3 +281,219 @@ function makeSymbol(
     visibility: null,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Call expression extraction
+// ---------------------------------------------------------------------------
+
+export type CallType = 'direct' | 'method' | 'constructor' | 'chained';
+
+export interface ExtractedCall {
+  callerScope: string | null;
+  calleeName: string;
+  calleeFullName: string;
+  filePath: string;
+  callLine: number;
+  callType: CallType;
+}
+
+/**
+ * Extract call expressions from a parsed tree-sitter AST.
+ *
+ * Walks the tree tracking scope (which function/method we are inside) and
+ * records every call_expression, new_expression, and chained call found.
+ *
+ * @param tree - The parsed tree-sitter syntax tree.
+ * @param filePath - The file path for call metadata.
+ * @param symbols - The symbols already extracted from this file (used for scope resolution).
+ * @returns An array of extracted calls.
+ */
+export function extractCalls(
+  tree: Parser.Tree,
+  filePath: string,
+  symbols: ExtractedSymbol[],
+): ExtractedCall[] {
+  const calls: ExtractedCall[] = [];
+  const scopeStack: string[] = [];
+
+  // Build a sorted list of symbol start lines for scope lookup
+  const sortedSymbols = [...symbols]
+    .filter(s => s.type === 'function' || s.type === 'method')
+    .sort((a, b) => a.startLine - b.startLine);
+
+  function currentScope(): string | null {
+    return scopeStack.length > 0 ? scopeStack[scopeStack.length - 1] : null;
+  }
+
+  function pushScope(name: string): void {
+    scopeStack.push(name);
+  }
+
+  function popScope(): void {
+    scopeStack.pop();
+  }
+
+  function walk(node: Parser.Node): void {
+    switch (node.type) {
+      case 'function_declaration': {
+        const nameNode = node.childForFieldName('name');
+        if (nameNode) {
+          pushScope(nameNode.text);
+          walkChildren(node);
+          popScope();
+        }
+        return;
+      }
+
+      case 'arrow_function': {
+        const parent = node.parent;
+        if (parent?.type === 'variable_declarator') {
+          const nameNode = parent.childForFieldName('name');
+          if (nameNode) {
+            pushScope(nameNode.text);
+            walkChildren(node);
+            popScope();
+            return;
+          }
+        }
+        // Anonymous arrow function callback — use enclosing scope
+        // Still walk children to extract calls inside
+        walkChildren(node);
+        return;
+      }
+
+      case 'method_definition': {
+        const nameNode = node.childForFieldName('name');
+        if (nameNode) {
+          // Include class scope prefix: ClassName.methodName
+          const classScope = scopeStack.length > 0 ? scopeStack[scopeStack.length - 1] : null;
+          pushScope(classScope ? `${classScope}.${nameNode.text}` : nameNode.text);
+          walkChildren(node);
+          popScope();
+        }
+        return;
+      }
+
+      case 'class_declaration': {
+        const nameNode = node.childForFieldName('name');
+        if (nameNode) {
+          pushScope(nameNode.text);
+          walkChildren(node);
+          popScope();
+        }
+        return;
+      }
+
+      case 'new_expression': {
+        const ctorNode = node.childForFieldName('constructor');
+        // In tree-sitter TS, new Foo() may or may not have a constructor child
+        // The callee is the first named identifier-like child
+        const callee = ctorNode ?? node.children.find(c => c.isNamed && c.type !== 'arguments');
+        if (callee) {
+          calls.push({
+            callerScope: currentScope(),
+            calleeName: callee.text.replace(/\(.*\)$/, ''),
+            calleeFullName: callee.text.replace(/\(.*\)$/, ''),
+            filePath,
+            callLine: node.startPosition.row + 1,
+            callType: 'constructor',
+          });
+        }
+        walkChildren(node);
+        return;
+      }
+
+      case 'call_expression': {
+        extractCallExpression(node, calls, filePath, currentScope());
+        // Walk into arguments to find callback arrow functions / function expressions
+        for (const child of node.children) {
+          const funcChild = node.childForFieldName('function');
+          if (child === funcChild && funcChild?.type === 'call_expression') {
+            walk(child);
+          } else if (child.type === 'arguments') {
+            // Walk arguments children to find callbacks (arrow_function, function_expression)
+            for (const arg of child.children) {
+              if (arg.isNamed) {
+                walk(arg);
+              }
+            }
+          } else if (child.isNamed && child.type !== 'arguments') {
+            walk(child);
+          }
+        }
+        return;
+      }
+    }
+
+    walkChildren(node);
+  }
+
+  function extractCallExpression(
+    node: Parser.Node,
+    calls: ExtractedCall[],
+    filePath: string,
+    scope: string | null,
+  ): void {
+    const funcNode = node.childForFieldName('function');
+    if (!funcNode) return;
+
+    const callLine = node.startPosition.row + 1;
+
+    if (funcNode.type === 'identifier') {
+      calls.push({
+        callerScope: scope,
+        calleeName: funcNode.text,
+        calleeFullName: funcNode.text,
+        filePath,
+        callLine,
+        callType: 'direct',
+      });
+    } else if (funcNode.type === 'member_expression') {
+      const object = funcNode.childForFieldName('object');
+      const property = funcNode.childForFieldName('property');
+      const calleeFullName = funcNode.text;
+
+      // For method calls like `this.method()` or `obj.method()`, use the property name
+      const calleeName = property?.text ?? calleeFullName;
+
+      // Determine if this is a chained call (object is itself a call_expression)
+      const isChained = object?.type === 'call_expression';
+
+      calls.push({
+        callerScope: scope,
+        calleeName,
+        calleeFullName,
+        filePath,
+        callLine,
+        callType: isChained ? 'chained' : 'method',
+      });
+    } else if (funcNode.type === 'call_expression') {
+      // Chained call: the callee is itself a call (e.g., `getA().getB()`)
+      // The function part is a member_expression whose object is a call_expression
+      // Extract the outer call, inner call will be handled by walking children
+      if (funcNode.childForFieldName('function')?.type === 'member_expression') {
+        const memberExpr = funcNode.childForFieldName('function')!;
+        const property = memberExpr.childForFieldName('property');
+        calls.push({
+          callerScope: scope,
+          calleeName: property?.text ?? memberExpr.text,
+          calleeFullName: memberExpr.text,
+          filePath,
+          callLine,
+          callType: 'chained',
+        });
+      }
+    }
+  }
+
+  function walkChildren(node: Parser.Node): void {
+    for (const child of node.children) {
+      if (child.isNamed) {
+        walk(child);
+      }
+    }
+  }
+
+  walk(tree.rootNode);
+  return calls;
+}

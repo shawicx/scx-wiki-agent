@@ -34,7 +34,38 @@ export interface ArchitectureContext {
   }>;
 }
 
-/** A single execution pipeline step */
+/** A participant in a sequence diagram (function/class/module) */
+export interface SequenceParticipant {
+  name: string;
+  type: SymbolType;
+  filePath: string;
+}
+
+/** A message between participants in a sequence diagram */
+export interface SequenceMessage {
+  from: string;
+  to: string;
+  label: string;
+  callLine: number;
+  filePath: string;
+}
+
+/** A traced execution sequence from entry to terminal calls */
+export interface ExecutionSequence {
+  name: string;
+  entrySymbol: string;
+  participants: SequenceParticipant[];
+  messages: SequenceMessage[];
+}
+
+/** Context for data-flow page */
+export interface DataFlowContext {
+  sequences: ExecutionSequence[];
+}
+
+/**
+ * @deprecated Use ExecutionSequence instead
+ */
 export interface PipelineStep {
   symbol: string;
   type: SymbolType;
@@ -43,16 +74,13 @@ export interface PipelineStep {
   codeSnippet: string;
 }
 
-/** A traced execution pipeline */
+/**
+ * @deprecated Use ExecutionSequence instead
+ */
 export interface ExecutionPipeline {
   name: string;
   entrySymbol: string;
   steps: PipelineStep[];
-}
-
-/** Context for data-flow page */
-export interface DataFlowContext {
-  pipelines: ExecutionPipeline[];
 }
 
 /** Context for modules page */

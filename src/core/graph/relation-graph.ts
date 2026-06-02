@@ -44,6 +44,17 @@ export class RelationGraph {
   }
 
   /**
+   * Get all outgoing 'calls' edges from a node, sorted by callLine ascending.
+   * Provides temporal ordering of calls within a function.
+   */
+  getCallEdgesOrdered(sourceId: string): GraphEdge[] {
+    const outEdges = this.outgoingEdges.get(sourceId) ?? [];
+    return outEdges
+      .filter(e => e.type === 'calls')
+      .sort((a, b) => (a.callLine ?? 0) - (b.callLine ?? 0));
+  }
+
+  /**
    * BFS shortest path from fromId to toId.
    * Returns a GraphPath with node IDs and the edges traversed, or null if no path exists.
    */
@@ -129,11 +140,12 @@ export class RelationGraph {
   static fromDatabase(db: DatabaseConnection): RelationGraph {
     const graph = new RelationGraph();
 
-    const relations = db.prepare('SELECT source, target, type, file_path FROM relations').all() as Array<{
+    const relations = db.prepare('SELECT source, target, type, file_path, call_line FROM relations').all() as Array<{
       source: string;
       target: string;
       type: string;
       file_path: string;
+      call_line: number | null;
     }>;
 
     const nodeIds = new Set<string>();
@@ -172,6 +184,7 @@ export class RelationGraph {
         target: rel.target,
         type: rel.type,
         filePath: rel.file_path,
+        callLine: rel.call_line,
       });
     }
 

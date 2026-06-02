@@ -8,8 +8,9 @@ import type {
   ArchitectureContext,
   ModuleSummary,
   DataFlowContext,
-  ExecutionPipeline,
-  PipelineStep,
+  ExecutionSequence,
+  SequenceParticipant,
+  SequenceMessage,
   OnboardingContext,
   TroubleshootingContext,
   ModulesContext,
@@ -77,7 +78,6 @@ export class WikiContextBuilder {
   }
 
   buildDataFlowContext(): DataFlowContext {
-    // Find entry point symbols (CLI commands, main functions, exported handlers)
     const entryPoints = this.db
       .prepare(
         `SELECT DISTINCT name, type, file_path, start_line FROM symbols
@@ -91,23 +91,19 @@ export class WikiContextBuilder {
       )
       .all() as Array<{ name: string; type: SymbolType; file_path: string; start_line: number }>;
 
-    const pipelines: ExecutionPipeline[] = [];
+    const sequences: ExecutionSequence[] = [];
     const seenNames = new Set<string>();
 
     for (const entry of entryPoints) {
       if (seenNames.has(entry.name)) continue;
       seenNames.add(entry.name);
-      const steps = this.traceCallChain(entry.name, new Set(), 0, 5);
-      if (steps.length > 0) {
-        pipelines.push({
-          name: entry.name,
-          entrySymbol: entry.name,
-          steps,
-        });
+      const seq = this.buildSequence(entry.name, new Set(), 8);
+      if (seq.messages.length > 0) {
+        sequences.push(seq);
       }
     }
 
-    return { pipelines };
+    return { sequences };
   }
 
   buildModulesContext(): ModulesContext {
@@ -469,45 +465,81 @@ export class WikiContextBuilder {
     });
   }
 
-  private traceCallChain(
-    symbolName: string,
-    visited: Set<string>,
-    depth: number,
+  private buildSequence(
+    entryName: string,
+    globalVisited: Set<string>,
     maxDepth: number,
-  ): PipelineStep[] {
-    if (depth >= maxDepth || visited.has(symbolName)) return [];
-    visited.add(symbolName);
+  ): ExecutionSequence {
+    const participants: SequenceParticipant[] = [];
+    const messages: SequenceMessage[] = [];
+    const participantSet = new Set<string>();
 
-    const symbol = this.db
-      .prepare(
-        "SELECT name, type, file_path, start_line FROM symbols WHERE name = ? LIMIT 1"
-      )
-      .get(symbolName) as { name: string; type: SymbolType; file_path: string; start_line: number } | undefined;
+    // Pre-load all known symbol names for filtering out generic method calls
+    const knownSymbolNames = new Set(
+      (this.db.prepare('SELECT DISTINCT name FROM symbols').all() as Array<{ name: string }>).map(s => s.name),
+    );
 
-    if (!symbol) return [];
-
-    const chunks = this.db
-      .prepare("SELECT content FROM chunks WHERE file_path = ? AND start_line <= ? AND end_line >= ? LIMIT 1")
-      .all(symbol.file_path, symbol.start_line, symbol.start_line) as Array<{ content: string }>;
-
-    const step: PipelineStep = {
-      symbol: symbol.name,
-      type: symbol.type,
-      filePath: symbol.file_path,
-      startLine: symbol.start_line,
-      codeSnippet: chunks.length > 0 ? chunks[0].content.slice(0, 300) : '',
+    const addParticipant = (name: string) => {
+      if (participantSet.has(name)) return;
+      participantSet.add(name);
+      const sym = this.db
+        .prepare("SELECT type, file_path FROM symbols WHERE name = ? LIMIT 1")
+        .get(name) as { type: SymbolType; file_path: string } | undefined;
+      participants.push({
+        name,
+        type: sym?.type ?? 'function',
+        filePath: sym?.file_path ?? '',
+      });
     };
 
-    const calls = this.db
-      .prepare("SELECT target FROM relations WHERE source = ? AND type = 'calls'")
-      .all(symbolName) as Array<{ target: string }>;
+    // BFS traversal following calls relations
+    const queue: Array<{ symbolName: string; depth: number }> = [{ symbolName: entryName, depth: 0 }];
+    const visited = new Set<string>([entryName]);
 
-    const nextSteps: PipelineStep[] = [];
-    for (const call of calls) {
-      const chain = this.traceCallChain(call.target, visited, depth + 1, maxDepth);
-      nextSteps.push(...chain);
+    addParticipant(entryName);
+
+    while (queue.length > 0) {
+      const { symbolName, depth } = queue.shift()!;
+      if (depth >= maxDepth) continue;
+
+      const calls = this.db
+        .prepare("SELECT target, call_line, file_path FROM relations WHERE source = ? AND type = 'calls' ORDER BY call_line ASC")
+        .all(symbolName) as Array<{ target: string; call_line: number | null; file_path: string }>;
+
+      for (const call of calls) {
+        const calleeName = call.target;
+
+        // Skip calls to names not in the symbol table (filters out generic method names
+        // like 'option', 'description', 'action' from fluent API chains)
+        if (!knownSymbolNames.has(calleeName)) continue;
+
+        // Skip if we've seen this edge before
+        const edgeKey = `${symbolName}->${calleeName}`;
+        if (globalVisited.has(edgeKey)) continue;
+        globalVisited.add(edgeKey);
+
+        messages.push({
+          from: symbolName,
+          to: calleeName,
+          label: calleeName,
+          callLine: call.call_line ?? 0,
+          filePath: call.file_path,
+        });
+
+        addParticipant(calleeName);
+
+        if (!visited.has(calleeName)) {
+          visited.add(calleeName);
+          queue.push({ symbolName: calleeName, depth: depth + 1 });
+        }
+      }
     }
 
-    return [step, ...nextSteps];
+    return {
+      name: entryName,
+      entrySymbol: entryName,
+      participants,
+      messages,
+    };
   }
 }

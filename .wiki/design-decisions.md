@@ -1,42 +1,39 @@
-# Design Decisions
+# 设计决策文档
 
-## Design Patterns
+## 设计哲学
 
+本项目采用模块化与可扩展的设计思想，遵循“单一职责”和“开闭原则”的核心哲学。通过将复杂功能拆解为独立模块，并使用策略模式实现运行时扩展，使系统能够灵活适应不同框架和项目的需求。同时，采用服务层模式将业务逻辑与基础设施解耦，确保各模块职责清晰、易于维护和测试。
 
+## 设计模式
 
-### Strategy Pattern
+### 策略模式
+策略模式是本项目的核心设计模式。系统通过ResolverRegistry注册中心管理多种解析器实现，每种解析器针对特定框架（如React、Vue、Nest、Tauri等）编写独立的解析逻辑。当需要解析源码时，系统根据文件类型或项目特征自动选择对应的解析器。这种方式使得添加新框架支持时只需新增一个解析器类并注册即可，完全无需修改已有代码，体现了开闭原则。相关文件包括src/strategy/resolver-registry.ts以及各框架解析器文件，如commander-resolver.ts、react-resolver.ts、vue-resolver.ts等。
 
-- ResolverRegistry acts as a registry with a register() method
-- Multiple implementations: CommanderResolver, LangGraphResolver, MastraResolver, NestResolver, PathResolver, ReactResolver, ResolverRegistry, SymbolResolver, TauriResolver, VueResolver
+### 命令模式
+CLI层的实现采用了命令模式，将每个命令行操作封装为独立的命令对象。包括ask、build、index、init、scan、update共六个命令，每个命令对象处理自己的参数解析与执行逻辑。这种设计使得命令的添加、删除或修改互不影响，同时方便为每个命令编写独立的单元测试。相关文件位于src/cli/commands/目录下。
 
-### Service Layer
+### 服务层模式
+业务逻辑层采用服务层模式组织，定义了六个服务类，分别封装索引、问答、检索、扫描、更新和维基知识管理等核心业务能力。服务层作为业务逻辑的集中管理点，隔离了底层基础设施与上层CLI命令，使得可以在不改变命令层的情况下替换或升级数据存储、搜索引擎等实现。相关文件位于src/services/目录下。
 
-- 6 service classes in src/services/
-- Services: IndexService, QAService, RetrievalService, ScanService, UpdateService, WikiService
-- Each service encapsulates a distinct business capability
+### 建造者模式
+维基知识对象的构建使用了建造者模式，通过WikiBuilder提供流畅的链式调用API，以build()方法结束构建过程。这种方式将复杂对象的构建步骤与最终表示分离，使得创建不同配置的维基对象时代码更加清晰易读。相关文件为src/knowledge/wiki-builder.ts。
 
-### Builder Pattern
+## 技术选型
 
-- WikiBuilder provides fluent construction API with build() method
-- Separates object construction from representation
+### SQLite（better-sqlite3）
+选用嵌入式SQLite数据库存储本地代码索引，利用其FTS5全文搜索功能实现高效的代码项检索。相比MySQL或PostgreSQL，SQLite无需独立服务器进程即可运行，适合命令行工具的场景。
 
-### Command Pattern
+### Tree-sitter
+采用Tree-sitter作为代码解析引擎，它通过增量式的WASM AST解析，能够精确提取代码中的符号定义与引用关系。相比正则表达式解析，Tree-sitter可正确处理不同语言的语法结构，解析结果更加可靠。
 
-- 6 command handlers in commands/ directory
-- Each command encapsulates a single CLI operation
-- Commands: ask.ts, build.ts, index.ts, init.ts, scan.ts, update.ts
+### Commander.js
+选择Commander.js作为CLI框架，其声明式的命令定义方式和内置的选项解析能力，简化了命令行界面的开发。该项目共有6个子命令，Commander.js能够优雅地处理嵌套命令树和帮助信息生成。
 
-## Technology Choices
+### Vercel AI SDK与OpenAI Provider
+使用Vercel AI SDK提供的大语言模型抽象层，配合OpenAI兼容的API接口，实现流式问答功能。该SDK支持多种模型提供商，便于将来切换或集成更多AI模型。
 
+### tsup（esbuild）
+采用基于esbuild的tsup作为构建工具，以极快的打包速度将TypeScript编译为ESM格式的JavaScript。对于CLI工具而言，构建效率直接影响开发体验。
 
-
-| Technology | Category | Evidence |
-| --- | --- | --- |
-| SQLite (better-sqlite3) | Database | Embedded SQL database with FTS5 full-text search for local code index |
-| Tree-sitter | Code Parsing | Incremental WASM-based AST parsing for precise symbol extraction |
-| Commander.js | CLI Framework | Declarative command-line interface with options and sub-commands |
-| Vercel AI SDK | LLM Integration | Streaming LLM responses with provider abstraction |
-| OpenAI Provider | AI Model | OpenAI-compatible API integration for text generation |
-| tsup (esbuild) | Build Tool | Fast esbuild-based bundler targeting ESM output |
-| Vitest | Testing | Vite-native test framework with ESM support |
-| TypeScript | Language | Static type checking for code safety and IDE support |
+### Vitest与TypeScript
+使用Vitest作为测试框架，它与Vite生态兼容，支持ESM模块的快速测试。整个项目基于TypeScript开发，静态类型检查有效提升了代码质量和开发效率。

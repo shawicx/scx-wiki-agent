@@ -3,7 +3,7 @@ import { extname, basename } from 'path';
 import type { DatabaseConnection } from '../core/database.js';
 import { FileScanner } from '../core/scanner.js';
 import { TreeSitterParser } from '../core/parser.js';
-import { extractSymbols } from '../core/symbol-extractor.js';
+import { extractSymbols, extractCalls } from '../core/symbol-extractor.js';
 import { computeHash, generateId, getFileLanguage } from '../shared/utils.js';
 import { CODE_EXTENSIONS } from '../shared/constants.js';
 import type { ChunkType, ChunkMetadata } from '../core/types.js';
@@ -86,6 +86,22 @@ export class IndexService {
             this.insertSymbol(sym);
           }
 
+          // Extract call expressions and create 'calls' relations
+          const extractedCalls = extractCalls(tree, file.relativePath, symbols);
+          for (const call of extractedCalls) {
+            const relId = generateId();
+            const source = call.callerScope ?? '<anonymous>';
+            const target = call.calleeName;
+            this.relationGraph.addEdge({
+              source,
+              target,
+              type: 'calls',
+              filePath: file.relativePath,
+              callLine: call.callLine,
+            });
+            this.insertRelation(relId, source, target, 'calls', file.relativePath, call.callLine);
+          }
+
           // Framework resolver extraction
           const { nodes: frameworkNodes, relations: frameworkRelations } = this.resolverRegistry.extractAll(content, file.relativePath);
           for (const node of frameworkNodes) {
@@ -93,7 +109,7 @@ export class IndexService {
           }
           for (const rel of frameworkRelations) {
             this.relationGraph.addEdge({ source: rel.source, target: rel.target, type: rel.type, filePath: rel.filePath });
-            this.insertRelation(rel.id, rel.source, rel.target, rel.type, rel.filePath);
+            this.insertRelation(rel.id, rel.source, rel.target, rel.type, rel.filePath, null);
           }
 
           // Create chunks per symbol (excluding import/export symbols)
@@ -360,9 +376,9 @@ export class IndexService {
     return (result?.maxId ?? 0) + 1;
   }
 
-  private insertRelation(id: string, source: string, target: string, type: string, filePath: string): void {
+  private insertRelation(id: string, source: string, target: string, type: string, filePath: string, callLine?: number | null): void {
     this.db
-      .prepare('INSERT INTO relations (id, source, target, type, file_path) VALUES (?, ?, ?, ?, ?)')
-      .run(id, source, target, type, filePath);
+      .prepare('INSERT INTO relations (id, source, target, type, file_path, call_line) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(id, source, target, type, filePath, callLine ?? null);
   }
 }

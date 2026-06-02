@@ -16,7 +16,7 @@ import type {
 interface PageConfig {
   systemPrompt: string;
   userPrompt: string;
-  maxTokens?: number;
+  maxOutputTokens?: number;
 }
 
 export class WikiPageGenerator {
@@ -69,7 +69,7 @@ export class WikiPageGenerator {
           .slice(0, 10)
           .map(s => `${s.name}(${s.type})`),
       }, null, 2),
-      maxTokens: 4000,
+      maxOutputTokens: 4000,
     });
   }
 
@@ -101,35 +101,43 @@ export class WikiPageGenerator {
 - Mermaid图中的节点名必须与实际模块名一致
 - 总长度1000-1500字`,
       userPrompt: JSON.stringify({ modules, relations }, null, 2),
-      maxTokens: 4000,
+      maxOutputTokens: 4000,
     });
   }
 
   async generateDataFlow(ctx: DataFlowContext, onChunk: (text: string) => void): Promise<string> {
-    const pipelines = ctx.pipelines.map(p => ({
-      name: p.name,
-      steps: p.steps.map(s => ({
-        symbol: s.symbol,
-        type: s.type,
-        location: `${s.filePath}:${s.startLine}`,
+    const sequences = ctx.sequences.map(s => ({
+      name: s.name,
+      participants: s.participants.map(p => ({
+        name: p.name,
+        type: p.type,
+        file: p.filePath,
+      })),
+      messages: s.messages.map(m => ({
+        from: m.from,
+        to: m.to,
+        label: m.label,
+        location: `${m.filePath}:${m.callLine}`,
       })),
     }));
 
     return this.generate(onChunk, {
-      systemPrompt: `你是一个代码文档专家。请根据执行管线数据生成完整的数据流文档页面（Markdown格式）。
+      systemPrompt: `你是一个代码文档专家。请根据执行序列数据生成完整的数据流文档页面（Markdown格式）。
 
 要求：
 - 用中文撰写
 - 开头用1-2段描述项目的核心数据流走向
-- 对每条执行管线，包含：
+- 对每条执行序列，包含：
   - 用一段话描述完整流程（从入口到终点）
-  - 用 Mermaid flowchart LR 或 sequenceDiagram 展示调用链
-  - 用"→"标注关键调用步骤
-- 每个步骤标注源文件位置（文件名:行号）
+  - 用 Mermaid sequenceDiagram 展示调用序列（必须使用 sequenceDiagram 语法）
+  - 在图中用 participant 声明所有参与者
+  - 用 ->> 表示每个调用步骤
+  - 用 Note over 标注关键数据转换节点
+- 每个调用步骤标注源文件位置（文件名:行号）
 - 不要输出原始代码片段
 - 总长度800-1200字`,
-      userPrompt: JSON.stringify({ pipelines }, null, 2),
-      maxTokens: 4000,
+      userPrompt: JSON.stringify({ sequences }, null, 2),
+      maxOutputTokens: 4000,
     });
   }
 
@@ -164,7 +172,7 @@ export class WikiPageGenerator {
 - 按模块重要性排序
 - 总长度1000-1500字`,
       userPrompt: JSON.stringify({ modules }, null, 2),
-      maxTokens: 4000,
+      maxOutputTokens: 4000,
     });
   }
 
@@ -194,7 +202,7 @@ export class WikiPageGenerator {
         exportedFunctions: functions.map(f => ({ name: f.name, file: `${f.filePath}:${f.startLine}` })),
         frameworkNodes: nodes.map(n => ({ name: n.name, type: n.type, file: n.filePath })),
       }, null, 2),
-      maxTokens: 4000,
+      maxOutputTokens: 4000,
     });
   }
 
@@ -219,7 +227,7 @@ export class WikiPageGenerator {
 - 不要输出原始代码片段
 - 总长度800-1200字`,
       userPrompt: JSON.stringify({ services }, null, 2),
-      maxTokens: 4000,
+      maxOutputTokens: 4000,
     });
   }
 
@@ -238,7 +246,7 @@ export class WikiPageGenerator {
         patterns: ctx.patterns,
         techChoices: ctx.techChoices,
       }, null, 2),
-      maxTokens: 4000,
+      maxOutputTokens: 4000,
     });
   }
 
@@ -265,7 +273,7 @@ export class WikiPageGenerator {
         nodeVersion: ctx.nodeVersion,
         cliCommands: ctx.cliCommands,
       }, null, 2),
-      maxTokens: 4000,
+      maxOutputTokens: 4000,
     });
   }
 
@@ -287,7 +295,7 @@ export class WikiPageGenerator {
         moduleCount: ctx.modules.length,
         moduleNames: ctx.modules.map(m => m.name).slice(0, 10),
       }, null, 2),
-      maxTokens: 4000,
+      maxOutputTokens: 4000,
     });
   }
 
@@ -308,7 +316,7 @@ export class WikiPageGenerator {
       userPrompt: JSON.stringify({
         symbols: symbols.map(s => ({ name: s.name, type: s.type, file: s.filePath })),
       }, null, 2),
-      maxTokens: 4000,
+      maxOutputTokens: 4000,
     });
   }
 
@@ -327,7 +335,7 @@ export class WikiPageGenerator {
       model: this.model,
       system: WikiPageGenerator.ANTI_HALLUCINATION + '\n\n' + config.systemPrompt,
       prompt: config.userPrompt,
-      maxTokens: config.maxTokens,
+      maxOutputTokens: config.maxOutputTokens,
     });
 
     let text = '';

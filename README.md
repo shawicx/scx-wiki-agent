@@ -1,154 +1,156 @@
 # scx-wiki-agent
 
-Local knowledge base agent for software projects. Scans code, builds a searchable index, generates structured wiki documentation, and answers questions using retrieval-augmented generation.
+面向软件项目的本地知识库代理。扫描代码、构建可搜索索引、生成结构化 Wiki 文档，并通过检索增强生成回答问题。
 
-## Features
+## 功能特性
 
-- **Project scanning** — Detects tech stack, frameworks, and project structure
-- **Multi-layer indexing** — AST parsing via Tree-sitter, symbol extraction, chunking, and FTS5 full-text search
-- **Multi-path retrieval** — Keyword, semantic, and graph-based search with intent classification
-- **LLM-enhanced wiki generation** — Rule-based page skeletons + LLM semantic descriptions, with pure-rules fallback
-- **Streaming Q&A** — Ask questions about your codebase with streaming responses
-- **Incremental updates** — Re-index only changed files based on git diff
+- **项目扫描** — 检测技术栈、框架和项目结构
+- **多层索引** — 基于 Tree-sitter 的 AST 解析、符号提取、分块和 FTS5 全文搜索
+- **多路检索** — 关键词、语义和图搜索，支持意图分类
+- **LLM 增强 Wiki 生成** — 规则模板 + LLM 语义描述，支持纯规则回退
+- **流式问答** — 流式响应的代码库问答
+- **增量更新** — 基于 git diff 仅重新索引变更文件
 
-## Quick Start
+## 快速开始
 
 ```bash
-# Install dependencies
+# 安装依赖
 pnpm install
 
-# Build
+# 构建
 pnpm build
 
-# Initialize in your project
+# 在项目中初始化
 scx-wiki-agent init
 
-# Scan project structure
+# 扫描项目结构
 scx-wiki-agent scan
 
-# Build the search index
+# 构建搜索索引
 scx-wiki-agent index
 
-# Generate wiki documentation (pure rules, no LLM needed)
+# 生成 Wiki 文档（纯规则，无需 LLM）
 scx-wiki-agent build --no-llm
 
-# Generate wiki with LLM-enhanced descriptions
+# 使用 LLM 增强描述生成 Wiki
 scx-wiki-agent build
 
-# Ask a question
-scx-wiki-agent ask "How does the retrieval pipeline work?"
+# 提问
+scx-wiki-agent ask "检索管线是如何工作的？"
 
-# Update index after code changes
+# 代码变更后更新索引
 scx-wiki-agent update
 ```
 
-## Commands
+## 命令
 
-| Command | Description |
-|---------|-------------|
-| `init` | Initialize wiki-agent in the project |
-| `scan` | Scan project structure and identify tech stack |
-| `index` | Build local index (AST, symbols, chunks, FTS5) |
-| `ask <question>` | Ask a question about the project (supports `--stream`) |
-| `build` | Generate wiki documentation |
-| `update` | Incremental update based on git changes |
+| 命令 | 说明 |
+|------|------|
+| `init` | 在项目中初始化 wiki-agent |
+| `scan` | 扫描项目结构，识别技术栈 |
+| `index` | 构建本地索引（AST、符号、分块、FTS5） |
+| `ask <问题>` | 针对项目提问（支持 `--stream`） |
+| `build` | 生成 Wiki 文档 |
+| `update` | 基于 git 变更进行增量更新 |
 
-### Build Options
+### Build 选项
 
-The `build` command supports these options:
+`build` 命令支持以下选项：
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--model <name>` | `gpt-4o-mini` | LLM model for semantic descriptions |
-| `--base-url <url>` | — | OpenAI-compatible API base URL (e.g. `http://localhost:11434/v1` for Ollama) |
-| `--no-llm` | off | Generate wiki without LLM (pure rule-based) |
-| `--pages <list>` | `all` | Comma-separated page names to generate |
+| 选项 | 默认值 | 说明 |
+|------|--------|------|
+| `--model <名称>` | `gpt-4o-mini` | 用于语义描述的 LLM 模型 |
+| `--base-url <url>` | — | OpenAI 兼容 API 地址（如 Ollama 用 `http://localhost:11434/v1`） |
+| `--no-llm` | 关闭 | 不使用 LLM，纯规则生成 |
+| `--pages <列表>` | `all` | 逗号分隔的页面名称列表 |
 
-### Generated Wiki Pages
+### 生成的 Wiki 页面
 
-The `build` command generates 8 markdown files in `.wiki/`:
+`build` 命令在 `.wiki/` 目录下生成 10 个 Markdown 文件：
 
-| Page | Content |
-|------|---------|
-| `overview.md` | Project type, tech stack, entry files, key symbols |
-| `architecture.md` | Module structure and inter-module dependencies |
-| `data-flow.md` | Execution pipelines traced from entry points |
-| `modules.md` | Per-module symbols, dependencies, code snippets |
-| `api.md` | CLI commands, exported functions, framework nodes |
-| `business.md` | Service classes, methods, dependency relationships |
-| `design-decisions.md` | Detected design patterns and technology choices |
-| `glossary.md` | Deduplicated symbol table |
+| 页面 | 内容 |
+|------|------|
+| `overview.md` | 项目类型、技术栈、入口文件、关键符号 |
+| `architecture.md` | 模块结构与模块间依赖关系 |
+| `data-flow.md` | 从入口点追踪的执行时序图 |
+| `modules.md` | 各模块的符号、依赖和代码片段 |
+| `api.md` | CLI 命令、导出函数、框架节点 |
+| `business.md` | 服务类、方法、依赖关系 |
+| `design-decisions.md` | 检测到的设计模式和技术选型 |
+| `onboarding.md` | 上手指南：环境准备、安装、基本使用 |
+| `troubleshooting.md` | 常见问题与故障排除 |
+| `glossary.md` | 去重后的符号表 |
 
-## Supported Project Types
+## 支持的项目类型
 
-Built-in framework resolvers for:
+内置框架解析器：
 
-- React (create-react-app, Next.js, Vite React)
-- Vue (Vue 2/3, Nuxt)
+- React（create-react-app、Next.js、Vite React）
+- Vue（Vue 2/3、Nuxt）
 - NestJS
 - Tauri
 - LangGraph
 - Mastra
 - Commander CLI
 
-General TypeScript/JavaScript projects are also supported out of the box.
+同时支持通用 TypeScript/JavaScript 项目。
 
-## Configuration
+## 配置
 
-### Environment Variables
+### 环境变量
 
 ```bash
-# Required for ask and LLM-enhanced wiki generation
+# ask 命令和 LLM 增强 Wiki 生成所需
 export OPENAI_API_KEY="sk-..."
 
-# For Ollama or other OpenAI-compatible providers
+# 使用 Ollama 或其他 OpenAI 兼容提供商
 export OPENAI_BASE_URL="http://localhost:11434/v1"
 ```
 
-### Using with Ollama
+### 使用 Ollama
 
 ```bash
 scx-wiki-agent build --model qwen2.5 --base-url http://localhost:11434/v1
 ```
 
-## Architecture
+## 架构
 
 ```
 src/
-├── cli/commands/        # CLI command handlers (init, scan, index, ask, build, update)
-├── core/                # Core scanning, parsing, and database layer
-│   ├── database.ts      # SQLite schema and connection management
-│   ├── scanner.ts       # File system scanning and tech detection
-│   ├── parser.ts        # Tree-sitter AST parsing
-│   ├── graph/           # Relation graph and graph queries
-│   ├── retrieval/       # Multi-path retrieval (FTS, graph, symbol, hybrid)
+├── cli/commands/        # CLI 命令处理器（init, scan, index, ask, build, update）
+├── core/                # 核心扫描、解析和数据库层
+│   ├── database.ts      # SQLite Schema 和连接管理
+│   ├── scanner.ts       # 文件系统扫描和技术检测
+│   ├── parser.ts        # Tree-sitter AST 解析
+│   ├── graph/           # 关系图和图查询
+│   ├── retrieval/       # 多路检索（FTS、图、符号、混合排序）
 │   └── ...
-├── knowledge/           # Wiki generation pipeline
-│   ├── types.ts         # Wiki context type definitions
-│   ├── wiki-context-builder.ts   # Extract page context from SQLite
-│   ├── wiki-skeleton-builder.ts  # Generate markdown page skeletons
-│   ├── wiki-page-generator.ts    # LLM-powered semantic content
-│   └── wiki-builder.ts           # Fluent markdown builder utility
-├── services/            # Business logic services
-│   ├── wiki-service.ts  # Orchestrates wiki generation pipeline
-│   ├── qa-service.ts    # Streaming Q&A with retrieval
+├── knowledge/           # Wiki 生成管线
+│   ├── types.ts         # Wiki 上下文类型定义
+│   ├── wiki-context-builder.ts   # 从 SQLite 提取页面上下文
+│   ├── wiki-page-generator.ts    # LLM 驱动的语义内容生成
+│   ├── wiki-fallback-builder.ts  # 纯规则 Markdown 模板
+│   └── wiki-builder.ts           # 流式 Markdown 构建工具
+├── services/            # 业务逻辑服务
+│   ├── wiki-service.ts  # 编排 Wiki 生成管线
+│   ├── qa-service.ts    # 流式检索问答
 │   └── ...
-├── strategy/            # Framework detection and resolution
-│   ├── resolver-registry.ts      # Strategy pattern registry
-│   └── resolvers/       # Per-framework resolvers
-└── shared/              # Constants and utilities
+├── strategy/            # 框架检测和解析
+│   ├── resolver-registry.ts      # 策略模式注册表
+│   └── resolvers/       # 各框架解析器
+└── shared/              # 常量和工具函数
 ```
 
-## Development
+## 开发
 
 ```bash
-pnpm install       # Install dependencies
-pnpm build         # Build with tsup
-pnpm test          # Run tests with vitest
-pnpm test:watch    # Run tests in watch mode
-pnpm lint          # Type-check with tsc --noEmit
+pnpm install       # 安装依赖
+pnpm build         # 使用 tsup 构建
+pnpm test          # 使用 vitest 运行测试
+pnpm test:watch    # 监听模式运行测试
+pnpm lint          # 使用 tsc --noEmit 类型检查
 ```
 
-## License
+## 许可证
 
 MIT

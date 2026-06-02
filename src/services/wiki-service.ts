@@ -15,6 +15,8 @@ const ALL_PAGES = [
   'api',
   'business',
   'design-decisions',
+  'onboarding',
+  'troubleshooting',
   'glossary',
 ] as const;
 
@@ -96,6 +98,10 @@ export class WikiService {
         return fallback.buildBusiness(ctx.buildBusinessContext());
       case 'design-decisions':
         return fallback.buildDesignDecisions(ctx.buildDesignDecisionsContext());
+      case 'onboarding':
+        return fallback.buildOnboarding(ctx.buildOnboardingContext());
+      case 'troubleshooting':
+        return fallback.buildTroubleshooting(ctx.buildTroubleshootingContext());
       case 'glossary':
         return fallback.buildGlossary(ctx.buildGlossaryContext());
       default:
@@ -124,6 +130,10 @@ export class WikiService {
         return generator.generateBusiness(ctx.buildBusinessContext(), onChunk);
       case 'design-decisions':
         return generator.generateDesignDecisions(ctx.buildDesignDecisionsContext(), onChunk);
+      case 'onboarding':
+        return generator.generateOnboarding(ctx.buildOnboardingContext(), onChunk);
+      case 'troubleshooting':
+        return generator.generateTroubleshooting(ctx.buildTroubleshootingContext(), onChunk);
       case 'glossary':
         return generator.generateGlossary(ctx.buildGlossaryContext(), onChunk);
       default:

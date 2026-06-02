@@ -145,7 +145,7 @@ describe('WikiService with LLM options', () => {
     expect(generated).toContain('business.md');
     expect(generated).toContain('design-decisions.md');
     expect(generated).toContain('glossary.md');
-    expect(generated.length).toBe(8);
+    expect(generated.length).toBe(10);
   });
 
   it('should generate only specified pages', async () => {

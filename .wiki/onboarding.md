@@ -1,8 +1,6 @@
-# Project Overview
+# Getting Started
 
-A cli project with 114 files.
-
-## Tech Stack
+## Prerequisites
 
 - @ai-sdk/openai
 - ai
@@ -16,12 +14,19 @@ A cli project with 114 files.
 - typescript
 - vitest
 
-## Entry Files
+## Installation
+
+```bash
+# Install dependencies
+npm install
+```
+
+## Entry Points
 
 - `src/cli/commands/index.ts`
 - `src/cli/index.ts`
 - `tests/fixtures/sample-project/src/index.ts`
 
-## Source Directories
+## Project Structure
 
-- src
+- src/

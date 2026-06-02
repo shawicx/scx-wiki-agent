@@ -18,6 +18,7 @@ export interface ModuleSummary {
   name: string;
   files: string[];
   symbols: Array<{ name: string; type: SymbolType }>;
+  fileSymbols: Array<{ file: string; symbols: Array<{ name: string; type: SymbolType }> }>;
   outgoingRelations: Array<{ target: string; type: RelationType }>;
   incomingRelations: Array<{ source: string; type: RelationType }>;
   codeSnippets: Array<{ symbolName: string; content: string; startLine: number }>;
@@ -117,6 +118,25 @@ export interface GlossaryContext {
     filePath: string;
     scope: string | null;
   }>;
+}
+
+/** Context for onboarding page */
+export interface OnboardingContext {
+  projectType: string;
+  techStack: string[];
+  entryFiles: Array<{ name: string; path: string }>;
+  sourceDirs: string[];
+  hasTypeScript: boolean;
+  packageManager: string;
+  nodeVersion: string;
+  cliCommands: Array<{ name: string; description: string }>;
+}
+
+/** Context for troubleshooting page */
+export interface TroubleshootingContext {
+  projectType: string;
+  techStack: string[];
+  modules: Array<{ name: string }>;
 }
 
 /** Union type for all page contexts */

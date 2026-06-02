@@ -9,6 +9,8 @@ import type {
   BusinessContext,
   DesignDecisionsContext,
   GlossaryContext,
+  OnboardingContext,
+  TroubleshootingContext,
 } from './types.js';
 
 interface PageConfig {
@@ -134,11 +136,15 @@ export class WikiPageGenerator {
   async generateModules(ctx: ModulesContext, onChunk: (text: string) => void): Promise<string> {
     const modules = ctx.modules.map(m => ({
       name: m.name,
-      files: m.files.slice(0, 5),
+      files: m.files.slice(0, 10),
       topSymbols: m.symbols
         .filter((s, i, a) => a.findIndex(t => t.name === s.name) === i)
         .slice(0, 5)
         .map(s => s.name),
+      fileSymbols: m.fileSymbols.map(fs => ({
+        file: fs.file,
+        symbols: fs.symbols.map(s => `${s.name}(${s.type})`),
+      })),
       dependsOn: [...new Set(m.outgoingRelations.map(r => r.target))].slice(0, 5),
       usedBy: [...new Set(m.incomingRelations.map(r => r.source))].slice(0, 5),
     }));
@@ -153,8 +159,8 @@ export class WikiPageGenerator {
   - "做什么"：该模块承担的职责
   - "为什么存在"：设计这个模块的原因
   - "怎么交互"：与其他模块的协作方式
-  - 列出2-3个关键导出符号（如果有的话）
-- 不要列举所有符号名，不要输出代码片段
+  - 文件结构表：用表格列出该模块的文件及其关键符号和职责（文件名 | 关键符号 | 职责）
+- 不要输出代码片段
 - 按模块重要性排序
 - 总长度1000-1500字`,
       userPrompt: JSON.stringify({ modules }, null, 2),
@@ -236,6 +242,55 @@ export class WikiPageGenerator {
     });
   }
 
+  async generateOnboarding(ctx: OnboardingContext, onChunk: (text: string) => void): Promise<string> {
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个代码文档专家。请根据项目数据生成完整的上手指南页面（Markdown格式）。
+
+要求：
+- 用中文撰写
+- 包含"环境准备"章节：根据提供的Node.js版本要求和包管理器列出所需环境
+- 包含"安装步骤"章节：使用提供的包管理器（不要用npm/yarn/pnpm以外的命令）
+- 包含"项目初始化"章节：列出实际的CLI命令（从提供的命令列表中获取）
+- 包含"基本使用"章节：列出核心命令和用法
+- 包含"项目结构概览"章节：简要描述源代码目录含义
+- 只描述基于数据可以确定的内容，不要编造具体命令参数
+- 总长度600-1000字`,
+      userPrompt: JSON.stringify({
+        projectType: ctx.projectType,
+        hasTypeScript: ctx.hasTypeScript,
+        techStack: ctx.techStack,
+        entryFiles: ctx.entryFiles.map(f => f.path),
+        sourceDirs: ctx.sourceDirs,
+        packageManager: ctx.packageManager,
+        nodeVersion: ctx.nodeVersion,
+        cliCommands: ctx.cliCommands,
+      }, null, 2),
+      maxTokens: 4000,
+    });
+  }
+
+  async generateTroubleshooting(ctx: TroubleshootingContext, onChunk: (text: string) => void): Promise<string> {
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个代码文档专家。请根据项目数据生成完整的故障排除页面（Markdown格式）。
+
+要求：
+- 用中文撰写
+- 包含"常见问题"章节：基于项目类型和技术栈，列出可能的常见问题和解决方案
+- 包含"构建问题"章节：列出可能的构建相关问题和解决方案
+- 包含"运行时问题"章节：列出可能的运行时问题和解决方案
+- 每个问题用"问题描述 → 原因分析 → 解决方案"的格式
+- 只描述与项目技术栈相关的问题，不要编造不相关的场景
+- 总长度600-1000字`,
+      userPrompt: JSON.stringify({
+        projectType: ctx.projectType,
+        techStack: ctx.techStack,
+        moduleCount: ctx.modules.length,
+        moduleNames: ctx.modules.map(m => m.name).slice(0, 10),
+      }, null, 2),
+      maxTokens: 4000,
+    });
+  }
+
   async generateGlossary(ctx: GlossaryContext, onChunk: (text: string) => void): Promise<string> {
     const symbols = ctx.symbols.slice(0, 40);
 
@@ -259,12 +314,18 @@ export class WikiPageGenerator {
 
   // --- Core generation ---
 
+  private static readonly ANTI_HALLUCINATION = [
+    '绝对规则：只能基于提供的JSON数据描述项目，严禁编造不存在的模块、服务、功能或业务场景。',
+    '如果数据不足以描述某个方面，直接省略或注明"信息不足"，不要猜测或补充。',
+    '不要将测试代码（tests/目录下的文件）当作项目功能来描述。',
+  ].join('\n');
+
   private async generate(onChunk: (text: string) => void, config: PageConfig): Promise<string> {
     if (!this.model) return '';
 
     const result = streamText({
       model: this.model,
-      system: config.systemPrompt,
+      system: WikiPageGenerator.ANTI_HALLUCINATION + '\n\n' + config.systemPrompt,
       prompt: config.userPrompt,
       maxTokens: config.maxTokens,
     });

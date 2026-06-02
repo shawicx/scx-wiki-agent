@@ -1,3 +1,5 @@
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { DatabaseConnection } from '../core/database.js';
 import type { ScanResult } from '../core/scanner.js';
 import type { SymbolType, RelationType } from '../core/types.js';
@@ -8,6 +10,8 @@ import type {
   DataFlowContext,
   ExecutionPipeline,
   PipelineStep,
+  OnboardingContext,
+  TroubleshootingContext,
   ModulesContext,
   ApiContext,
   BusinessContext,
@@ -73,16 +77,26 @@ export class WikiContextBuilder {
   }
 
   buildDataFlowContext(): DataFlowContext {
-    // Find entry point symbols (CLI commands, main functions)
+    // Find entry point symbols (CLI commands, main functions, exported handlers)
     const entryPoints = this.db
       .prepare(
-        "SELECT name, type, file_path, start_line FROM symbols WHERE (name LIKE 'register%' OR name = 'main' OR name = 'createProgram') AND scope IS NULL"
+        `SELECT DISTINCT name, type, file_path, start_line FROM symbols
+         WHERE scope IS NULL AND file_path NOT LIKE 'tests/%' AND file_path NOT LIKE 'test/%'
+         AND (
+           name LIKE 'register%' OR name = 'main' OR name LIKE 'create%'
+           OR (type = 'function' AND name NOT LIKE '_%' AND name NOT LIKE '%Helper' AND name NOT LIKE '%Util')
+         )
+         AND type IN ('function', 'class', 'method')
+         ORDER BY file_path, start_line`
       )
       .all() as Array<{ name: string; type: SymbolType; file_path: string; start_line: number }>;
 
     const pipelines: ExecutionPipeline[] = [];
+    const seenNames = new Set<string>();
 
     for (const entry of entryPoints) {
+      if (seenNames.has(entry.name)) continue;
+      seenNames.add(entry.name);
       const steps = this.traceCallChain(entry.name, new Set(), 0, 5);
       if (steps.length > 0) {
         pipelines.push({
@@ -123,9 +137,12 @@ export class WikiContextBuilder {
   buildBusinessContext(): BusinessContext {
     const services = this.db
       .prepare(
-        "SELECT id, name, file_path FROM symbols WHERE type = 'class' AND (name LIKE '%Service%' OR name LIKE '%Repository%')"
+        `SELECT DISTINCT name, file_path FROM symbols
+         WHERE type = 'class' AND (name LIKE '%Service%' OR name LIKE '%Repository%')
+         AND file_path NOT LIKE 'tests/%' AND file_path NOT LIKE 'test/%'
+         ORDER BY name`
       )
-      .all() as Array<{ id: string; name: string; file_path: string }>;
+      .all() as Array<{ name: string; file_path: string }>;
 
     return {
       services: services.map(svc => {
@@ -158,25 +175,24 @@ export class WikiContextBuilder {
 
   buildDesignDecisionsContext(): DesignDecisionsContext {
     const patterns: DesignPattern[] = [];
+    const seenPatterns = new Set<string>();
 
-    // Detect strategy pattern: class named *Registry with register() method
+    // Strategy Pattern: *Registry with register() and multiple *Resolver implementations
     const registries = this.db
       .prepare(
-        "SELECT name, file_path FROM symbols WHERE type = 'class' AND name LIKE '%Registry%'"
+        "SELECT DISTINCT name, file_path FROM symbols WHERE type = 'class' AND name LIKE '%Registry%' AND file_path NOT LIKE 'tests/%'"
       )
       .all() as Array<{ name: string; file_path: string }>;
 
     for (const reg of registries) {
       const registerMethod = this.db
-        .prepare(
-          "SELECT name FROM symbols WHERE type = 'method' AND scope = ? AND name = 'register'"
-        )
+        .prepare("SELECT name FROM symbols WHERE type = 'method' AND scope = ? AND name = 'register'")
         .get(reg.name) as { name: string } | undefined;
 
       if (registerMethod) {
         const impls = this.db
           .prepare(
-            "SELECT name, file_path FROM symbols WHERE type = 'class' AND name LIKE '%Resolver%'"
+            "SELECT DISTINCT name, file_path FROM symbols WHERE type = 'class' AND name LIKE '%Resolver%' AND file_path NOT LIKE 'tests/%'"
           )
           .all() as Array<{ name: string; file_path: string }>;
 
@@ -188,26 +204,120 @@ export class WikiContextBuilder {
           ],
           files: [reg.file_path, ...impls.map(i => i.file_path)],
         });
+        seenPatterns.add('Strategy Pattern');
       }
+    }
+
+    // Service Layer: multiple *Service classes in same directory
+    const serviceClasses = this.db
+      .prepare(
+        `SELECT DISTINCT name, file_path FROM symbols
+         WHERE type = 'class' AND name LIKE '%Service'
+         AND file_path NOT LIKE 'tests/%' AND file_path NOT LIKE 'test/%'`
+      )
+      .all() as Array<{ name: string; file_path: string }>;
+
+    if (serviceClasses.length >= 2) {
+      const serviceDir = serviceClasses[0].file_path.replace(/\/[^/]+$/, '');
+      const sameDir = serviceClasses.filter(s => s.file_path.startsWith(serviceDir));
+      if (sameDir.length >= 2 && !seenPatterns.has('Service Layer')) {
+        patterns.push({
+          pattern: 'Service Layer',
+          evidence: [
+            `${sameDir.length} service classes in ${serviceDir}/`,
+            `Services: ${sameDir.map(s => s.name).join(', ')}`,
+            'Each service encapsulates a distinct business capability',
+          ],
+          files: sameDir.map(s => s.file_path),
+        });
+        seenPatterns.add('Service Layer');
+      }
+    }
+
+    // Builder Pattern: *Builder class with build() method
+    const builders = this.db
+      .prepare(
+        `SELECT DISTINCT name, file_path FROM symbols
+         WHERE type = 'class' AND name LIKE '%Builder%'
+         AND file_path NOT LIKE 'tests/%'`
+      )
+      .all() as Array<{ name: string; file_path: string }>;
+
+    for (const b of builders) {
+      const buildMethod = this.db
+        .prepare("SELECT name FROM symbols WHERE type = 'method' AND scope = ? AND name = 'build'")
+        .get(b.name);
+      if (buildMethod && !seenPatterns.has('Builder Pattern')) {
+        patterns.push({
+          pattern: 'Builder Pattern',
+          evidence: [
+            `${b.name} provides fluent construction API with build() method`,
+            'Separates object construction from representation',
+          ],
+          files: [b.file_path],
+        });
+        seenPatterns.add('Builder Pattern');
+      }
+    }
+
+    // Repository Pattern: *Repository classes
+    const repos = this.db
+      .prepare(
+        `SELECT DISTINCT name, file_path FROM symbols
+         WHERE type = 'class' AND name LIKE '%Repository%'
+         AND file_path NOT LIKE 'tests/%'`
+      )
+      .all() as Array<{ name: string; file_path: string }>;
+
+    if (repos.length > 0 && !seenPatterns.has('Repository Pattern')) {
+      patterns.push({
+        pattern: 'Repository Pattern',
+        evidence: repos.map(r => `${r.name} encapsulates data access logic (${r.file_path})`),
+        files: repos.map(r => r.file_path),
+      });
+      seenPatterns.add('Repository Pattern');
+    }
+
+    // Command Pattern: multiple command handler files in commands/ directory
+    const commandFiles = this.db
+      .prepare(
+        `SELECT DISTINCT file_path FROM symbols
+         WHERE type = 'function' AND name LIKE 'register%'
+         AND file_path NOT LIKE 'tests/%'`
+      )
+      .all() as Array<{ file_path: string }>;
+
+    if (commandFiles.length >= 2 && !seenPatterns.has('Command Pattern')) {
+      patterns.push({
+        pattern: 'Command Pattern',
+        evidence: [
+          `${commandFiles.length} command handlers in commands/ directory`,
+          'Each command encapsulates a single CLI operation',
+          'Commands: ' + commandFiles.map(f => f.file_path.split('/').pop()).join(', '),
+        ],
+        files: commandFiles.map(f => f.file_path),
+      });
+      seenPatterns.add('Command Pattern');
     }
 
     // Detect tech choices
     const techChoices: Array<{ technology: string; category: string; evidence: string[] }> = [];
 
-    if (this.scanResult.techStack.some(t => t.includes('sqlite') || t.includes('better-sqlite3'))) {
-      techChoices.push({
-        technology: 'SQLite (better-sqlite3)',
-        category: 'Database',
-        evidence: ['Embedded SQL database with FTS5 full-text search'],
-      });
-    }
+    const techMap: Array<[string[], string, string, string]> = [
+      [['sqlite', 'better-sqlite3'], 'SQLite (better-sqlite3)', 'Database', 'Embedded SQL database with FTS5 full-text search for local code index'],
+      [['tree-sitter', 'web-tree-sitter'], 'Tree-sitter', 'Code Parsing', 'Incremental WASM-based AST parsing for precise symbol extraction'],
+      [['commander'], 'Commander.js', 'CLI Framework', 'Declarative command-line interface with options and sub-commands'],
+      [['ai', '@ai-sdk'], 'Vercel AI SDK', 'LLM Integration', 'Streaming LLM responses with provider abstraction'],
+      [['@ai-sdk/openai'], 'OpenAI Provider', 'AI Model', 'OpenAI-compatible API integration for text generation'],
+      [['tsup'], 'tsup (esbuild)', 'Build Tool', 'Fast esbuild-based bundler targeting ESM output'],
+      [['vitest'], 'Vitest', 'Testing', 'Vite-native test framework with ESM support'],
+      [['typescript'], 'TypeScript', 'Language', 'Static type checking for code safety and IDE support'],
+    ];
 
-    if (this.scanResult.techStack.some(t => t.includes('tree-sitter'))) {
-      techChoices.push({
-        technology: 'Tree-sitter',
-        category: 'Code Parsing',
-        evidence: ['Incremental AST parsing for code symbol extraction'],
-      });
+    for (const [keywords, tech, category, evidence] of techMap) {
+      if (keywords.some(k => this.scanResult.techStack.some(t => t.includes(k)))) {
+        techChoices.push({ technology: tech, category, evidence: [evidence] });
+      }
     }
 
     return { patterns, techChoices };
@@ -230,6 +340,69 @@ export class WikiContextBuilder {
     return { symbols };
   }
 
+  buildOnboardingContext(): OnboardingContext {
+    const entryFiles = this.scanResult.files
+      .filter(f => ENTRY_FILE_NAMES.some(e => f.relativePath.endsWith('/' + e) || f.relativePath === e))
+      .map(f => ({ name: f.relativePath.split('/').pop()!, path: f.relativePath }));
+
+    // Read package.json for package manager and Node.js version
+    let packageManager = 'npm';
+    let nodeVersion = '';
+    try {
+      const pkgPath = join(this.scanResult.rootDir, 'package.json');
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+        if (pkg.packageManager) {
+          const pm = pkg.packageManager as string;
+          packageManager = pm.split('@')[0];
+        }
+        if (pkg.engines?.node) {
+          nodeVersion = pkg.engines.node as string;
+        }
+      }
+    } catch { /* ignore */ }
+
+    // Detect lock file if packageManager field is missing
+    if (packageManager === 'npm') {
+      if (existsSync(join(this.scanResult.rootDir, 'pnpm-lock.yaml'))) packageManager = 'pnpm';
+      else if (existsSync(join(this.scanResult.rootDir, 'yarn.lock'))) packageManager = 'yarn';
+    }
+
+    // Extract CLI commands from database
+    const cliCommands = (this.db
+      .prepare(
+        "SELECT name, file_path FROM symbols WHERE name LIKE 'register%' AND type = 'function' AND file_path NOT LIKE 'tests/%'"
+      )
+      .all() as Array<{ name: string; file_path: string }>)
+      .map(c => {
+        const cmdName = c.name.replace(/^register/, '').toLowerCase();
+        return { name: cmdName || c.name, description: `CLI command defined in ${c.file_path}` };
+      });
+
+    return {
+      projectType: this.scanResult.projectType,
+      techStack: this.scanResult.techStack,
+      entryFiles,
+      sourceDirs: this.scanResult.sourceDirs,
+      hasTypeScript: this.scanResult.hasTypeScript,
+      packageManager,
+      nodeVersion,
+      cliCommands,
+    };
+  }
+
+  buildTroubleshootingContext(): TroubleshootingContext {
+    const modules = this.db
+      .prepare('SELECT name FROM modules')
+      .all() as Array<{ name: string }>;
+
+    return {
+      projectType: this.scanResult.projectType,
+      techStack: this.scanResult.techStack,
+      modules,
+    };
+  }
+
   // --- Private helpers ---
 
   private buildModuleSummaries(): ModuleSummary[] {
@@ -248,6 +421,16 @@ export class WikiContextBuilder {
             )
             .all(...symbolNames) as Array<{ name: string; type: SymbolType }>)
         : [];
+
+      // Build file-level symbol map
+      const fileSymbols = paths.map(filePath => {
+        const fileSyms = this.db
+          .prepare(
+            "SELECT name, type FROM symbols WHERE file_path = ? AND scope IS NULL ORDER BY start_line"
+          )
+          .all(filePath) as Array<{ name: string; type: SymbolType }>;
+        return { file: filePath, symbols: fileSyms };
+      }).filter(fs => fs.symbols.length > 0);
 
       const outgoingRelations = this.db
         .prepare('SELECT DISTINCT target, type FROM relations WHERE source IN (SELECT name FROM symbols WHERE file_path LIKE ?)')
@@ -278,6 +461,7 @@ export class WikiContextBuilder {
         name: mod.name,
         files: paths,
         symbols,
+        fileSymbols,
         outgoingRelations: outgoingRelations.filter((v, i, a) => a.findIndex(t => t.target === v.target) === i),
         incomingRelations: incomingRelations.filter((v, i, a) => a.findIndex(t => t.source === v.source) === i),
         codeSnippets,

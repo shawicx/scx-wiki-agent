@@ -8,6 +8,8 @@ import type {
   BusinessContext,
   DesignDecisionsContext,
   GlossaryContext,
+  OnboardingContext,
+  TroubleshootingContext,
 } from './types.js';
 
 export class WikiFallbackBuilder {
@@ -99,6 +101,17 @@ export class WikiFallbackBuilder {
       if (usedBy.length > 0) parts.push(`Used by: ${usedBy.map(u => `\`${u}\``).join(', ')}`);
 
       builder.addSection(mod.name, parts.length > 0 ? parts.join('\n\n') : 'No details available.');
+
+      if (mod.fileSymbols.length > 0) {
+        builder.addSubSection('File Structure', '');
+        builder.addTable(
+          ['File', 'Key Symbols'],
+          mod.fileSymbols.map(fs => [
+            `\`${fs.file}\``,
+            fs.symbols.slice(0, 5).map(s => `\`${s.name}\``).join(', '),
+          ]),
+        );
+      }
     }
 
     return builder.build();
@@ -198,6 +211,56 @@ export class WikiFallbackBuilder {
       ['Name', 'Type', 'File'],
       ctx.symbols.map(s => [s.name, s.type, s.filePath]),
     );
+
+    return builder.build();
+  }
+
+  buildOnboarding(ctx: OnboardingContext): string {
+    const builder = new WikiBuilder()
+      .addTitle('Getting Started');
+
+    const prereqs: string[] = [];
+    if (ctx.nodeVersion) prereqs.push(`- Node.js ${ctx.nodeVersion}`);
+    if (ctx.hasTypeScript) prereqs.push(`- TypeScript`);
+    if (ctx.packageManager !== 'npm') prereqs.push(`- ${ctx.packageManager}`);
+    if (prereqs.length > 0) {
+      builder.addSection('Prerequisites', prereqs.join('\n'));
+    }
+
+    builder.addSection('Installation', `\`\`\`bash\n# Install dependencies\n${ctx.packageManager} install\n\`\`\``);
+
+    if (ctx.cliCommands.length > 0) {
+      builder.addSection('Project Initialization',
+        `\`\`\`bash\n# Initialize the project\n${ctx.packageManager} run ${ctx.cliCommands.find(c => c.name === 'init')?.name ?? 'init'}\n\`\`\``,
+      );
+      builder.addSection('CLI Commands', '').addTable(
+        ['Command', 'Description'],
+        ctx.cliCommands.map(c => [c.name, c.description]),
+      );
+    }
+
+    if (ctx.entryFiles.length > 0) {
+      builder.addSection('Entry Points', ctx.entryFiles.map(f => `- \`${f.path}\``).join('\n'));
+    }
+
+    if (ctx.sourceDirs.length > 0) {
+      builder.addSection('Project Structure', ctx.sourceDirs.map(d => `- ${d}/`).join('\n'));
+    }
+
+    return builder.build();
+  }
+
+  buildTroubleshooting(ctx: TroubleshootingContext): string {
+    const builder = new WikiBuilder()
+      .addTitle('Troubleshooting');
+
+    builder.addSection('Build Issues', 'If the build fails, check that all dependencies are installed.');
+    builder.addSection('Runtime Issues', 'Common runtime issues and their solutions.');
+
+    if (ctx.techStack.length > 0) {
+      builder.addSection('Technology-Specific Issues',
+        `Key technologies: ${ctx.techStack.join(', ')}\n\nRefer to the official documentation for each technology for specific troubleshooting guides.`);
+    }
 
     return builder.build();
   }

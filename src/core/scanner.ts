@@ -1,5 +1,6 @@
 import { readdirSync, statSync, existsSync, readFileSync } from 'fs';
-import { join, extname, basename } from 'path';
+import { join, extname, basename, relative } from 'path';
+import ignore from 'ignore';
 import { IGNORED_DIRS, SUPPORTED_EXTENSIONS, CODE_EXTENSIONS } from '../shared/constants.js';
 import { getFileLanguage, relativePath } from '../shared/utils.js';
 import type { Language } from './types.js';
@@ -35,9 +36,32 @@ const PROJECT_TYPE_INDICATORS: Record<string, string[]> = {
 
 export class FileScanner {
   private rootDir: string;
+  private ig: ReturnType<typeof ignore>;
 
   constructor(rootDir: string) {
     this.rootDir = rootDir;
+    this.ig = ignore();
+    this.loadGitignore();
+  }
+
+  private loadGitignore(): void {
+    const gitignorePath = join(this.rootDir, '.gitignore');
+    if (existsSync(gitignorePath)) {
+      try {
+        const content = readFileSync(gitignorePath, 'utf-8');
+        this.ig.add(content);
+      } catch {
+        // ignore read errors
+      }
+    }
+  }
+
+  private isIgnored(relPath: string): boolean {
+    try {
+      return this.ig.ignores(relPath);
+    } catch {
+      return false;
+    }
   }
 
   scan(): ScanResult {
@@ -69,6 +93,7 @@ export class FileScanner {
 
     for (const entry of entries) {
       const fullPath = join(dir, entry);
+      const rel = relativePath(this.rootDir, fullPath);
       let stat: ReturnType<typeof statSync>;
       try {
         stat = statSync(fullPath);
@@ -77,14 +102,16 @@ export class FileScanner {
       }
 
       if (stat.isDirectory()) {
-        if (this.shouldSkipDir(entry)) {
+        if (this.shouldSkipDir(entry) || this.isIgnored(rel)) {
           continue;
         }
         results.push(...this.walkDirectory(fullPath));
       } else if (stat.isFile()) {
+        if (this.isIgnored(rel)) {
+          continue;
+        }
         const ext = extname(entry).toLowerCase();
         if (SUPPORTED_EXTENSIONS.includes(ext)) {
-          const rel = relativePath(this.rootDir, fullPath);
           results.push({
             absolutePath: fullPath,
             relativePath: rel,

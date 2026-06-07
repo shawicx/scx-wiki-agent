@@ -21,6 +21,7 @@
     "ai": "^6.0.193",
     "better-sqlite3": "^12.10.0",
     "commander": "^15.0.0",
+    "ignore": "^7.0.5",
     "tree-sitter-typescript": "^0.23.2",
     "web-tree-sitter": "^0.26.9"
   },

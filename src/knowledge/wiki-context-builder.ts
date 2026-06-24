@@ -1,6 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
+import type { SnippetData } from '../mcp/types.js';
 import type { ScanResult } from '../core/scanner.js';
 import type { SymbolType, RelationType } from '../core/types.js';
 import type {
@@ -60,10 +61,37 @@ export class WikiContextBuilder {
   buildArchitectureContext(): ArchitectureContext {
     const arch = this.client.getArchitecture();
 
+    // 为每个 package 查核心符号（按复杂度，有 docstring 优先），填充 symbols
+    const symQ = this.client.queryGraph(
+      `MATCH (n) WHERE n.is_test = false AND n.docstring IS NOT NULL
+         AND n.label IN ['Class', 'Function', 'Method']
+       RETURN n.name AS name, n.label AS label, n.docstring AS doc,
+              n.signature AS sig, n.complexity AS cx, n.file_path AS file
+       ORDER BY n.complexity DESC LIMIT 50`,
+    );
+    // 按 package（文件路径段）聚合
+    const symbolsByPkg = new Map<string, ModuleSummary['symbols']>();
+    for (const row of symQ.rows) {
+      const file = (row[5] as string) ?? '';
+      const pkg = arch.packages.find(p => file.includes(`/${p.name}/`));
+      if (!pkg) continue;
+      if (!symbolsByPkg.has(pkg.name)) symbolsByPkg.set(pkg.name, []);
+      const syms = symbolsByPkg.get(pkg.name)!;
+      if (syms.length < 6) {
+        syms.push({
+          name: row[0] as string,
+          type: this.labelToSymbolType(row[1] as string),
+          docstring: (row[2] as string | null) ?? null,
+          signature: (row[3] as string | null) ?? null,
+          complexity: row[4] as number | undefined,
+        });
+      }
+    }
+
     const modules: ModuleSummary[] = arch.packages.map(pkg => ({
       name: pkg.name,
       files: [],
-      symbols: [],
+      symbols: symbolsByPkg.get(pkg.name) ?? [],
       fileSymbols: [],
       outgoingRelations: [],
       incomingRelations: [],
@@ -89,38 +117,94 @@ export class WikiContextBuilder {
     const arch = this.client.getArchitecture();
     const sequences: ExecutionSequence[] = [];
 
-    for (const entry of arch.entry_points.slice(0, 8)) {
-      const trace = this.client.tracePath(entry.name, 'outbound', 6);
-      if (trace.callees && trace.callees.length > 0) {
-        const participants = new Map<string, { name: string; type: SymbolType; filePath: string }>();
-        participants.set(entry.name, { name: entry.name, type: 'function', filePath: entry.file });
-
-        const messages: ExecutionSequence['messages'] = [];
-        let prevName = entry.name;
-        for (const callee of trace.callees) {
-          if (!participants.has(callee.name)) {
-            participants.set(callee.name, { name: callee.name, type: 'function', filePath: '' });
-          }
-          messages.push({
-            from: prevName,
-            to: callee.name,
-            label: callee.name,
-            callLine: 0,
-            filePath: '',
-          });
-          prevName = callee.name;
-        }
-
-        sequences.push({
-          name: entry.name,
-          entrySymbol: entry.name,
-          participants: Array.from(participants.values()),
-          messages,
-        });
-      }
+    for (const entry of arch.entry_points.slice(0, 6)) {
+      const seq = this.buildCallChainFromEdges(entry.name, entry.file);
+      if (seq) sequences.push(seq);
     }
 
     return { sequences };
+  }
+
+  /**
+   * 基于 CALLS 边 BFS 构建真实调用链（修复伪线性化问题）。
+   * trace_path 返回扁平的 callee 列表（只有 hop 层级，无 caller→callee 边），
+   * 直接线性化会把并行分支误画成串行序列。
+   * 这里改用 Cypher 查精确的 CALLS 边，按 BFS 层级还原真实的 caller→callee 关系。
+   */
+  private buildCallChainFromEdges(entryName: string, entryFile: string): ExecutionSequence | null {
+    const MAX_DEPTH = 3;
+    const MAX_NODES = 25;
+
+    const participants = new Map<string, { name: string; type: SymbolType; filePath: string }>();
+    const messages: ExecutionSequence['messages'] = [];
+    participants.set(entryName, { name: entryName, type: 'function', filePath: entryFile });
+
+    // BFS：按层级查询精确 CALLS 边
+    let frontier = [entryName];
+    const visited = new Set<string>([entryName]);
+
+    for (let depth = 0; depth < MAX_DEPTH && frontier.length > 0 && participants.size < MAX_NODES; depth++) {
+      // 查当前 frontier 中每个节点的直接 callee（过滤测试节点）
+      // 注意：该 Cypher 实现不支持 NOT ... CONTAINS 语法，用 is_test 过滤 + 结果后处理
+      const callerList = frontier.map(n => `"${n.replace(/"/g, '\\"')}"`).join(',');
+      const q = this.client.queryGraph(
+        `MATCH (caller)-[:CALLS]->(callee)
+         WHERE caller.name IN [${callerList}]
+           AND caller.is_test = false
+           AND callee.is_test = false
+         RETURN caller.name AS caller, callee.name AS callee,
+                callee.file_path AS file, callee.label AS label
+         LIMIT 40`,
+      );
+
+      const nextFrontier: string[] = [];
+      for (const row of q.rows) {
+        const callerName = row[0] as string;
+        const calleeName = row[1] as string;
+        const calleeFile = (row[2] as string) ?? '';
+        const calleeLabel = row[3] as string;
+
+        // 跳过自调用
+        if (callerName === calleeName) continue;
+
+        // JS 层兜底过滤测试文件（Cypher 的 NOT CONTAINS 不兼容）
+        if (/\.(test|spec)\.|__tests__/.test(calleeFile)) continue;
+
+        if (!participants.has(calleeName)) {
+          participants.set(calleeName, {
+            name: calleeName,
+            type: this.labelToSymbolType(calleeLabel),
+            filePath: calleeFile,
+          });
+        }
+
+        // 每条 message 对应一条真实的 CALLS 边
+        messages.push({
+          from: callerName,
+          to: calleeName,
+          label: calleeName,
+          callLine: 0,
+          filePath: calleeFile,
+        });
+
+        if (!visited.has(calleeName)) {
+          visited.add(calleeName);
+          nextFrontier.push(calleeName);
+        }
+      }
+
+      frontier = nextFrontier;
+      if (q.rows.length === 0) break;
+    }
+
+    if (messages.length === 0) return null;
+
+    return {
+      name: entryName,
+      entrySymbol: entryName,
+      participants: Array.from(participants.values()),
+      messages,
+    };
   }
 
   buildModulesContext(): ModulesContext {
@@ -172,29 +256,37 @@ export class WikiContextBuilder {
   buildApiContext(): ApiContext {
     const arch = this.client.getArchitecture();
 
-    // entry_points 即 CLI 命令
-    const commands = arch.entry_points.map(e => ({
-      name: e.name,
-      filePath: e.file,
-      startLine: 0,
-      description: '',
-    }));
+    // entry_points 即 CLI 命令：用 getCodeSnippet 获取源码片段，提升信息密度
+    const commands = arch.entry_points.slice(0, 8).map(e => {
+      const snippet = this.safeGetSnippet(e.name);
+      return {
+        name: e.name,
+        filePath: e.file,
+        startLine: snippet?.start_line ?? 0,
+        description: snippet?.docstring ?? '',
+      };
+    });
 
-    // 查导出函数（有 signature/docstring 的）
+    // 查导出函数（有 signature/docstring 的），对核心函数取源码片段
     const q = this.client.queryGraph(
       `MATCH (n) WHERE n.is_exported = true AND n.is_test = false
          AND n.label IN ['Function', 'Method']
-       RETURN n.name AS name, n.file_path AS file, n.signature AS sig, n.docstring AS doc
-       ORDER BY n.complexity DESC LIMIT 30`,
+       RETURN n.name AS name, n.qualified_name AS qn, n.file_path AS file,
+              n.signature AS sig, n.docstring AS doc, n.complexity AS cx
+       ORDER BY n.complexity DESC LIMIT 15`,
     );
 
-    const exportedFunctions = q.rows.map(row => ({
-      name: row[0] as string,
-      filePath: row[1] as string,
-      startLine: 0,
-      signature: (row[2] as string | null) ?? null,
-      docstring: (row[3] as string | null) ?? null,
-    }));
+    const exportedFunctions = q.rows.map(row => {
+      const qn = row[1] as string | null;
+      const snippet = qn ? this.safeGetSnippet(qn) : null;
+      return {
+        name: row[0] as string,
+        filePath: row[2] as string,
+        startLine: snippet?.start_line ?? 0,
+        signature: (row[3] as string | null) ?? snippet?.signature ?? null,
+        docstring: (row[4] as string | null) ?? snippet?.docstring ?? null,
+      };
+    });
 
     return {
       commands,
@@ -204,36 +296,44 @@ export class WikiContextBuilder {
   }
 
   buildBusinessContext(): BusinessContext {
-    // Cypher 查 Service/Repository 类及其方法
+    // Cypher 查核心业务类（Service/Repository/Client/Scanner/Builder 等）及其方法
+    // 注意：DEFINES_METHOD 方向是 Class -> Method（类定义方法）
     const q = this.client.queryGraph(
-      `MATCH (m)-[:DEFINES_METHOD]->(c)
-       WHERE c.name ENDS WITH 'Service' OR c.name ENDS WITH 'Repository'
-       RETURN c.name AS cls, m.name AS method, m.docstring AS doc,
+      `MATCH (c)-[:DEFINES_METHOD]->(m)
+       WHERE c.is_test = false
+         AND (c.name ENDS WITH 'Service' OR c.name ENDS WITH 'Repository'
+              OR c.name ENDS WITH 'Client' OR c.name ENDS WITH 'Scanner'
+              OR c.name ENDS WITH 'Builder' OR c.name ENDS WITH 'Generator')
+       RETURN c.name AS cls, c.qualified_name AS qn, m.name AS method, m.docstring AS doc,
               m.visibility AS vis, c.file_path AS file
        ORDER BY cls, m.start_line LIMIT 200`,
     );
 
-    const serviceMap = new Map<string, { filePath: string; methods: BusinessContext['services'][number]['methods'] }>();
+    const serviceMap = new Map<string, { filePath: string; qn: string; methods: BusinessContext['services'][number]['methods'] }>();
     for (const row of q.rows) {
       const cls = row[0] as string;
       if (!serviceMap.has(cls)) {
-        serviceMap.set(cls, { filePath: row[4] as string, methods: [] });
+        serviceMap.set(cls, { filePath: row[5] as string, qn: row[1] as string, methods: [] });
       }
       serviceMap.get(cls)!.methods.push({
-        name: row[1] as string,
-        visibility: (row[3] as string | null) ?? null,
-        docstring: (row[2] as string | null) ?? null,
+        name: row[2] as string,
+        visibility: (row[4] as string | null) ?? null,
+        docstring: (row[3] as string | null) ?? null,
       });
     }
 
     return {
-      services: Array.from(serviceMap.entries()).map(([name, data]) => ({
-        name,
-        filePath: data.filePath,
-        methods: data.methods.slice(0, 8),
-        dependencies: [],
-        codeSnippet: '',
-      })),
+      services: Array.from(serviceMap.entries()).map(([name, data]) => {
+        // 取服务类的类定义源码片段，让 LLM 能看到完整的类结构
+        const snippet = this.safeGetSnippet(data.qn);
+        return {
+          name,
+          filePath: data.filePath,
+          methods: data.methods.slice(0, 10),
+          dependencies: [],
+          codeSnippet: snippet?.source ?? '',
+        };
+      }),
     };
   }
 
@@ -360,6 +460,20 @@ export class WikiContextBuilder {
       techStack: this.scanResult.techStack,
       modules: arch.packages.map(p => ({ name: p.name })),
     };
+  }
+
+  /**
+   * 容错地获取代码片段。getCodeSnippet 失败或无结果时返回 null，不抛错。
+   * 用于在不影响整体 context 构建的前提下富化符号的源码信息。
+   */
+  private safeGetSnippet(qualifiedName: string): SnippetData | null {
+    if (!qualifiedName) return null;
+    try {
+      const s = this.client.getCodeSnippet(qualifiedName);
+      return s && s.source ? s : null;
+    } catch {
+      return null;
+    }
   }
 
   /** MCP 节点标签 → SymbolType */

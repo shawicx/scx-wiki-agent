@@ -88,16 +88,37 @@ describe('WikiContextBuilder (MCP-backed)', () => {
   });
 
   describe('buildDataFlowContext', () => {
-    it('从 entry_points + tracePath 构建序列', () => {
-      const client = createMockClient();
+    it('从 entry_points + CALLS 边构建真实调用序列', () => {
+      // data-flow 用 Cypher CALLS 边 BFS，过滤测试节点
+      const callsEdgeCypher = `MATCH (caller)-[:CALLS]->(callee)
+         WHERE caller.name IN ["registerBuildCommand"]
+           AND caller.is_test = false
+           AND callee.is_test = false
+         RETURN caller.name AS caller, callee.name AS callee,
+                callee.file_path AS file, callee.label AS label
+         LIMIT 40`;
+      const queryResults = new Map<string, QueryResult>([
+        [callsEdgeCypher, {
+          columns: ['caller', 'callee', 'file', 'label'],
+          rows: [
+            ['registerBuildCommand', 'FileScanner', 'src/core/scanner.ts', 'Class'],
+            ['registerBuildCommand', 'WikiService', 'src/services/wiki-service.ts', 'Class'],
+            ['registerBuildCommand', 'CodebaseMemoryClient', 'src/mcp/codebase-memory-client.ts', 'Class'],
+          ],
+          total: 3,
+        }],
+      ]);
+      const client = createMockClient({ queryResults });
       const builder = new WikiContextBuilder(client as any, makeScanResult());
       const ctx = builder.buildDataFlowContext();
 
       expect(ctx.sequences.length).toBeGreaterThan(0);
       const seq = ctx.sequences[0];
       expect(seq.name).toBe('registerBuildCommand');
-      expect(seq.messages.length).toBeGreaterThan(0);
-      expect(seq.participants.length).toBeGreaterThan(0);
+      expect(seq.messages.length).toBe(3);
+      // 每条消息的 from 都是真实 caller（registerBuildCommand），不是线性串联
+      expect(seq.messages.every(m => m.from === 'registerBuildCommand')).toBe(true);
+      expect(seq.participants.length).toBe(4); // entry + 3 callees
     });
   });
 

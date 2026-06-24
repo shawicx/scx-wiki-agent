@@ -5,6 +5,7 @@ import type { ScanResult } from '../core/scanner.js';
 import { WikiContextBuilder } from '../knowledge/wiki-context-builder.js';
 import { WikiFallbackBuilder } from '../knowledge/wiki-fallback-builder.js';
 import { WikiPageGenerator } from '../knowledge/wiki-page-generator.js';
+import { sanitizeWikiOutput } from '../knowledge/wiki-output-sanitizer.js';
 import type { WikiBuildOptions } from '../knowledge/types.js';
 
 const ALL_PAGES = [
@@ -74,7 +75,10 @@ export class WikiService {
     }
     try {
       const content = await this.generateWithLlm(page, ctx, generator, (text) => onChunk(page, text));
-      if (content.trim().length > 0) return content;
+      if (content.trim().length > 0) {
+        // 清理 LLM 输出残骸（首行寒暄、markdown 围栏）
+        return sanitizeWikiOutput(content);
+      }
     } catch {
       // Fall through to fallback
     }

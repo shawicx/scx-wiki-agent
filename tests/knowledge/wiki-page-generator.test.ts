@@ -18,7 +18,10 @@ describe('WikiPageGenerator', () => {
 
   it('should call streamText with correct prompt for overview', async () => {
     const mockStream = {
-      textStream: (async function* () { yield 'This is a CLI tool for'; yield ' generating wiki docs.'; })(),
+      fullStream: (async function* () {
+        yield { type: 'text-delta', text: 'This is a CLI tool for' };
+        yield { type: 'text-delta', text: ' generating wiki docs.' };
+      })(),
     };
     mockStreamText.mockReturnValue(mockStream as any);
 
@@ -47,7 +50,9 @@ describe('WikiPageGenerator', () => {
 
   it('should construct prompt with architecture context', async () => {
     const mockStream = {
-      textStream: (async function* () { yield 'The project uses a layered architecture.'; })(),
+      fullStream: (async function* () {
+        yield { type: 'text-delta', text: 'The project uses a layered architecture.' };
+      })(),
     };
     mockStreamText.mockReturnValue(mockStream as any);
 

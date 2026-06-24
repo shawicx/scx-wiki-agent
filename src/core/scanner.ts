@@ -66,7 +66,7 @@ export class FileScanner {
 
   scan(): ScanResult {
     const files = this.walkDirectory(this.rootDir);
-    const techStack = this.detectTechStack();
+    const techStack = this.detectTechStack(files);
     const projectType = this.detectProjectType(files, techStack);
     const hasTypeScript = files.some((f) => f.extension === '.ts' || f.extension === '.tsx');
     const sourceDirs = this.detectSourceDirs(files);
@@ -136,7 +136,7 @@ export class FileScanner {
     return false;
   }
 
-  private detectTechStack(): string[] {
+  private detectTechStack(files: ScannedFile[]): string[] {
     const pkgPath = join(this.rootDir, 'package.json');
     if (!existsSync(pkgPath)) {
       return [];
@@ -145,12 +145,54 @@ export class FileScanner {
     try {
       const content = readFileSync(pkgPath, 'utf-8');
       const pkg = JSON.parse(content);
-      const deps = Object.keys(pkg.dependencies ?? {});
-      const devDeps = Object.keys(pkg.devDependencies ?? {});
-      return [...deps, ...devDeps];
+      const allDeps = new Set([
+        ...Object.keys(pkg.dependencies ?? {}),
+        ...Object.keys(pkg.devDependencies ?? {}),
+      ]);
+
+      // 收集源码中实际 import 的包名，过滤死依赖（0 import）
+      const importedPackages = this.collectImportedPackages(files);
+
+      // 只保留被实际 import 的依赖；若 import 集合为空（如纯配置项目），回退到全量
+      if (importedPackages.size === 0) {
+        return [...allDeps];
+      }
+      return [...allDeps].filter(dep => importedPackages.has(dep));
     } catch {
       return [];
     }
+  }
+
+  /**
+   * 扫描源文件，提取所有 import 语句引用的包名。
+   * 只保留被实际 import 的依赖，过滤死依赖（声明了但从未使用）。
+   */
+  private collectImportedPackages(files: ScannedFile[]): Set<string> {
+    const imported = new Set<string>();
+    // 匹配 ES import: import ... from 'pkg'; import 'pkg'; 动态 import('pkg')
+    const importRegex = /(?:import\s+(?:[\s\S]*?\s+from\s+)?|require\s*\(\s*)['"]([^'"./][^'"]*)['"]/g;
+
+    for (const file of files) {
+      if (!CODE_EXTENSIONS.includes(file.extension)) continue;
+      try {
+        const source = readFileSync(file.absolutePath, 'utf-8');
+        let match: RegExpExecArray | null;
+        while ((match = importRegex.exec(source)) !== null) {
+          // 取包名（scoped 包含 @scope/name，非 scoped 取首段）
+          let pkg = match[1];
+          if (pkg.startsWith('@')) {
+            pkg = pkg.split('/').slice(0, 2).join('/');
+          } else {
+            pkg = pkg.split('/')[0];
+          }
+          imported.add(pkg);
+        }
+      } catch {
+        // skip unreadable files
+      }
+    }
+
+    return imported;
   }
 
   private detectProjectType(files: ScannedFile[], techStack: string[]): ProjectType {

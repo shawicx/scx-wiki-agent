@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { Database } from 'better-sqlite3';
-import { createDatabase, closeDatabase } from '../../src/core/database.js';
 import { WikiService } from '../../src/services/wiki-service.js';
 import type { ScanResult } from '../../src/core/scanner.js';
+import { createMockClient } from '../helpers/mock-mcp-client.js';
 import { join } from 'path';
 import { mkdirSync, rmSync, existsSync, readFileSync } from 'fs';
 
@@ -28,21 +27,17 @@ function makeBackendScanResult(): ScanResult {
 }
 
 describe('WikiService', () => {
-  let db: Database;
-
   beforeEach(() => {
     mkdirSync(tmpDir, { recursive: true });
-    db = createDatabase(join(tmpDir, 'test.db'));
   });
 
   afterEach(() => {
-    closeDatabase(db);
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it('should generate common pages', async () => {
-    const scanResult = makeBackendScanResult();
-    const service = new WikiService(db, scanResult);
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
     const wikiDir = join(tmpDir, 'wiki');
     const generated = await service.buildWiki(wikiDir, { noLlm: true });
 
@@ -53,8 +48,8 @@ describe('WikiService', () => {
   });
 
   it('should write files to disk', async () => {
-    const scanResult = makeBackendScanResult();
-    const service = new WikiService(db, scanResult);
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
     const wikiDir = join(tmpDir, 'wiki');
     await service.buildWiki(wikiDir, { noLlm: true });
 
@@ -64,8 +59,8 @@ describe('WikiService', () => {
   });
 
   it('should include scan result data in overview page', async () => {
-    const scanResult = makeBackendScanResult();
-    const service = new WikiService(db, scanResult);
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
     const wikiDir = join(tmpDir, 'wiki');
     await service.buildWiki(wikiDir, { noLlm: true });
 
@@ -74,66 +69,17 @@ describe('WikiService', () => {
     expect(content).toContain('express');
   });
 
-  it('should include symbols in glossary page', async () => {
-    db.prepare(
-      "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)",
-    ).run('sym-1', 'UserService', 'class', 'src/services/user.ts', 1, 50);
+  it('should call ensureIndexed on the client', async () => {
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
+    await service.buildWiki(join(tmpDir, 'wiki'), { noLlm: true });
 
-    const scanResult = makeBackendScanResult();
-    const service = new WikiService(db, scanResult);
-    const wikiDir = join(tmpDir, 'wiki');
-    await service.buildWiki(wikiDir, { noLlm: true });
-
-    const content = readFileSync(join(wikiDir, 'glossary.md'), 'utf-8');
-    expect(content).toContain('UserService');
-    expect(content).toContain('class');
+    expect(client.ensureIndexed).toHaveBeenCalled();
   });
 
-  it('should include modules in architecture page', async () => {
-    db.prepare(
-      "INSERT INTO modules (id, name, paths, symbols, dependencies) VALUES (?, ?, ?, ?, ?)",
-    ).run('mod-1', 'services', '["src/services"]', '["UserService"]', '[]');
-
-    const scanResult = makeBackendScanResult();
-    const service = new WikiService(db, scanResult);
-    const wikiDir = join(tmpDir, 'wiki');
-    await service.buildWiki(wikiDir, { noLlm: true });
-
-    const content = readFileSync(join(wikiDir, 'architecture.md'), 'utf-8');
-    expect(content).toContain('services');
-  });
-
-  it('should include modules in modules page', async () => {
-    db.prepare(
-      "INSERT INTO modules (id, name, paths, symbols, dependencies) VALUES (?, ?, ?, ?, ?)",
-    ).run('mod-1', 'core', '["src/core/index.ts"]', '["Scanner"]', '[]');
-
-    const scanResult = makeBackendScanResult();
-    const service = new WikiService(db, scanResult);
-    const wikiDir = join(tmpDir, 'wiki');
-    await service.buildWiki(wikiDir, { noLlm: true });
-
-    const content = readFileSync(join(wikiDir, 'modules.md'), 'utf-8');
-    expect(content).toContain('core');
-  });
-});
-
-describe('WikiService with LLM options', () => {
-  let db: Database;
-
-  beforeEach(() => {
-    mkdirSync(tmpDir, { recursive: true });
-    db = createDatabase(join(tmpDir, 'test.db'));
-  });
-
-  afterEach(() => {
-    closeDatabase(db);
-    rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('should generate 8 pages in noLlm mode', async () => {
-    const scanResult = makeBackendScanResult();
-    const service = new WikiService(db, scanResult);
+  it('should generate 10 pages in noLlm mode', async () => {
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
     const wikiDir = join(tmpDir, 'wiki');
     const generated = await service.buildWiki(wikiDir, { noLlm: true });
 
@@ -149,8 +95,8 @@ describe('WikiService with LLM options', () => {
   });
 
   it('should generate only specified pages', async () => {
-    const scanResult = makeBackendScanResult();
-    const service = new WikiService(db, scanResult);
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
     const wikiDir = join(tmpDir, 'wiki');
     const generated = await service.buildWiki(wikiDir, {
       noLlm: true,
@@ -161,8 +107,8 @@ describe('WikiService with LLM options', () => {
   });
 
   it('should produce glossary without LLM placeholders', async () => {
-    const scanResult = makeBackendScanResult();
-    const service = new WikiService(db, scanResult);
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
     const wikiDir = join(tmpDir, 'wiki');
     await service.buildWiki(wikiDir, { noLlm: true });
 

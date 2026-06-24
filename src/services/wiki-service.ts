@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import type { DatabaseConnection } from '../core/database.js';
+import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
 import type { ScanResult } from '../core/scanner.js';
 import { WikiContextBuilder } from '../knowledge/wiki-context-builder.js';
 import { WikiFallbackBuilder } from '../knowledge/wiki-fallback-builder.js';
@@ -23,22 +23,25 @@ const ALL_PAGES = [
 type PageName = typeof ALL_PAGES[number];
 
 export class WikiService {
-  private db: DatabaseConnection;
+  private client: CodebaseMemoryClient;
   private scanResult: ScanResult;
 
-  constructor(db: DatabaseConnection, scanResult: ScanResult) {
-    this.db = db;
+  constructor(client: CodebaseMemoryClient, scanResult: ScanResult) {
+    this.client = client;
     this.scanResult = scanResult;
   }
 
   async buildWiki(wikiDir: string, options?: WikiBuildOptions): Promise<string[]> {
     mkdirSync(wikiDir, { recursive: true });
 
+    // 确保图谱已索引（替代旧的 index 阶段）
+    this.client.ensureIndexed('moderate');
+
     const pages = options?.pages
       ? (options.pages as PageName[])
       : ALL_PAGES;
 
-    const contextBuilder = new WikiContextBuilder(this.db, this.scanResult);
+    const contextBuilder = new WikiContextBuilder(this.client, this.scanResult);
     const fallbackBuilder = new WikiFallbackBuilder();
     const pageGenerator = new WikiPageGenerator(options?.model, options?.baseURL, options?.apiKey);
     const noLlm = options?.noLlm ?? false;

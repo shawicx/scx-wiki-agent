@@ -1,6 +1,5 @@
 export const WIKI_DIR = '.wiki';
 export const AGENT_DIR = '.scx-wiki-agent';
-export const DB_NAME = 'index.db';
 export const CACHE_DIR = 'cache';
 
 export const IGNORED_DIRS = [

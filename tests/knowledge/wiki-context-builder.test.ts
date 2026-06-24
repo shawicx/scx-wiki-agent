@@ -1,12 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { Database } from 'better-sqlite3';
-import { createDatabase, closeDatabase } from '../../src/core/database.js';
+import { describe, it, expect } from 'vitest';
 import { WikiContextBuilder } from '../../src/knowledge/wiki-context-builder.js';
-import { join } from 'path';
-import { mkdirSync, rmSync } from 'fs';
+import { createMockClient } from '../helpers/mock-mcp-client.js';
 import type { ScanResult } from '../../src/core/scanner.js';
-
-const tmpDir = join(process.cwd(), '.test-ctx-tmp');
+import type { QueryResult } from '../../src/mcp/types.js';
 
 function makeScanResult(overrides: Partial<ScanResult> = {}): ScanResult {
   return {
@@ -20,148 +16,154 @@ function makeScanResult(overrides: Partial<ScanResult> = {}): ScanResult {
   };
 }
 
-describe('WikiContextBuilder', () => {
-  let db: Database;
-
-  beforeEach(() => {
-    mkdirSync(tmpDir, { recursive: true });
-    db = createDatabase(join(tmpDir, 'test.db'));
-  });
-
-  afterEach(() => {
-    closeDatabase(db);
-    rmSync(tmpDir, { recursive: true, force: true });
-  });
-
+describe('WikiContextBuilder (MCP-backed)', () => {
   describe('buildOverviewContext', () => {
-    it('should extract project metadata from scan result', () => {
-      const builder = new WikiContextBuilder(db, makeScanResult({
+    it('从 scanResult 提取项目元数据', () => {
+      const client = createMockClient();
+      const builder = new WikiContextBuilder(client as any, makeScanResult({
         files: [
           { absolutePath: '/tmp/src/index.ts', relativePath: 'src/index.ts', language: 'typescript' as const, extension: '.ts', size: 100 },
-          { absolutePath: '/tmp/src/cli.ts', relativePath: 'src/cli.ts', language: 'typescript' as const, extension: '.ts', size: 50 },
         ],
       }));
       const ctx = builder.buildOverviewContext();
 
       expect(ctx.projectType).toBe('cli');
       expect(ctx.hasTypeScript).toBe(true);
-      expect(ctx.fileCount).toBe(2);
       expect(ctx.techStack).toContain('commander');
-      expect(ctx.sourceDirs).toContain('src');
     });
 
-    it('should include entry files (index.ts/main.ts)', () => {
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s1', 'main', 'function', 'src/index.ts', 1, 10);
-
-      const builder = new WikiContextBuilder(db, makeScanResult());
-      const ctx = builder.buildOverviewContext();
-
-      expect(ctx.entryFiles.length).toBeGreaterThanOrEqual(0);
-    });
-
-    it('should include top-level symbols', () => {
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s1', 'IndexService', 'class', 'src/services/index-service.ts', 1, 50);
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s2', 'scan', 'function', 'src/scanner.ts', 1, 20);
-
-      const builder = new WikiContextBuilder(db, makeScanResult());
+    it('topSymbols 来自 MCP hotspots', () => {
+      const client = createMockClient();
+      const builder = new WikiContextBuilder(client as any, makeScanResult());
       const ctx = builder.buildOverviewContext();
 
       expect(ctx.topSymbols.length).toBeGreaterThan(0);
-      expect(ctx.topSymbols.map(s => s.name)).toContain('IndexService');
+      expect(ctx.topSymbols[0].name).toBe('build');
+      expect(ctx.topSymbols[0].complexity).toBe(8);
+    });
+
+    it('entryFiles 检测 index.ts', () => {
+      const client = createMockClient();
+      const builder = new WikiContextBuilder(client as any, makeScanResult({
+        files: [
+          { absolutePath: '/tmp/src/index.ts', relativePath: 'src/index.ts', language: 'typescript' as const, extension: '.ts', size: 100 },
+        ],
+      }));
+      const ctx = builder.buildOverviewContext();
+
+      expect(ctx.entryFiles.some(f => f.path === 'src/index.ts')).toBe(true);
     });
   });
 
   describe('buildArchitectureContext', () => {
-    it('should extract modules and inter-module relations', () => {
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s1', 'IndexService', 'class', 'src/services/index-service.ts', 1, 50);
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s2', 'Scanner', 'class', 'src/core/scanner.ts', 1, 30);
-      db.prepare(
-        "INSERT INTO modules (id, name, paths, symbols, dependencies) VALUES (?, ?, ?, ?, ?)"
-      ).run('m1', 'services', '["src/services"]', '["IndexService"]', '["core"]');
-      db.prepare(
-        "INSERT INTO modules (id, name, paths, symbols, dependencies) VALUES (?, ?, ?, ?, ?)"
-      ).run('m2', 'core', '["src/core"]', '["Scanner"]', '[]');
-      db.prepare(
-        "INSERT INTO relations (id, source, target, type, file_path) VALUES (?, ?, ?, ?, ?)"
-      ).run('r1', 'IndexService', 'Scanner', 'depends_on', 'src/services/index-service.ts');
-
-      const builder = new WikiContextBuilder(db, makeScanResult());
+    it('包含 MCP 的 layers/boundaries/clusters', () => {
+      const client = createMockClient();
+      const builder = new WikiContextBuilder(client as any, makeScanResult());
       const ctx = builder.buildArchitectureContext();
 
-      expect(ctx.modules.length).toBe(2);
-      expect(ctx.interModuleRelations.length).toBe(1);
-      expect(ctx.interModuleRelations[0].source).toBe('IndexService');
-      expect(ctx.interModuleRelations[0].target).toBe('Scanner');
+      expect(ctx.layers).toBeDefined();
+      expect(ctx.layers!.length).toBeGreaterThan(0);
+      expect(ctx.boundaries).toBeDefined();
+      expect(ctx.boundaries!.length).toBeGreaterThan(0);
+      expect(ctx.clusters).toBeDefined();
     });
 
-    it('should filter out intra-module relations', () => {
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s1', 'IndexService', 'class', 'src/services/index-service.ts', 1, 50);
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s2', 'QAService', 'class', 'src/services/qa-service.ts', 1, 30);
-      db.prepare(
-        "INSERT INTO modules (id, name, paths, symbols, dependencies) VALUES (?, ?, ?, ?, ?)"
-      ).run('m1', 'services', '["src/services"]', '["IndexService", "QAService"]', '[]');
-      db.prepare(
-        "INSERT INTO relations (id, source, target, type, file_path) VALUES (?, ?, ?, ?, ?)"
-      ).run('r1', 'IndexService', 'QAService', 'depends_on', 'src/services/index-service.ts');
-
-      const builder = new WikiContextBuilder(db, makeScanResult());
+    it('modules 来自 packages', () => {
+      const client = createMockClient();
+      const builder = new WikiContextBuilder(client as any, makeScanResult());
       const ctx = builder.buildArchitectureContext();
 
-      // Both symbols belong to same module, so relation is intra-module
-      expect(ctx.interModuleRelations.length).toBe(0);
+      expect(ctx.modules.length).toBe(3); // core, services, cli
+      expect(ctx.modules.map(m => m.name)).toContain('core');
+    });
+
+    it('interModuleRelations 来自 boundaries', () => {
+      const client = createMockClient();
+      const builder = new WikiContextBuilder(client as any, makeScanResult());
+      const ctx = builder.buildArchitectureContext();
+
+      expect(ctx.interModuleRelations.length).toBe(2);
+      expect(ctx.interModuleRelations[0].source).toBe('services');
     });
   });
 
   describe('buildDataFlowContext', () => {
-    it('should trace execution pipelines from entry points', () => {
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s1', 'createProgram', 'function', 'src/cli/index.ts', 1, 10);
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s2', 'registerBuildCommand', 'function', 'src/cli/commands/build.ts', 1, 10);
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s3', 'buildWiki', 'method', 'src/services/wiki-service.ts', 5, 50);
-
-      db.prepare(
-        "INSERT INTO relations (id, source, target, type, file_path) VALUES (?, ?, ?, ?, ?)"
-      ).run('r1', 'createProgram', 'registerBuildCommand', 'calls', 'src/cli/index.ts');
-      db.prepare(
-        "INSERT INTO relations (id, source, target, type, file_path) VALUES (?, ?, ?, ?, ?)"
-      ).run('r2', 'registerBuildCommand', 'buildWiki', 'calls', 'src/cli/commands/build.ts');
-
-      const builder = new WikiContextBuilder(db, makeScanResult());
+    it('从 entry_points + tracePath 构建序列', () => {
+      const client = createMockClient();
+      const builder = new WikiContextBuilder(client as any, makeScanResult());
       const ctx = builder.buildDataFlowContext();
 
-      expect(ctx.pipelines.length).toBeGreaterThan(0);
+      expect(ctx.sequences.length).toBeGreaterThan(0);
+      const seq = ctx.sequences[0];
+      expect(seq.name).toBe('registerBuildCommand');
+      expect(seq.messages.length).toBeGreaterThan(0);
+      expect(seq.participants.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('buildGlossaryContext', () => {
+    it('通过 Cypher 查询，结果含 docstring，按类型优先级排序', () => {
+      const glossaryCypher = `MATCH (n) WHERE n.docstring IS NOT NULL AND n.is_test = false
+         AND n.label IN ['Class', 'Method', 'Function', 'Interface']
+       RETURN n.name AS name, n.label AS type, n.docstring AS doc,
+              n.signature AS sig, n.complexity AS cx, n.file_path AS file
+       ORDER BY
+         CASE n.label WHEN 'Class' THEN 0 WHEN 'Method' THEN 1 WHEN 'Function' THEN 2 ELSE 3 END,
+         n.complexity DESC
+       LIMIT 40`;
+      const queryResults = new Map<string, QueryResult>([
+        [glossaryCypher, {
+          columns: ['name', 'type', 'doc', 'sig', 'cx', 'file'],
+          rows: [
+            ['Foo', 'Class', 'A foo class', 'class Foo', 3, 'src/foo.ts'],
+            ['bar', 'Method', 'does bar', 'bar(): void', 1, 'src/bar.ts'],
+          ],
+          total: 2,
+        }],
+      ]);
+      const client = createMockClient({ queryResults });
+      const builder = new WikiContextBuilder(client as any, makeScanResult());
+      const ctx = builder.buildGlossaryContext();
+
+      expect(ctx.symbols.length).toBe(2);
+      expect(ctx.symbols[0].docstring).toBe('A foo class');
+      expect(ctx.symbols[0].type).toBe('class');
+      // Class 排在 Method 前
+      expect(ctx.symbols[0].name).toBe('Foo');
+    });
+
+    it('去重同名符号', () => {
+      const glossaryCypher = `MATCH (n) WHERE n.docstring IS NOT NULL AND n.is_test = false
+         AND n.label IN ['Class', 'Method', 'Function', 'Interface']
+       RETURN n.name AS name, n.label AS type, n.docstring AS doc,
+              n.signature AS sig, n.complexity AS cx, n.file_path AS file
+       ORDER BY
+         CASE n.label WHEN 'Class' THEN 0 WHEN 'Method' THEN 1 WHEN 'Function' THEN 2 ELSE 3 END,
+         n.complexity DESC
+       LIMIT 40`;
+      const queryResults = new Map<string, QueryResult>([
+        [glossaryCypher, {
+          columns: ['name', 'type', 'doc', 'sig', 'cx', 'file'],
+          rows: [
+            ['Foo', 'Class', 'A foo class', 'class Foo', 3, 'src/foo.ts'],
+            ['Foo', 'Class', 'dup', 'class Foo', 1, 'src/foo2.ts'],
+          ],
+          total: 2,
+        }],
+      ]);
+      const client = createMockClient({ queryResults });
+      const builder = new WikiContextBuilder(client as any, makeScanResult());
+      const ctx = builder.buildGlossaryContext();
+
+      const fooEntries = ctx.symbols.filter(s => s.name === 'Foo');
+      expect(fooEntries.length).toBe(1);
     });
   });
 
   describe('buildApiContext', () => {
-    it('should extract CLI commands and exported functions', () => {
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s1', 'registerBuildCommand', 'function', 'src/cli/commands/build.ts', 1, 20);
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s2', 'registerAskCommand', 'function', 'src/cli/commands/ask.ts', 1, 15);
-
-      const builder = new WikiContextBuilder(db, makeScanResult());
+    it('commands 来自 entry_points', () => {
+      const client = createMockClient();
+      const builder = new WikiContextBuilder(client as any, makeScanResult());
       const ctx = builder.buildApiContext();
 
       expect(ctx.commands.length).toBe(2);
@@ -169,71 +171,14 @@ describe('WikiContextBuilder', () => {
     });
   });
 
-  describe('buildBusinessContext', () => {
-    it('should extract services with methods and dependencies', () => {
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line, scope, visibility) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-      ).run('s1', 'IndexService', 'class', 'src/services/index-service.ts', 1, 50, null, null);
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line, scope, visibility) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-      ).run('s2', 'indexProject', 'method', 'src/services/index-service.ts', 10, 40, 'IndexService', 'public');
-      db.prepare(
-        "INSERT INTO relations (id, source, target, type, file_path) VALUES (?, ?, ?, ?, ?)"
-      ).run('r1', 'IndexService', 'FileScanner', 'depends_on', 'src/services/index-service.ts');
+  describe('buildTroubleshootingContext', () => {
+    it('modules 来自 packages', () => {
+      const client = createMockClient();
+      const builder = new WikiContextBuilder(client as any, makeScanResult());
+      const ctx = builder.buildTroubleshootingContext();
 
-      const builder = new WikiContextBuilder(db, makeScanResult());
-      const ctx = builder.buildBusinessContext();
-
-      expect(ctx.services.length).toBe(1);
-      expect(ctx.services[0].name).toBe('IndexService');
-      expect(ctx.services[0].methods.map(m => m.name)).toContain('indexProject');
-      expect(ctx.services[0].dependencies.length).toBe(1);
-    });
-  });
-
-  describe('buildDesignDecisionsContext', () => {
-    it('should detect strategy pattern from resolver registry', () => {
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s1', 'ResolverRegistry', 'class', 'src/strategy/resolver-registry.ts', 1, 30);
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s2', 'NestResolver', 'class', 'src/strategy/resolvers/nest-resolver.ts', 1, 20);
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s3', 'ReactResolver', 'class', 'src/strategy/resolvers/react-resolver.ts', 1, 20);
-
-      const builder = new WikiContextBuilder(db, makeScanResult());
-      const ctx = builder.buildDesignDecisionsContext();
-
-      expect(ctx.patterns.length).toBe(0); // No register() method, so no pattern detected
-    });
-
-    it('should detect tech choices from dependencies', () => {
-      const builder = new WikiContextBuilder(db, makeScanResult({
-        techStack: ['better-sqlite3', 'tree-sitter-typescript', 'commander'],
-      }));
-      const ctx = builder.buildDesignDecisionsContext();
-
-      expect(ctx.techChoices.length).toBeGreaterThan(0);
-    });
-  });
-
-  describe('buildGlossaryContext', () => {
-    it('should return deduplicated symbols', () => {
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s1', 'UserService', 'class', 'src/services/user.ts', 1, 50);
-      db.prepare(
-        "INSERT INTO symbols (id, name, type, file_path, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?)"
-      ).run('s2', 'UserService', 'class', 'src/services/user.ts', 1, 50);
-
-      const builder = new WikiContextBuilder(db, makeScanResult());
-      const ctx = builder.buildGlossaryContext();
-
-      // Deduplicated: only one UserService entry
-      const userServiceEntries = ctx.symbols.filter(s => s.name === 'UserService');
-      expect(userServiceEntries.length).toBe(1);
+      expect(ctx.modules.length).toBe(3);
+      expect(ctx.modules.map(m => m.name)).toContain('core');
     });
   });
 });

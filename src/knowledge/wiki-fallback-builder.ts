@@ -34,6 +34,13 @@ export class WikiFallbackBuilder {
       builder.addSection('Source Directories', ctx.sourceDirs.map(d => `- ${d}`).join('\n'));
     }
 
+    if (ctx.topSymbols.length > 0) {
+      builder.addSection('Hotspots (high fan-in)', '').addTable(
+        ['Symbol', 'Type', 'Complexity'],
+        ctx.topSymbols.map(s => [s.name, s.type, String(s.complexity ?? '')]),
+      );
+    }
+
     return builder.build();
   }
 
@@ -50,6 +57,22 @@ export class WikiFallbackBuilder {
         ? `Key exports: ${topExports.map(s => `\`${s.name}\``).join(', ')}`
         : 'No top-level symbols detected';
       builder.addSection(mod.name, desc);
+    }
+
+    // 分层信息（来自 MCP get_architecture）
+    if (ctx.layers && ctx.layers.length > 0) {
+      builder.addSection('Layers', '').addTable(
+        ['Package', 'Layer', 'Reason'],
+        ctx.layers.map(l => [l.name, l.layer, l.reason]),
+      );
+    }
+
+    // 模块间调用边界（来自 MCP get_architecture）
+    if (ctx.boundaries && ctx.boundaries.length > 0) {
+      builder.addSection('Module Boundaries', '').addTable(
+        ['From', 'To', 'Call Count'],
+        ctx.boundaries.map(b => [b.from, b.to, String(b.callCount)]),
+      );
     }
 
     const uniqueRelations = ctx.interModuleRelations
@@ -158,8 +181,8 @@ export class WikiFallbackBuilder {
       .slice(0, 20);
     if (functions.length > 0) {
       builder.addSection('Exported Functions', '').addTable(
-        ['Function', 'File', 'Line'],
-        functions.map(f => [f.name, f.filePath, String(f.startLine)]),
+        ['Function', 'Signature', 'File'],
+        functions.map(f => [f.name, f.signature ?? '', f.filePath]),
       );
     }
 
@@ -232,8 +255,14 @@ export class WikiFallbackBuilder {
     }
 
     builder.addTable(
-      ['Name', 'Type', 'File'],
-      ctx.symbols.map(s => [s.name, s.type, s.filePath]),
+      ['Name', 'Type', 'Signature', 'Docstring', 'File'],
+      ctx.symbols.map(s => [
+        s.name,
+        s.type,
+        s.signature ?? '',
+        s.docstring ?? '',
+        s.filePath,
+      ]),
     );
 
     return builder.build();

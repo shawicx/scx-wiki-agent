@@ -1,41 +1,40 @@
-# 项目概述
+# Project Overview
 
-本项目是一个基于 TypeScript 构建的命令行工具，旨在通过大语言模型（LLM）和代码解析技术，帮助开发者自动分析和生成项目架构文档。它解决了开发团队在项目迭代过程中，架构文档维护成本高、容易过时、与代码实际结构脱节的问题。通过自动解析源代码结构并结合智能策略，该工具能够生成准确、可维护的架构描述文档，提升团队协作效率和项目可维护性。
+A cli project with 46 files.
 
-## 核心设计思路
+## Tech Stack
 
-项目的核心设计思路是采用 **策略模式** 和 **上下文驱动** 的架构文档生成机制。它首先通过文件系统扫描和源代码解析（使用 tree-sitter 库）获取项目的静态结构信息，如模块依赖、类继承关系、函数调用等。然后，根据不同的项目类型（如前端、后端、代理等），选择并组合不同的“Wiki 策略”（如 `AgentWikiStrategy`、`BackendWikiStrategy`、`ArchitectureContext` 等）。这些策略负责将原始的结构数据转化为人类可读、符合特定领域约定的架构描述。
+- @ai-sdk/openai
+- ai
+- commander
+- ignore
+- @types/node
+- tsup
+- typescript
+- vitest
 
-工具使用 `commander` 库提供命令行接口，允许用户指定项目路径、输出格式等参数。生成的文档内容会结合 `@ai-sdk/openai` 和 `ai` 库调用大语言模型，对代码片段进行语义理解和总结，最终输出结构化、有深度的架构文档。同时，工具内部使用 `better-sqlite3` 作为轻量级持久化存储，用于缓存解析结果或保存用户配置，提高重复分析的效率。
+## Entry Files
 
-## 技术栈
+- `src/cli/index.ts`
+- `tests/fixtures/sample-project/src/index.ts`
 
-| 技术 | 用途 |
-|------|------|
-| TypeScript | 项目主要开发语言，提供类型安全 |
-| commander | 构建命令行界面，处理参数解析和命令分发 |
-| @ai-sdk/openai & ai | 调用 OpenAI 大语言模型，进行代码语义分析和文档生成 |
-| tree-sitter-typescript & web-tree-sitter | 精确解析 TypeScript/JavaScript 代码的抽象语法树 |
-| better-sqlite3 | 轻量级嵌入式数据库，用于缓存中间结果和配置持久化 |
-| tsup | 打包 TypeScript 代码为可执行文件或库 |
-| vitest | 单元测试和集成测试框架 |
+## Source Directories
 
-## 项目结构
+- src
 
-项目源代码主要位于 `src` 目录下，组织方式如下：
+## Hotspots (high fan-in)
 
-- **cli/** — 命令行接口相关的模块，包括命令定义、参数处理和主入口文件。
-- **strategies/** — 各种 Wiki 策略的实现，如 `AgentWikiStrategy`、`BackendWikiStrategy` 等，每种策略定义如何从代码结构中提取特定领域的信息。
-- **context/** — 上下文模块，如 `ApiContext`、`ArchitectureContext`，用于封装和传递分析过程中需要的全局状态和配置。
-- **parsers/** — 代码解析器模块，封装 tree-sitter 的调用，提供统一的代码结构提取接口。
-- **utils/** — 工具函数，包括文件系统操作、数据库访问、字符串处理等辅助功能。
-- **types/** — TypeScript 类型定义，确保各模块间的类型一致性。
 
-## 入口文件
 
-| 文件 | 作用 |
-|------|------|
-| src/cli/index.ts | 主程序入口，初始化 commander 程序实例，注册全局选项和帮助信息 |
-| src/cli/commands/index.ts | 子命令注册中心，将 `analyze`、`generate` 等子命令与对应的处理逻辑绑定 |
-
-测试目录 `tests/fixtures/sample-project/` 包含一个示例项目，用于集成测试，验证工具对不同项目结构的分析能力。
+| Symbol | Type | Complexity |
+| --- | --- | --- |
+| build | function | 11 |
+| addTitle | function | 11 |
+| addSection | function | 10 |
+| generate | function | 10 |
+| getArchitecture | function | 9 |
+| addTable | function | 9 |
+| addParagraph | function | 8 |
+| exec | function | 7 |
+| queryGraph | function | 7 |
+| buildTroubleshootingContext | function | 3 |

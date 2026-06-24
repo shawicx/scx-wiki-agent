@@ -17,8 +17,8 @@ describe('CLI commands', () => {
   it('wiki --help should show available commands', () => {
     const output = execSync('node dist/bin.js --help', { encoding: 'utf-8' });
     expect(output).toContain('scan');
-    expect(output).toContain('index');
     expect(output).toContain('init');
+    expect(output).toContain('build');
   });
 
   it('wiki init should create .scx-wiki-agent and .wiki directories', () => {

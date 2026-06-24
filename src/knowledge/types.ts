@@ -10,14 +10,14 @@ export interface OverviewContext {
   techStack: string[];
   sourceDirs: string[];
   entryFiles: Array<{ name: string; path: string }>;
-  topSymbols: Array<{ name: string; type: SymbolType }>;
+  topSymbols: Array<{ name: string; type: SymbolType; docstring?: string | null; complexity?: number }>;
 }
 
 /** Module summary for architecture and modules pages */
 export interface ModuleSummary {
   name: string;
   files: string[];
-  symbols: Array<{ name: string; type: SymbolType }>;
+  symbols: Array<{ name: string; type: SymbolType; docstring?: string | null; signature?: string | null; complexity?: number }>;
   fileSymbols: Array<{ file: string; symbols: Array<{ name: string; type: SymbolType }> }>;
   outgoingRelations: Array<{ target: string; type: RelationType }>;
   incomingRelations: Array<{ source: string; type: RelationType }>;
@@ -32,6 +32,12 @@ export interface ArchitectureContext {
     target: string;
     type: RelationType;
   }>;
+  /** 分层信息（来自 MCP get_architecture） */
+  layers?: Array<{ name: string; layer: string; reason: string }>;
+  /** 模块间调用边界（来自 MCP get_architecture） */
+  boundaries?: Array<{ from: string; to: string; callCount: number }>;
+  /** 聚类（来自 MCP get_architecture） */
+  clusters?: Array<{ label: string; members: number; topNodes: string[] }>;
 }
 
 /** A participant in a sequence diagram (function/class/module) */
@@ -63,26 +69,6 @@ export interface DataFlowContext {
   sequences: ExecutionSequence[];
 }
 
-/**
- * @deprecated Use ExecutionSequence instead
- */
-export interface PipelineStep {
-  symbol: string;
-  type: SymbolType;
-  filePath: string;
-  startLine: number;
-  codeSnippet: string;
-}
-
-/**
- * @deprecated Use ExecutionSequence instead
- */
-export interface ExecutionPipeline {
-  name: string;
-  entrySymbol: string;
-  steps: PipelineStep[];
-}
-
 /** Context for modules page */
 export interface ModulesContext {
   modules: ModuleSummary[];
@@ -100,6 +86,8 @@ export interface ApiContext {
     name: string;
     filePath: string;
     startLine: number;
+    signature?: string | null;
+    docstring?: string | null;
   }>;
   frameworkNodes: Array<{
     name: string;
@@ -115,7 +103,7 @@ export interface BusinessContext {
   services: Array<{
     name: string;
     filePath: string;
-    methods: Array<{ name: string; visibility: string | null }>;
+    methods: Array<{ name: string; visibility: string | null; docstring?: string | null }>;
     dependencies: Array<{ target: string; type: RelationType }>;
     codeSnippet: string;
   }>;
@@ -144,7 +132,9 @@ export interface GlossaryContext {
     name: string;
     type: SymbolType;
     filePath: string;
-    scope: string | null;
+    docstring?: string | null;
+    signature?: string | null;
+    complexity?: number;
   }>;
 }
 

@@ -4,6 +4,7 @@ import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
 import type { SnippetData } from '../mcp/types.js';
 import type { ScanResult } from '../core/scanner.js';
 import type { SymbolType, RelationType } from '../core/types.js';
+import { PAGE_REGISTRY } from './page-registry.js';
 import type {
   OverviewContext,
   ArchitectureContext,
@@ -18,6 +19,9 @@ import type {
   DesignDecisionsContext,
   DesignPattern,
   GlossaryContext,
+  CallsContext,
+  ClassesContext,
+  ReadmeContext,
 } from './types.js';
 
 const ENTRY_FILE_NAMES = ['index.ts', 'index.js', 'main.ts', 'main.js', 'cli.ts', 'cli.js'];
@@ -33,6 +37,26 @@ export class WikiContextBuilder {
     private client: CodebaseMemoryClient,
     private scanResult: ScanResult,
   ) {}
+
+  /** 按页面名派发上下文构建（供 PageRegistry 调用） */
+  buildByName(page: string): unknown {
+    switch (page) {
+      case 'overview': return this.buildOverviewContext();
+      case 'architecture': return this.buildArchitectureContext();
+      case 'data-flow': return this.buildDataFlowContext();
+      case 'modules': return this.buildModulesContext();
+      case 'api': return this.buildApiContext();
+      case 'business': return this.buildBusinessContext();
+      case 'design-decisions': return this.buildDesignDecisionsContext();
+      case 'onboarding': return this.buildOnboardingContext();
+      case 'troubleshooting': return this.buildTroubleshootingContext();
+      case 'glossary': return this.buildGlossaryContext();
+      case 'calls': return this.buildCallsContext();
+      case 'classes': return this.buildClassesContext();
+      case 'readme': return this.buildReadmeContext();
+      default: return null;
+    }
+  }
 
   buildOverviewContext(): OverviewContext {
     const arch = this.client.getArchitecture();
@@ -463,8 +487,152 @@ export class WikiContextBuilder {
   }
 
   /**
+   * calls.md 数据源：调用边表（R2 边表优于时序图）。
+   * 用 Cypher 查 (a:Method|Function)-[:CALLS]->(b)，按入口分组。
+   * trace_path 不可靠（对 Method 返回空、无 file/line），改用 Cypher CALLS 边。
+   */
+  buildCallsContext(): CallsContext {
+    const arch = this.client.getArchitecture();
+
+    // 对每个 entry_point，BFS 查 2 层 CALLS 边
+    const groups: CallsContext['groups'] = [];
+    const globalSeen = new Set<string>();
+
+    for (const entry of arch.entry_points.slice(0, 6)) {
+      const edges: CallsContext['groups'][number]['edges'] = [];
+      let frontier = [entry.name];
+      const visited = new Set<string>([entry.name]);
+
+      for (let depth = 0; depth < 2 && frontier.length > 0; depth++) {
+        const callerList = frontier.map(n => `"${n.replace(/"/g, '\\"')}"`).join(',');
+        // 必须给源节点指定 label（裸 MATCH 会返回 0 行）；分两次查 Method 和 Function
+        const qM = this.client.queryGraph(
+          `MATCH (a:Method)-[:CALLS]->(b) WHERE a.name IN [${callerList}] AND a.is_test = false AND b.is_test = false
+           RETURN a.name AS caller, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 30`,
+        );
+        const qF = this.client.queryGraph(
+          `MATCH (a:Function)-[:CALLS]->(b) WHERE a.name IN [${callerList}] AND a.is_test = false AND b.is_test = false
+           RETURN a.name AS caller, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 30`,
+        );
+
+        const nextFrontier: string[] = [];
+        for (const row of [...qM.rows, ...qF.rows]) {
+          const callerName = row[0] as string;
+          const calleeName = row[1] as string;
+          const calleeFile = (row[2] as string) ?? '';
+          const calleeLine = (row[3] as number) ?? 0;
+
+          if (callerName === calleeName) continue;
+          if (/\.(test|spec)\.|__tests__/.test(calleeFile)) continue;
+
+          const edgeKey = `${callerName}->${calleeName}`;
+          if (globalSeen.has(edgeKey)) continue;
+          globalSeen.add(edgeKey);
+
+          edges.push({ caller: callerName, callee: calleeName, calleeFile, calleeLine });
+
+          if (!visited.has(calleeName)) {
+            visited.add(calleeName);
+            nextFrontier.push(calleeName);
+          }
+        }
+        frontier = nextFrontier;
+      }
+
+      if (edges.length > 0) {
+        groups.push({ entry: entry.name, entryFile: entry.file, edges });
+      }
+    }
+
+    // 扇入表：被调用最多的符号（从 hotspots 取）
+    const fanIn: CallsContext['fanIn'] = arch.hotspots.slice(0, 15).map(h => ({
+      symbol: h.name,
+      file: h.qualified_name.split('.').slice(-2, -1)[0] ?? '',
+      inDegree: h.fan_in,
+    }));
+
+    return { groups, fanIn };
+  }
+
+  /**
+   * classes.md 数据源：类清单 + 每类方法表（降级适配）。
+   * MCP 无 INHERITS 边、Class 无 parent_class/is_abstract，故只做扁平类表。
+   * 方向是 (c:Class)-[:DEFINES_METHOD]->(m:Method)。
+   */
+  buildClassesContext(): ClassesContext {
+    // 查所有类及其方法（DEFINES_METHOD 方向：Class → Method）
+    const q = this.client.queryGraph(
+      `MATCH (c:Class)-[:DEFINES_METHOD]->(m:Method)
+       WHERE c.is_test = false
+       RETURN c.name AS cls, c.qualified_name AS qn, c.file_path AS cfile, c.start_line AS cline,
+              m.name AS mname, m.signature AS msig, m.visibility AS mvis,
+              m.docstring AS mdoc, m.file_path AS mfile, m.start_line AS mline
+       ORDER BY c.name, m.start_line LIMIT 500`,
+    );
+
+    const classMap = new Map<string, ClassesContext['classes'][number]>();
+    for (const row of q.rows) {
+      const clsName = row[0] as string;
+      if (!classMap.has(clsName)) {
+        classMap.set(clsName, {
+          name: clsName,
+          qualifiedName: row[1] as string,
+          filePath: (row[2] as string) ?? '',
+          startLine: (row[3] as number) ?? 0,
+          parentClass: null, // MCP 未提供继承数据
+          methods: [],
+        });
+      }
+      classMap.get(clsName)!.methods.push({
+        name: row[4] as string,
+        signature: (row[5] as string) ?? '',
+        visibility: (row[6] as string) ?? 'public',
+        docstring: (row[7] as string) ?? null,
+        filePath: (row[8] as string) ?? '',
+        startLine: (row[9] as number) ?? 0,
+      });
+    }
+
+    return {
+      classes: Array.from(classMap.values()),
+      hasInheritance: false, // MCP 当前不支持 INHERITS 边
+    };
+  }
+
+  /**
+   * README.md 数据源：文档索引（来自 PAGE_REGISTRY）+ 项目元数据（package.json）。
+   * README 是 wiki 总入口，索引表必须覆盖全部文档。
+   */
+  buildReadmeContext(): ReadmeContext {
+    let projectName = '';
+    let version = '';
+    let license = '';
+    let description = '';
+    let runtime = '';
+
+    try {
+      const pkgPath = join(this.scanResult.rootDir, 'package.json');
+      if (existsSync(pkgPath)) {
+        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+        projectName = pkg.name ?? '';
+        version = pkg.version ?? '';
+        license = pkg.license ?? '';
+        description = pkg.description ?? '';
+        runtime = pkg.type === 'module' ? 'ESM' : 'CJS';
+      }
+    } catch { /* ignore */ }
+
+    const docIndex = PAGE_REGISTRY.map(p => ({
+      file: `${p.name}.md`,
+      tier: p.tier,
+      answer: p.answer,
+    }));
+
+    return { projectName, version, license, description, runtime, docIndex };
+  }
+
+  /**
    * 容错地获取代码片段。getCodeSnippet 失败或无结果时返回 null，不抛错。
-   * 用于在不影响整体 context 构建的前提下富化符号的源码信息。
    */
   private safeGetSnippet(qualifiedName: string): SnippetData | null {
     if (!qualifiedName) return null;

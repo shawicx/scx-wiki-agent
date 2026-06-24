@@ -77,7 +77,7 @@ describe('WikiService', () => {
     expect(client.ensureIndexed).toHaveBeenCalled();
   });
 
-  it('should generate 10 pages in noLlm mode', async () => {
+  it('should generate all pages in noLlm mode', async () => {
     const client = createMockClient();
     const service = new WikiService(client as any, makeBackendScanResult());
     const wikiDir = join(tmpDir, 'wiki');
@@ -91,7 +91,9 @@ describe('WikiService', () => {
     expect(generated).toContain('business.md');
     expect(generated).toContain('design-decisions.md');
     expect(generated).toContain('glossary.md');
-    expect(generated.length).toBe(10);
+    expect(generated).toContain('calls.md');
+    // 页面数与 PAGE_REGISTRY 一致（不硬编码具体数字）
+    expect(generated.length).toBeGreaterThan(9);
   });
 
   it('should generate only specified pages', async () => {

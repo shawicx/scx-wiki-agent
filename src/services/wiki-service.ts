@@ -6,31 +6,14 @@ import { WikiContextBuilder } from '../knowledge/wiki-context-builder.js';
 import { WikiFallbackBuilder } from '../knowledge/wiki-fallback-builder.js';
 import { WikiPageGenerator } from '../knowledge/wiki-page-generator.js';
 import { sanitizeWikiOutput } from '../knowledge/wiki-output-sanitizer.js';
+import { PAGE_REGISTRY, ALL_PAGE_NAMES } from '../knowledge/page-registry.js';
 import type { WikiBuildOptions } from '../knowledge/types.js';
 
-const ALL_PAGES = [
-  'overview',
-  'architecture',
-  'data-flow',
-  'modules',
-  'api',
-  'business',
-  'design-decisions',
-  'onboarding',
-  'troubleshooting',
-  'glossary',
-] as const;
-
-type PageName = typeof ALL_PAGES[number];
-
 export class WikiService {
-  private client: CodebaseMemoryClient;
-  private scanResult: ScanResult;
-
-  constructor(client: CodebaseMemoryClient, scanResult: ScanResult) {
-    this.client = client;
-    this.scanResult = scanResult;
-  }
+  constructor(
+    private client: CodebaseMemoryClient,
+    private scanResult: ScanResult,
+  ) {}
 
   async buildWiki(wikiDir: string, options?: WikiBuildOptions): Promise<string[]> {
     mkdirSync(wikiDir, { recursive: true });
@@ -38,9 +21,8 @@ export class WikiService {
     // 确保图谱已索引（替代旧的 index 阶段）
     this.client.ensureIndexed('moderate');
 
-    const pages = options?.pages
-      ? (options.pages as PageName[])
-      : ALL_PAGES;
+    // 决定生成哪些页面（校验页名合法性）
+    const pages = this.resolvePages(options?.pages);
 
     const contextBuilder = new WikiContextBuilder(this.client, this.scanResult);
     const fallbackBuilder = new WikiFallbackBuilder();
@@ -62,89 +44,46 @@ export class WikiService {
     return filenames;
   }
 
+  /** 解析 --pages 参数，校验页名合法性 */
+  private resolvePages(requested?: string[]): string[] {
+    if (!requested || requested.length === 0) {
+      return ALL_PAGE_NAMES;
+    }
+    // 校验：过滤非法页名并告警
+    const valid: string[] = [];
+    for (const name of requested) {
+      if (ALL_PAGE_NAMES.includes(name)) {
+        valid.push(name);
+      } else {
+        console.warn(`[wiki] 未知页面 "${name}"，已跳过。可用页面: ${ALL_PAGE_NAMES.join(', ')}`);
+      }
+    }
+    return valid.length > 0 ? valid : ALL_PAGE_NAMES;
+  }
+
   private async generatePage(
-    page: PageName,
+    page: string,
     ctx: WikiContextBuilder,
     fallback: WikiFallbackBuilder,
     generator: WikiPageGenerator,
     noLlm: boolean,
     onChunk: (filename: string, text: string) => void,
   ): Promise<string> {
+    const pageContext = ctx.buildByName(page);
+    if (pageContext === null) return '';
+
     if (noLlm || !generator.hasModel()) {
-      return this.generateFallback(page, ctx, fallback);
+      return fallback.buildByName(page, pageContext);
     }
     try {
-      const content = await this.generateWithLlm(page, ctx, generator, (text) => onChunk(page, text));
+      const content = await generator.generateByName(page, pageContext, (text) => onChunk(page, text));
       if (content.trim().length > 0) {
-        // 清理 LLM 输出残骸（首行寒暄、markdown 围栏）
-        return sanitizeWikiOutput(content);
+        // 清理 LLM 输出残骸（首行寒暄、markdown 围栏，R2 时序图告警）
+        return sanitizeWikiOutput(content, page);
       }
     } catch {
       // Fall through to fallback
     }
-    return this.generateFallback(page, ctx, fallback);
-  }
-
-  private generateFallback(
-    page: PageName,
-    ctx: WikiContextBuilder,
-    fallback: WikiFallbackBuilder,
-  ): string {
-    switch (page) {
-      case 'overview':
-        return fallback.buildOverview(ctx.buildOverviewContext());
-      case 'architecture':
-        return fallback.buildArchitecture(ctx.buildArchitectureContext());
-      case 'data-flow':
-        return fallback.buildDataFlow(ctx.buildDataFlowContext());
-      case 'modules':
-        return fallback.buildModules(ctx.buildModulesContext());
-      case 'api':
-        return fallback.buildApi(ctx.buildApiContext());
-      case 'business':
-        return fallback.buildBusiness(ctx.buildBusinessContext());
-      case 'design-decisions':
-        return fallback.buildDesignDecisions(ctx.buildDesignDecisionsContext());
-      case 'onboarding':
-        return fallback.buildOnboarding(ctx.buildOnboardingContext());
-      case 'troubleshooting':
-        return fallback.buildTroubleshooting(ctx.buildTroubleshootingContext());
-      case 'glossary':
-        return fallback.buildGlossary(ctx.buildGlossaryContext());
-      default:
-        return '';
-    }
-  }
-
-  private async generateWithLlm(
-    page: PageName,
-    ctx: WikiContextBuilder,
-    generator: WikiPageGenerator,
-    onChunk: (text: string) => void,
-  ): Promise<string> {
-    switch (page) {
-      case 'overview':
-        return generator.generateOverview(ctx.buildOverviewContext(), onChunk);
-      case 'architecture':
-        return generator.generateArchitecture(ctx.buildArchitectureContext(), onChunk);
-      case 'data-flow':
-        return generator.generateDataFlow(ctx.buildDataFlowContext(), onChunk);
-      case 'modules':
-        return generator.generateModules(ctx.buildModulesContext(), onChunk);
-      case 'api':
-        return generator.generateApi(ctx.buildApiContext(), onChunk);
-      case 'business':
-        return generator.generateBusiness(ctx.buildBusinessContext(), onChunk);
-      case 'design-decisions':
-        return generator.generateDesignDecisions(ctx.buildDesignDecisionsContext(), onChunk);
-      case 'onboarding':
-        return generator.generateOnboarding(ctx.buildOnboardingContext(), onChunk);
-      case 'troubleshooting':
-        return generator.generateTroubleshooting(ctx.buildTroubleshootingContext(), onChunk);
-      case 'glossary':
-        return generator.generateGlossary(ctx.buildGlossaryContext(), onChunk);
-      default:
-        return '';
-    }
+    return fallback.buildByName(page, pageContext);
   }
 }

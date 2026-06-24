@@ -10,6 +10,9 @@ import type {
   GlossaryContext,
   OnboardingContext,
   TroubleshootingContext,
+  CallsContext,
+  ClassesContext,
+  ReadmeContext,
 } from './types.js';
 
 function sanitizeMermaid(name: string): string {
@@ -17,6 +20,26 @@ function sanitizeMermaid(name: string): string {
 }
 
 export class WikiFallbackBuilder {
+  /** 按页面名派发规则生成（供 PageRegistry 调用） */
+  buildByName(page: string, ctx: any): string {
+    switch (page) {
+      case 'overview': return this.buildOverview(ctx);
+      case 'architecture': return this.buildArchitecture(ctx);
+      case 'data-flow': return this.buildDataFlow(ctx);
+      case 'modules': return this.buildModules(ctx);
+      case 'api': return this.buildApi(ctx);
+      case 'business': return this.buildBusiness(ctx);
+      case 'design-decisions': return this.buildDesignDecisions(ctx);
+      case 'onboarding': return this.buildOnboarding(ctx);
+      case 'troubleshooting': return this.buildTroubleshooting(ctx);
+      case 'glossary': return this.buildGlossary(ctx);
+      case 'calls': return this.buildCalls(ctx);
+      case 'classes': return this.buildClasses(ctx);
+      case 'readme': return this.buildReadme(ctx);
+      default: return '';
+    }
+  }
+
   buildOverview(ctx: OverviewContext): string {
     const builder = new WikiBuilder()
       .addTitle('Project Overview')
@@ -98,28 +121,21 @@ export class WikiFallbackBuilder {
       return builder.build();
     }
 
+    builder.addParagraph('数据处理阶段表（调用关系详见 calls.md，此处描述数据形态转换）：');
+
+    // 阶段表：将每个序列视为一个处理阶段，列出关键转换（R2 边表优于时序图）
     for (const seq of ctx.sequences) {
-      // Build Mermaid sequenceDiagram
-      const lines: string[] = ['sequenceDiagram'];
-      for (const p of seq.participants) {
-        lines.push(`    participant ${sanitizeMermaid(p.name)}`);
-      }
-      for (const msg of seq.messages) {
-        lines.push(`    ${sanitizeMermaid(msg.from)}->>${sanitizeMermaid(msg.to)}: ${sanitizeMermaid(msg.label)}`);
-      }
+      builder.addSection(seq.name, `入口符号：${seq.entrySymbol}`);
 
-      builder.addSection(seq.name, '');
-      builder.addCodeBlock('mermaid', lines.join('\n'));
-
-      // Call-step table for reference
+      // 调用边表（替代 sequenceDiagram）
       if (seq.messages.length > 0) {
+        builder.addParagraph('调用边表：');
         builder.addTable(
-          ['From', 'To', 'Call', 'Location'],
+          ['调用方', '被调用方', '源文件:行号'],
           seq.messages.map(m => [
             m.from,
             m.to,
-            m.label,
-            `${m.filePath}:${m.callLine}`,
+            m.filePath ? `${m.filePath}:${m.callLine}` : '-',
           ]),
         );
       }
@@ -313,6 +329,124 @@ export class WikiFallbackBuilder {
     if (ctx.techStack.length > 0) {
       builder.addSection('Technology-Specific Issues',
         `Key technologies: ${ctx.techStack.join(', ')}\n\nRefer to the official documentation for each technology for specific troubleshooting guides.`);
+    }
+
+    return builder.build();
+  }
+
+  /**
+   * calls.md：调用边表（R2 边表优于时序图）。
+   * 纯规则生成，不使用 sequenceDiagram。
+   */
+  buildCalls(ctx: CallsContext): string {
+    const builder = new WikiBuilder()
+      .addTitle('Calls')
+      .addParagraph('调用关系边表（按入口函数分组）。每条边可被 trace_path / CALLS 查询复现。');
+
+    if (ctx.groups.length === 0 && ctx.fanIn.length === 0) {
+      builder.addParagraph('No call edges traced.');
+      return builder.build();
+    }
+
+    // 扇入表（被调用最多的符号）
+    if (ctx.fanIn.length > 0) {
+      builder.addSection('Fan-in（被调用次数）', '');
+      builder.addTable(
+        ['符号', '文件', '扇入'],
+        ctx.fanIn.map(f => [f.symbol, f.file, String(f.inDegree)]),
+      );
+    }
+
+    // 按入口分组的调用边表
+    for (const group of ctx.groups) {
+      builder.addSection(group.entry, `入口文件：${group.entryFile}`);
+      builder.addTable(
+        ['调用方', '被调用方', '源文件:行号'],
+        group.edges.map(e => [
+          e.caller,
+          e.callee,
+          e.calleeLine > 0 ? `${e.calleeFile}:${e.calleeLine}` : e.calleeFile,
+        ]),
+      );
+    }
+
+    return builder.build();
+  }
+
+  /**
+   * classes.md：类层次与多态（降级适配）。
+   * MCP 无 INHERITS 边，只做"类清单 + 每类方法表"，诚实标注数据局限。
+   */
+  buildClasses(ctx: ClassesContext): string {
+    const builder = new WikiBuilder()
+      .addTitle('Classes');
+
+    if (ctx.classes.length === 0) {
+      builder.addParagraph('No classes found.');
+      return builder.build();
+    }
+
+    // 数据局限说明（R1 诚实标注）
+    if (!ctx.hasInheritance) {
+      builder.addParagraph(
+        '> **数据局限**：当前 MCP 知识图谱未提供继承关系（INHERITS 边），本页只列出类清单与成员方法，不含继承树。多态方法的子类实现需人工补充。',
+      );
+    }
+
+    for (const cls of ctx.classes) {
+      const header = `${cls.filePath}:${cls.startLine}`;
+      builder.addSection(cls.name, `源文件：\`${header}\`  限定名：\`${cls.qualifiedName}\``);
+
+      if (cls.parentClass) {
+        builder.addParagraph(`继承自：\`${cls.parentClass}\``);
+      }
+
+      if (cls.methods.length > 0) {
+        builder.addTable(
+          ['方法', '可见性', '签名', '说明', '源文件:行号'],
+          cls.methods.map(m => [
+            m.name,
+            m.visibility,
+            m.signature ? `\`${m.signature}\`` : '-',
+            m.docstring ?? '-',
+            m.startLine > 0 ? `${m.filePath}:${m.startLine}` : m.filePath,
+          ]),
+        );
+      }
+    }
+
+    return builder.build();
+  }
+
+  /**
+   * README.md：导航索引（wiki 总入口）。
+   * 索引表覆盖全部已注册文档，含项目元数据。
+   */
+  buildReadme(ctx: ReadmeContext): string {
+    const builder = new WikiBuilder()
+      .addTitle(ctx.projectName || 'Project Wiki');
+
+    if (ctx.description) {
+      builder.addParagraph(ctx.description);
+    }
+
+    // 项目元数据
+    builder.addTable(
+      ['项', '值'],
+      [
+        ['版本', ctx.version || '-'],
+        ['许可证', ctx.license || '-'],
+        ['运行时', ctx.runtime || '-'],
+      ],
+    );
+
+    // 文档索引表（核心：覆盖全部文档）
+    if (ctx.docIndex.length > 0) {
+      builder.addSection('文档索引', '');
+      builder.addTable(
+        ['文档', '层级', '回答的问题'],
+        ctx.docIndex.map(d => [`[${d.file}](${d.file})`, d.tier, d.answer]),
+      );
     }
 
     return builder.build();

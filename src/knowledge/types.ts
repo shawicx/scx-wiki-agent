@@ -138,6 +138,60 @@ export interface GlossaryContext {
   }>;
 }
 
+/** Context for calls page (调用边表，R2 边表优于时序图) */
+export interface CallsContext {
+  /** 按入口函数分组的调用边 */
+  groups: Array<{
+    entry: string;
+    entryFile: string;
+    edges: Array<{
+      caller: string;
+      callee: string;
+      calleeFile: string;
+      calleeLine: number;
+    }>;
+  }>;
+  /** 全局扇入表（被调用次数最多的符号） */
+  fanIn: Array<{ symbol: string; file: string; inDegree: number }>;
+}
+
+/**
+ * Context for classes page (类层次与多态)。
+ * 降级适配：MCP 无 INHERITS 边、Class 无 parent_class/is_abstract，
+ * 故只做"类清单 + 每类方法表"，无继承树。
+ */
+export interface ClassesContext {
+  classes: Array<{
+    name: string;
+    qualifiedName: string;
+    filePath: string;
+    startLine: number;
+    /** MCP 未提供继承数据，此字段恒为 null */
+    parentClass: string | null;
+    methods: Array<{
+      name: string;
+      signature: string;
+      visibility: string;
+      docstring: string | null;
+      filePath: string;
+      startLine: number;
+    }>;
+  }>;
+  /** 是否检测到继承关系（MCP 当前恒 false） */
+  hasInheritance: boolean;
+}
+
+/** Context for README.md (导航索引) */
+export interface ReadmeContext {
+  projectName: string;
+  version: string;
+  license: string;
+  description: string;
+  runtime: string;
+  /** 文档索引：文件名 → 该文档回答的核心问题 */
+  docIndex: Array<{ file: string; tier: string; answer: string }>;
+}
+
 /** Context for onboarding page */
 export interface OnboardingContext {
   projectType: string;

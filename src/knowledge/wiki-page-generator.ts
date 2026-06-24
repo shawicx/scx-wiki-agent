@@ -44,6 +44,23 @@ export class WikiPageGenerator {
     return this.model !== null;
   }
 
+  /** 按页面名派发 LLM 生成（供 PageRegistry 调用） */
+  async generateByName(page: string, ctx: any, onChunk: (text: string) => void): Promise<string> {
+    switch (page) {
+      case 'overview': return this.generateOverview(ctx, onChunk);
+      case 'architecture': return this.generateArchitecture(ctx, onChunk);
+      case 'data-flow': return this.generateDataFlow(ctx, onChunk);
+      case 'modules': return this.generateModules(ctx, onChunk);
+      case 'api': return this.generateApi(ctx, onChunk);
+      case 'business': return this.generateBusiness(ctx, onChunk);
+      case 'design-decisions': return this.generateDesignDecisions(ctx, onChunk);
+      case 'onboarding': return this.generateOnboarding(ctx, onChunk);
+      case 'troubleshooting': return this.generateTroubleshooting(ctx, onChunk);
+      case 'glossary': return this.generateGlossary(ctx, onChunk);
+      default: return '';
+    }
+  }
+
   async generateOverview(ctx: OverviewContext, onChunk: (text: string) => void): Promise<string> {
     return this.generate(onChunk, {
       systemPrompt: `你是一个资深代码文档专家。请根据项目数据生成详尽、专业的项目概述页面（Markdown格式）。
@@ -144,15 +161,13 @@ export class WikiPageGenerator {
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - "核心数据流概览"：用2-3段描述项目从入口到完成的核心数据流走向，说明主要阶段和数据如何在模块间流转
-- 对每条执行序列，包含：
-  - "流程描述"：用2-3段详细描述完整流程（从入口到终点），说明每一步做什么、为什么这样调用、数据如何转换
-  - "序列图"：用 Mermaid sequenceDiagram 展示调用序列（必须使用 sequenceDiagram 语法，严禁 flowchart）
-    - 在图中用 participant 声明所有参与者
-    - 用 ->> 表示每个调用步骤
-    - 用 Note over 标注关键数据转换节点
-  - 每个调用步骤标注源文件位置（文件名:行号）
-- 不要输出原始代码片段，但可以引用关键函数签名
-- 内容要充实，每条序列都要有完整的流程解析`,
+- "数据阶段表"：用表格描述每个处理阶段（这是核心，替代时序图）：
+  | 阶段 | 输入类型 | 输出类型 | 关键函数 | 源文件:行号 |
+  每个阶段对应数据流中的一个转换步骤。从 sequences 数据推导出阶段（如"扫描"→"索引"→"生成"）
+- "错误路径"：报错分支触发的调用须单独标注"错误路径"，不得混入主成功流程
+- 每条事实声明必须带 file:line 或函数名锚点（R1 锚点强制）
+- 严禁使用 sequenceDiagram 表达调用关系（R2 边表优于时序图）；调用关系详见 calls.md
+- 内容要充实，要让读者理解数据在各阶段如何变换`,
       userPrompt: JSON.stringify({ sequences }, null, 2),
       maxOutputTokens: 8000,
     });
@@ -387,6 +402,12 @@ export class WikiPageGenerator {
     '绝对规则：只能基于提供的JSON数据描述项目，严禁编造不存在的模块、服务、功能或业务场景。',
     '如果数据不足以描述某个方面，直接省略或注明"信息不足"，不要猜测或补充。',
     '不要将测试代码（tests/目录下的文件）当作项目功能来描述。',
+    '',
+    '铁律（违反即不可用）：',
+    'R1 锚点强制：每条事实声明必须带 file:line 或 qualified_name；无锚点的声明不得写入。',
+    'R2 边表优于时序图：调用关系用表格（调用方→被调用方→file:line），严禁用 sequenceDiagram 表达静态可达性。',
+    'R3 拒绝编造用途：任何依赖/函数的"用途"必须有源码调用点佐证；无调用点则标注"声明未用"。',
+    'R4 结构化优先：用表格/列表而非散文；签名用代码块。',
   ].join('\n');
 
   private async generate(onChunk: (text: string) => void, config: PageConfig): Promise<string> {

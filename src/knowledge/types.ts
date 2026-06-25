@@ -192,6 +192,55 @@ export interface ReadmeContext {
   docIndex: Array<{ file: string; tier: string; answer: string }>;
 }
 
+/** Context for environment page (运行态) */
+export interface EnvironmentContext {
+  packageName: string;
+  version: string;
+  runtime: string;
+  nodeVersion: string;
+  packageManager: string;
+  scripts: Record<string, string>;
+  envVars: Array<{ name: string; sensitive: boolean }>;
+}
+
+/** Context for testing page (测试) */
+export interface TestingContext {
+  framework: string | null;
+  configPath: string | null;
+  testDirs: string[];
+  fixturesDir: string | null;
+  runCommand: string;
+}
+
+/** Context for conventions page (规约——AI 头号文档) */
+export interface ConventionsContext {
+  hasLinter: boolean;
+  linterConfig: string | null;
+  hasEditorConfig: boolean;
+  editorConfig: string | null;
+  agentsMd: string | null;
+}
+
+/** Context for constraints page (边界与代价) */
+export interface ConstraintsContext {
+  /** 源码中的限制常量（MAX/LIMIT/TIMEOUT 等） */
+  constants: Array<{ name: string; value: string; filePath: string }>;
+  /** 高复杂度函数（MCP complexity > 阈值） */
+  hotFunctions: Array<{ name: string; filePath: string; complexity: number; loopDepth: number }>;
+}
+
+/** Context for cli page (CLI 命令参考) */
+export interface CliContext {
+  commands: Array<{
+    name: string;
+    description: string;
+    filePath: string;
+    startLine: number;
+    options: Array<{ flag: string; description: string }>;
+  }>;
+  exitCodes: Array<{ code: number; context: string; filePath: string }>;
+}
+
 /** Context for onboarding page */
 export interface OnboardingContext {
   projectType: string;

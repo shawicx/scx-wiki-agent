@@ -13,6 +13,11 @@ import type {
   CallsContext,
   ClassesContext,
   ReadmeContext,
+  EnvironmentContext,
+  TestingContext,
+  ConventionsContext,
+  ConstraintsContext,
+  CliContext,
 } from './types.js';
 
 function sanitizeMermaid(name: string): string {
@@ -36,6 +41,11 @@ export class WikiFallbackBuilder {
       case 'calls': return this.buildCalls(ctx);
       case 'classes': return this.buildClasses(ctx);
       case 'readme': return this.buildReadme(ctx);
+      case 'environment': return this.buildEnvironment(ctx);
+      case 'testing': return this.buildTesting(ctx);
+      case 'conventions': return this.buildConventions(ctx);
+      case 'constraints': return this.buildConstraints(ctx);
+      case 'cli': return this.buildCli(ctx);
       default: return '';
     }
   }
@@ -446,6 +456,187 @@ export class WikiFallbackBuilder {
       builder.addTable(
         ['文档', '层级', '回答的问题'],
         ctx.docIndex.map(d => [`[${d.file}](${d.file})`, d.tier, d.answer]),
+      );
+    }
+
+    return builder.build();
+  }
+
+  /**
+   * environment.md：运行态信息（包名/版本/运行时/脚本/env 变量）。
+   * 纯规则生成，数据来自 ConfigDetector 探测的实际配置文件。
+   */
+  buildEnvironment(ctx: EnvironmentContext): string {
+    const builder = new WikiBuilder().addTitle('Environment');
+
+    builder.addSection('项目信息', '');
+    builder.addTable(
+      ['项', '值'],
+      [
+        ['包名', ctx.packageName || '-'],
+        ['版本', ctx.version || '-'],
+        ['运行时', ctx.runtime],
+        ['Node 版本', ctx.nodeVersion || '未指定'],
+        ['包管理器', ctx.packageManager],
+      ],
+    );
+
+    if (Object.keys(ctx.scripts).length > 0) {
+      builder.addSection('脚本命令', '');
+      builder.addTable(
+        ['命令', '脚本'],
+        Object.entries(ctx.scripts).map(([k, v]) => [k, `\`${v}\``]),
+      );
+    }
+
+    if (ctx.envVars.length > 0) {
+      builder.addSection('环境变量', '从源码 process.env 引用提取');
+      builder.addTable(
+        ['变量名', '敏感', '用途'],
+        ctx.envVars.map(v => [v.name, v.sensitive ? '⚠️ 是' : '否', '需人工补充用途说明']),
+      );
+    }
+
+    return builder.build();
+  }
+
+  /**
+   * testing.md：测试框架/配置/目录/夹具/运行命令。
+   * 纯规则生成，诚实标注未检测到的项。
+   */
+  buildTesting(ctx: TestingContext): string {
+    const builder = new WikiBuilder().addTitle('Testing');
+
+    builder.addTable(
+      ['项', '值'],
+      [
+        ['框架', ctx.framework ?? '未检测到'],
+        ['配置文件', ctx.configPath ?? '-'],
+        ['运行命令', ctx.runCommand ? `\`${ctx.runCommand}\`` : '-'],
+        ['测试目录', ctx.testDirs.join(', ') || '-'],
+        ['夹具目录', ctx.fixturesDir ?? '-'],
+      ],
+    );
+
+    return builder.build();
+  }
+
+  /**
+   * conventions.md：规约文档（AI 头号参考）。
+   * 诚实标注工具链检测结果：有 lint 则列规则，无则明确提示需人工补充。
+   * 从 AGENTS.md 提取关键规约段落。
+   */
+  buildConventions(ctx: ConventionsContext): string {
+    const builder = new WikiBuilder().addTitle('Conventions');
+
+    // 工具链检测状态（诚实标注）
+    builder.addSection('工具链检测', '');
+    builder.addTable(
+      ['工具', '状态', '配置文件'],
+      [
+        ['Linter', ctx.hasLinter ? '✅ 已配置' : '❌ 未检测到', ctx.linterConfig ?? '-'],
+        ['EditorConfig', ctx.hasEditorConfig ? '✅ 已配置' : '❌ 未检测到', '-'],
+      ],
+    );
+
+    if (!ctx.hasLinter) {
+      builder.addParagraph(
+        '> **注意**：未检测到 lint 配置（eslint/biome）。命名/格式规约需人工补充。',
+      );
+    }
+
+    if (ctx.editorConfig) {
+      builder.addSection('EditorConfig', '');
+      builder.addCodeBlock('ini', ctx.editorConfig);
+    }
+
+    // AGENTS.md 规约提取（按 ## 段落切分，取前 5 段）
+    if (ctx.agentsMd) {
+      builder.addSection('AI 协作规约（AGENTS.md）', '');
+      const sections = ctx.agentsMd.split(/^## /m).slice(1);
+      for (const section of sections.slice(0, 5)) {
+        const lines = section.trim().split('\n');
+        const title = lines[0].trim();
+        const body = lines.slice(1).join('\n').trim().slice(0, 500);
+        builder.addSubSection(title, body || '（无内容）');
+      }
+    }
+
+    return builder.build();
+  }
+
+  /**
+   * constraints.md：项目边界与代价。
+   * 限制常量（源码 MAX/LIMIT/TIMEOUT）+ 高复杂度函数表（complexity > 3）。
+   */
+  buildConstraints(ctx: ConstraintsContext): string {
+    const builder = new WikiBuilder().addTitle('Constraints');
+
+    builder.addParagraph('项目边界与代价：性能预算、复杂度上限、已知限制。');
+
+    if (ctx.constants.length > 0) {
+      builder.addSection('限制常量（源码提取）', '');
+      builder.addTable(
+        ['常量', '值', '源文件'],
+        ctx.constants.map(c => [`\`${c.name}\``, `\`${c.value}\``, c.filePath]),
+      );
+    }
+
+    if (ctx.hotFunctions.length > 0) {
+      builder.addSection('高复杂度函数（complexity > 3）', '关注圈复杂度高的函数，考虑重构');
+      builder.addTable(
+        ['函数', '源文件', '复杂度', '循环深度'],
+        ctx.hotFunctions.map(f => [f.name, f.filePath, String(f.complexity), String(f.loopDepth)]),
+      );
+    }
+
+    if (ctx.constants.length === 0 && ctx.hotFunctions.length === 0) {
+      builder.addParagraph('未检测到显著限制常量或高复杂度函数。');
+    }
+
+    return builder.build();
+  }
+
+  /**
+   * cli.md：CLI 命令参考。
+   * 命令表（含 file:line）+ 每命令参数表（commander .option 解析）+ 退出码表。
+   */
+  buildCli(ctx: CliContext): string {
+    const builder = new WikiBuilder().addTitle('CLI');
+
+    if (ctx.commands.length === 0) {
+      builder.addParagraph('No CLI commands detected.');
+      return builder.build();
+    }
+
+    // 命令总表
+    builder.addSection('命令', '');
+    builder.addTable(
+      ['命令', '说明', '源文件:行号'],
+      ctx.commands.map(c => [
+        `\`${c.name}\``,
+        c.description || '-',
+        c.startLine > 0 ? `${c.filePath}:${c.startLine}` : c.filePath,
+      ]),
+    );
+
+    // 每个命令的参数
+    for (const cmd of ctx.commands) {
+      if (cmd.options.length > 0) {
+        builder.addSection(`\`${cmd.name}\` 参数`, '');
+        builder.addTable(
+          ['参数', '说明'],
+          cmd.options.map(o => [`\`${o.flag}\``, o.description]),
+        );
+      }
+    }
+
+    // 退出码
+    if (ctx.exitCodes.length > 0) {
+      builder.addSection('退出码', '');
+      builder.addTable(
+        ['码', '上下文', '源文件'],
+        ctx.exitCodes.map(e => [String(e.code), `\`${e.context}\``, e.filePath]),
       );
     }
 

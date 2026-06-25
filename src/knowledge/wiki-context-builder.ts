@@ -5,6 +5,7 @@ import type { SnippetData } from '../mcp/types.js';
 import type { ScanResult } from '../core/scanner.js';
 import type { SymbolType, RelationType } from '../core/types.js';
 import { PAGE_REGISTRY } from './page-registry.js';
+import { ConfigDetector } from './config-detector.js';
 import type {
   OverviewContext,
   ArchitectureContext,
@@ -22,6 +23,11 @@ import type {
   CallsContext,
   ClassesContext,
   ReadmeContext,
+  EnvironmentContext,
+  TestingContext,
+  ConventionsContext,
+  ConstraintsContext,
+  CliContext,
 } from './types.js';
 
 const ENTRY_FILE_NAMES = ['index.ts', 'index.js', 'main.ts', 'main.js', 'cli.ts', 'cli.js'];
@@ -36,6 +42,7 @@ export class WikiContextBuilder {
   constructor(
     private client: CodebaseMemoryClient,
     private scanResult: ScanResult,
+    private detector: ConfigDetector,
   ) {}
 
   /** 按页面名派发上下文构建（供 PageRegistry 调用） */
@@ -54,6 +61,11 @@ export class WikiContextBuilder {
       case 'calls': return this.buildCallsContext();
       case 'classes': return this.buildClassesContext();
       case 'readme': return this.buildReadmeContext();
+      case 'environment': return this.buildEnvironmentContext();
+      case 'testing': return this.buildTestingContext();
+      case 'conventions': return this.buildConventionsContext();
+      case 'constraints': return this.buildConstraintsContext();
+      case 'cli': return this.buildCliContext();
       default: return null;
     }
   }
@@ -629,6 +641,126 @@ export class WikiContextBuilder {
     }));
 
     return { projectName, version, license, description, runtime, docIndex };
+  }
+
+  /**
+   * environment.md 数据源：运行态信息（来自 ConfigDetector）。
+   * 包名/版本/运行时/Node 版本/包管理器/脚本命令/env 变量。
+   */
+  buildEnvironmentContext(): EnvironmentContext {
+    return this.detector.detectEnvironment();
+  }
+
+  /**
+   * testing.md 数据源：测试框架/目录/夹具（来自 ConfigDetector）+ 运行命令。
+   */
+  buildTestingContext(): TestingContext {
+    const info = this.detector.detectTesting();
+    const env = this.detector.detectEnvironment();
+    return {
+      ...info,
+      runCommand: env.scripts.test ?? '',
+    };
+  }
+
+  /**
+   * conventions.md 数据源：规约信息（来自 ConfigDetector）。
+   * Linter/EditorConfig/AGENTS.md 探测结果，诚实标注缺失项。
+   */
+  buildConventionsContext(): ConventionsContext {
+    return this.detector.detectConventions();
+  }
+
+  /**
+   * constraints.md 数据源：限制常量（ConfigDetector 源码扫描）+ 高复杂度函数（MCP）。
+   *
+   * 关键：MCP 的 complexity 仅在 Method/Function 节点可靠（Class/Interface 恒 0），
+   * 故 Cypher 显式限定 label IN ['Method', 'Function']，避免拉入噪声。
+   */
+  buildConstraintsContext(): ConstraintsContext {
+    const constants = this.detector.detectConstraints().constants;
+
+    const q = this.client.queryGraph(
+      `MATCH (n) WHERE n.complexity > 3 AND n.is_test = false
+         AND n.label IN ['Method', 'Function']
+       RETURN n.name AS name, n.file_path AS file, n.complexity AS cx, n.loop_depth AS ld
+       ORDER BY n.complexity DESC LIMIT 20`,
+    );
+    const hotFunctions = q.rows.map(row => ({
+      name: row[0] as string,
+      filePath: (row[1] as string) ?? '',
+      complexity: row[2] as number,
+      loopDepth: (row[3] as number) ?? 0,
+    }));
+
+    return { constants, hotFunctions };
+  }
+
+  /**
+   * cli.md 数据源：命令注册（MCP entry_points + getCodeSnippet 解析 commander options）
+   * + 退出码（源码扫 process.exit(N)）。
+   *
+   * entry_points 即 CLI 命令入口；getCodeSnippet 读 register*Command 源码，
+   * 从 .option() 调用提取参数定义。
+   */
+  buildCliContext(): CliContext {
+    const arch = this.client.getArchitecture();
+
+    const commands = arch.entry_points
+      .filter(e => e.name.startsWith('register') || e.name.includes('Command'))
+      .slice(0, 10)
+      .map(e => {
+        const snippet = this.safeGetSnippet(e.name);
+        const options = this.parseCommanderOptions(snippet?.source ?? '');
+        const cleanName = e.name.replace(/^register/, '').replace(/Command$/, '').toLowerCase() || e.name;
+        return {
+          name: cleanName,
+          description: snippet?.docstring ?? '',
+          filePath: e.file,
+          startLine: snippet?.start_line ?? 0,
+          options,
+        };
+      });
+
+    // 退出码：从 scanResult 源码扫 process.exit(N)
+    const exitCodes = this.scanResult.files
+      .filter(f => f.extension === '.ts' || f.extension === '.js')
+      .flatMap(f => this.extractExitCodes(f.absolutePath, f.relativePath))
+      .slice(0, 20);
+
+    return { commands, exitCodes };
+  }
+
+  /** 从 commander 源码解析 .option('flag', 'description') 调用 */
+  private parseCommanderOptions(source: string): Array<{ flag: string; description: string }> {
+    const options: Array<{ flag: string; description: string }> = [];
+    const optRegex = /\.option\(\s*['"`]([^'"`]+)['"`]\s*,\s*['"`]([^'"`]+)['"`]/g;
+    let match: RegExpExecArray | null;
+    while ((match = optRegex.exec(source)) !== null) {
+      options.push({ flag: match[1], description: match[2] });
+    }
+    return options;
+  }
+
+  /** 从源码逐行提取 process.exit(N) 调用 */
+  private extractExitCodes(absPath: string, relPath: string): Array<{ code: number; context: string; filePath: string }> {
+    const codes: Array<{ code: number; context: string; filePath: string }> = [];
+    try {
+      const source = readFileSync(absPath, 'utf-8');
+      const lines = source.split('\n');
+      const exitRegex = /process\.exit\((\d+)\)/;
+      lines.forEach((line) => {
+        const m = exitRegex.exec(line);
+        if (m) {
+          codes.push({
+            code: parseInt(m[1], 10),
+            context: line.trim().slice(0, 80),
+            filePath: relPath,
+          });
+        }
+      });
+    } catch { /* skip unreadable */ }
+    return codes;
   }
 
   /**

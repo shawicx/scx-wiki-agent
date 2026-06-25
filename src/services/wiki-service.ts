@@ -6,7 +6,8 @@ import { WikiContextBuilder } from '../knowledge/wiki-context-builder.js';
 import { WikiFallbackBuilder } from '../knowledge/wiki-fallback-builder.js';
 import { WikiPageGenerator } from '../knowledge/wiki-page-generator.js';
 import { sanitizeWikiOutput } from '../knowledge/wiki-output-sanitizer.js';
-import { PAGE_REGISTRY, ALL_PAGE_NAMES } from '../knowledge/page-registry.js';
+import { ConfigDetector } from '../knowledge/config-detector.js';
+import { PAGE_REGISTRY, ALL_PAGE_NAMES, tier2PagesFor } from '../knowledge/page-registry.js';
 import type { WikiBuildOptions } from '../knowledge/types.js';
 
 export class WikiService {
@@ -24,7 +25,12 @@ export class WikiService {
     // 决定生成哪些页面（校验页名合法性）
     const pages = this.resolvePages(options?.pages);
 
-    const contextBuilder = new WikiContextBuilder(this.client, this.scanResult);
+    // 检测式配置探测器：探测项目实际配置（package.json/lockfile/eslint/...），
+    // 复用 scanResult 的源文件列表避免重复扫描
+    const detector = new ConfigDetector(this.scanResult.rootDir);
+    detector.setSourceFiles(this.scanResult.files.map(f => f.absolutePath));
+
+    const contextBuilder = new WikiContextBuilder(this.client, this.scanResult, detector);
     const fallbackBuilder = new WikiFallbackBuilder();
     const pageGenerator = new WikiPageGenerator(options?.model, options?.baseURL, options?.apiKey);
     const noLlm = options?.noLlm ?? false;
@@ -44,10 +50,22 @@ export class WikiService {
     return filenames;
   }
 
-  /** 解析 --pages 参数，校验页名合法性 */
+  /**
+   * 解析 --pages 参数，校验页名合法性。
+   *
+   * 默认页面集 = 全部非 surface 页面（Tier0 结构层 + Tier1 运行规约层）
+   *   + 按 projectType 激活的 surface 层（Tier2）。
+   * surface 页面（cli/routes/components/...）只在对应项目类型下默认生成。
+   */
   private resolvePages(requested?: string[]): string[] {
+    const basePages = PAGE_REGISTRY
+      .filter(p => p.tier !== 'surface')
+      .map(p => p.name);
+    const tier2 = tier2PagesFor(this.scanResult.projectType);
+    const allPages = [...basePages, ...tier2];
+
     if (!requested || requested.length === 0) {
-      return ALL_PAGE_NAMES;
+      return allPages;
     }
     // 校验：过滤非法页名并告警
     const valid: string[] = [];
@@ -58,7 +76,7 @@ export class WikiService {
         console.warn(`[wiki] 未知页面 "${name}"，已跳过。可用页面: ${ALL_PAGE_NAMES.join(', ')}`);
       }
     }
-    return valid.length > 0 ? valid : ALL_PAGE_NAMES;
+    return valid.length > 0 ? valid : allPages;
   }
 
   private async generatePage(

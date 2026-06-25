@@ -26,6 +26,15 @@ function makeBackendScanResult(): ScanResult {
   };
 }
 
+/** CLI 项目类型（匹配本项目），用于验证 Tier2 类型感知激活 */
+function makeCliScanResult(): ScanResult {
+  return {
+    ...makeBackendScanResult(),
+    techStack: ['commander', 'typescript'],
+    projectType: 'cli',
+  };
+}
+
 describe('WikiService', () => {
   beforeEach(() => {
     mkdirSync(tmpDir, { recursive: true });
@@ -79,21 +88,40 @@ describe('WikiService', () => {
 
   it('should generate all pages in noLlm mode', async () => {
     const client = createMockClient();
-    const service = new WikiService(client as any, makeBackendScanResult());
+    const service = new WikiService(client as any, makeCliScanResult());
     const wikiDir = join(tmpDir, 'wiki');
     const generated = await service.buildWiki(wikiDir, { noLlm: true });
 
+    // Tier 0 结构层
     expect(generated).toContain('overview.md');
     expect(generated).toContain('architecture.md');
     expect(generated).toContain('data-flow.md');
     expect(generated).toContain('modules.md');
     expect(generated).toContain('api.md');
-    expect(generated).toContain('business.md');
-    expect(generated).toContain('design-decisions.md');
     expect(generated).toContain('glossary.md');
     expect(generated).toContain('calls.md');
-    // 页面数与 PAGE_REGISTRY 一致（不硬编码具体数字）
-    expect(generated.length).toBeGreaterThan(9);
+    expect(generated).toContain('classes.md');
+    expect(generated).toContain('readme.md');
+    // Tier 1 运行规约层
+    expect(generated).toContain('environment.md');
+    expect(generated).toContain('testing.md');
+    expect(generated).toContain('conventions.md');
+    expect(generated).toContain('constraints.md');
+    // Tier 2 surface 层（cli 项目类型激活）
+    expect(generated).toContain('cli.md');
+  });
+
+  it('should activate Tier 2 pages by projectType', async () => {
+    // backend 项目类型应激活 routes + db-schema（surface 层）
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
+    const wikiDir = join(tmpDir, 'wiki');
+    const generated = await service.buildWiki(wikiDir, { noLlm: true });
+
+    expect(generated).toContain('routes.md');
+    expect(generated).toContain('db-schema.md');
+    // backend 不应激活 cli（那是 cli/agent 类型的页面）
+    expect(generated).not.toContain('cli.md');
   });
 
   it('should generate only specified pages', async () => {

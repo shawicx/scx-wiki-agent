@@ -634,7 +634,7 @@ export class WikiContextBuilder {
 
     const planned = plannedPages ?? PAGE_REGISTRY.map(p => p.name);
     const docIndex = PAGE_REGISTRY
-      .filter(p => planned.includes(p.name))
+      .filter(p => planned.includes(p.name) && p.name !== 'readme')
       .map(p => ({
         file: pageRelPath(p.name),
         dir: p.dir,
@@ -875,7 +875,7 @@ export class WikiContextBuilder {
         context: `知识图谱分层分析：${layers.map(l => `${l.name} → ${l.layer}（${l.reason}）`).join('；')}。`,
         decision: '采用上述分层，依赖方向从外层指向内层，核心层不反向依赖调用方。',
         consequences: '新增代码应归入对应层；反向跨层依赖会在模块边界统计中暴露。',
-        files: arch.entry_points.slice(0, 3).map(e => e.file),
+        files: [...new Set(arch.entry_points.slice(0, 3).map(e => e.file))],
       });
     }
 

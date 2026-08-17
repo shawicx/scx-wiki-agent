@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
 import type { ScanResult } from '../core/scanner.js';
@@ -148,17 +148,25 @@ export class WikiService {
    * 清理旧版扁平输出（wiki 根下的 ${page}.md）。
    * 只删除本工具拥有的页面文件；编号目录接管后这些扁平文件成为陈旧残留。
    * readme 特例：旧 'readme.md' 让位于 'README.md'。
+   * 用目录条目精确比对文件名：大小写不敏感文件系统上 existsSync('readme.md')
+   * 会误命中 'README.md'，导致每次构建都误删并重写 README。
    */
   private cleanupLegacyFlatFiles(wikiDir: string, pages: string[]): string[] {
     const removed: string[] = [];
+    let entries: Set<string> | null = null;
     for (const page of pages) {
       const flat = `${page}.md`;
       if (pageRelPath(page) === flat) continue;
-      const flatPath = join(wikiDir, flat);
-      if (existsSync(flatPath)) {
-        rmSync(flatPath);
-        removed.push(flat);
+      if (entries === null) {
+        try {
+          entries = new Set(readdirSync(wikiDir));
+        } catch {
+          return removed;
+        }
       }
+      if (!entries.has(flat)) continue;
+      rmSync(join(wikiDir, flat));
+      removed.push(flat);
     }
     return removed;
   }

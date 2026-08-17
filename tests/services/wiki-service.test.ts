@@ -3,7 +3,7 @@ import { WikiService } from '../../src/services/wiki-service.js';
 import type { ScanResult } from '../../src/core/scanner.js';
 import { createMockClient } from '../helpers/mock-mcp-client.js';
 import { join } from 'path';
-import { mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, readFileSync, statSync, writeFileSync } from 'fs';
 
 const tmpDir = join(process.cwd(), '.test-wiki-tmp');
 
@@ -211,6 +211,22 @@ describe('WikiService', () => {
     // full 模式：所有页面无条件重写（文件仍正确）
     const third = await service.buildWiki(wikiDir, { noLlm: true, mode: 'full' });
     expect(third).toEqual(first);
+  });
+
+  it('update mode should converge: README not deleted/rewritten on case-insensitive fs', async () => {
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
+    const wikiDir = join(tmpDir, 'wiki');
+    await service.buildWiki(wikiDir, { noLlm: true });
+
+    // 大小写不敏感文件系统上 existsSync('readme.md') 命中 'README.md'：
+    // 修复后 update 模式不应删写 README（mtime 不变）
+    const readmePath = join(wikiDir, 'README.md');
+    const mtimeBefore = statSync(readmePath).mtimeMs;
+    await new Promise(r => setTimeout(r, 20));
+    await service.buildWiki(wikiDir, { noLlm: true, mode: 'update' });
+    expect(existsSync(readmePath)).toBe(true);
+    expect(statSync(readmePath).mtimeMs).toBe(mtimeBefore);
   });
 
   it('should use unified 待确认 markers on weak-data pages', async () => {

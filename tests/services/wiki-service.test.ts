@@ -111,15 +111,18 @@ describe('WikiService', () => {
     expect(generated).toContain('cli.md');
   });
 
-  it('should activate Tier 2 pages by projectType', async () => {
-    // backend 项目类型应激活 routes + db-schema（surface 层）
+  it('should skip unimplemented Tier 2 pages instead of writing empty files', async () => {
+    // backend 项目类型会激活 routes + db-schema（surface 层），
+    // 但二者的 context 尚未实现：应跳过写盘而非产出空文件
     const client = createMockClient();
     const service = new WikiService(client as any, makeBackendScanResult());
     const wikiDir = join(tmpDir, 'wiki');
     const generated = await service.buildWiki(wikiDir, { noLlm: true });
 
-    expect(generated).toContain('routes.md');
-    expect(generated).toContain('db-schema.md');
+    expect(generated).not.toContain('routes.md');
+    expect(generated).not.toContain('db-schema.md');
+    expect(existsSync(join(wikiDir, 'routes.md'))).toBe(false);
+    expect(existsSync(join(wikiDir, 'db-schema.md'))).toBe(false);
     // backend 不应激活 cli（那是 cli/agent 类型的页面）
     expect(generated).not.toContain('cli.md');
   });

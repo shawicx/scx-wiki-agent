@@ -310,5 +310,7 @@ export interface WikiBuildOptions {
   apiKey?: string;
   noLlm?: boolean;
   pages?: string[];
+  /** full=全量覆盖重写；update=内容一致时跳过重写并输出变更摘要 */
+  mode?: 'full' | 'update';
   onChunk?: (filename: string, text: string) => void;
 }

@@ -1,4 +1,5 @@
 import { WikiBuilder } from './wiki-builder.js';
+import { UNCONFIRMED_CELL, unconfirmedNote } from './wiki-markers.js';
 import type {
   OverviewContext,
   ArchitectureContext,
@@ -349,6 +350,10 @@ export class WikiFallbackBuilder {
     const builder = new WikiBuilder()
       .addTitle('Troubleshooting');
 
+    builder.addParagraph(
+      unconfirmedNote('本页为规则模板生成，仅基于项目类型/技术栈，未采集项目真实错误日志与告警，具体条目'),
+    );
+
     builder.addSection('Build Issues', 'If the build fails, check that all dependencies are installed.');
     builder.addSection('Runtime Issues', 'Common runtime issues and their solutions.');
 
@@ -415,7 +420,7 @@ export class WikiFallbackBuilder {
     // 数据局限说明（R1 诚实标注）
     if (!ctx.hasInheritance) {
       builder.addParagraph(
-        '> **数据局限**：当前 MCP 知识图谱未提供继承关系（INHERITS 边），本页只列出类清单与成员方法，不含继承树。多态方法的子类实现需人工补充。',
+        unconfirmedNote('MCP 知识图谱未提供继承关系（INHERITS 边），本页只列出类清单与成员方法，不含继承树；多态方法的子类实现'),
       );
     }
 
@@ -526,7 +531,7 @@ export class WikiFallbackBuilder {
       builder.addSection('环境变量', '从源码 process.env 引用提取');
       builder.addTable(
         ['变量名', '敏感', '用途'],
-        ctx.envVars.map(v => [v.name, v.sensitive ? '⚠️ 是' : '否', '需人工补充用途说明']),
+        ctx.envVars.map(v => [v.name, v.sensitive ? '⚠️ 是' : '否', UNCONFIRMED_CELL]),
       );
     }
 
@@ -574,7 +579,7 @@ export class WikiFallbackBuilder {
 
     if (!ctx.hasLinter) {
       builder.addParagraph(
-        '> **注意**：未检测到 lint 配置（eslint/biome）。命名/格式规约需人工补充。',
+        unconfirmedNote('未检测到 lint 配置（eslint/biome），以下命名/格式规约'),
       );
     }
 
@@ -739,8 +744,7 @@ export class WikiFallbackBuilder {
 
     if (!ctx.fromMcp) {
       builder.addParagraph(
-        '> **数据来源**：MCP 未提供持久化 ADR，以下决策记录基于代码结构自动推导生成。' +
-        '建议人工审阅后用 `manage_adr(mode=update)` 持久化。',
+        unconfirmedNote('MCP 未提供持久化 ADR，以下决策记录基于代码结构自动推导生成（状态均为 proposed），建议人工审阅后用 manage_adr(mode=update) 持久化'),
       );
     }
 

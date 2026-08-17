@@ -188,4 +188,58 @@ describe('WikiService', () => {
     expect(readme).not.toContain('(03-interface/cli.md)');
     expect(readme).toContain('阅读路径');
   });
+
+  it('update mode should skip rewriting unchanged pages and rewrite tampered ones', async () => {
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
+    const wikiDir = join(tmpDir, 'wiki');
+
+    // 第一次全量构建
+    const first = await service.buildWiki(wikiDir, { noLlm: true });
+    expect(first.length).toBeGreaterThan(0);
+
+    // 篡改一页
+    const overviewPath = join(wikiDir, '01-overview', 'overview.md');
+    writeFileSync(overviewPath, '# tampered', 'utf-8');
+
+    // update 模式：篡改页应被重写恢复
+    const second = await service.buildWiki(wikiDir, { noLlm: true, mode: 'update' });
+    expect(second).toEqual(first);
+    expect(readFileSync(overviewPath, 'utf-8')).not.toBe('# tampered');
+    expect(readFileSync(overviewPath, 'utf-8')).toContain('# Project Overview');
+
+    // full 模式：所有页面无条件重写（文件仍正确）
+    const third = await service.buildWiki(wikiDir, { noLlm: true, mode: 'full' });
+    expect(third).toEqual(first);
+  });
+
+  it('should use unified 待确认 markers on weak-data pages', async () => {
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
+    const wikiDir = join(tmpDir, 'wiki');
+    await service.buildWiki(wikiDir, { noLlm: true });
+
+    // troubleshooting：规则模板生成，弱证据 → 标注待确认
+    const ts = readFileSync(join(wikiDir, '05-guides', 'troubleshooting.md'), 'utf-8');
+    expect(ts).toContain('待确认');
+    // decisions：自动推导 ADR → 标注待确认
+    const decisions = readFileSync(join(wikiDir, '04-design', 'decisions.md'), 'utf-8');
+    expect(decisions).toContain('待确认');
+  });
+
+  it('should derive ADRs from graph evidence without project-specific hardcoding', async () => {
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
+    const wikiDir = join(tmpDir, 'wiki');
+    await service.buildWiki(wikiDir, { noLlm: true });
+
+    const decisions = readFileSync(join(wikiDir, '04-design', 'decisions.md'), 'utf-8');
+    // mock 图谱含 layers + boundaries，技术栈含 express → 三类证据条目均应出现
+    expect(decisions).toContain('分层结构');
+    expect(decisions).toContain('模块调用边界');
+    expect(decisions).toContain('核心技术选型');
+    // 自动推导条目状态一律 proposed（不再伪装成 accepted）
+    expect(decisions).toContain('proposed');
+    expect(decisions).not.toContain('accepted');
+  });
 });

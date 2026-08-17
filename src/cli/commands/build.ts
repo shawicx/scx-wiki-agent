@@ -17,6 +17,7 @@ export function registerBuildCommand(program: Command) {
     .option('--api-key <key>', 'API key for the LLM provider')
     .option('--no-llm', 'Generate wiki without LLM (pure rules)')
     .option('--pages <pages>', 'Comma-separated page names to generate', 'all')
+    .option('--mode <mode>', 'Build mode: full (rewrite all) or update (skip unchanged pages)', 'full')
     .action(async (options) => {
       const root = options.projectRoot ?? process.cwd();
       const wikiDir = join(root, WIKI_DIR);
@@ -31,6 +32,7 @@ export function registerBuildCommand(program: Command) {
         apiKey: options.apiKey,
         noLlm: options.llm === false,
         pages,
+        mode: options.mode === 'update' ? 'update' : 'full',
         onChunk: (filename, text) => {
           process.stdout.write(text);
         },

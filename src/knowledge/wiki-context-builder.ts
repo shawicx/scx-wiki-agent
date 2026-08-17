@@ -847,69 +847,63 @@ export class WikiContextBuilder {
 
   /**
    * decisions.md 数据源：ADR 架构决策记录。
-   * MCP manage_adr 当前无持久化 ADR，降级为从图谱设计模式 + 技术选型自动生成。
+   * MCP manage_adr 当前无持久化 ADR，降级为从图谱真实证据（分层/边界/技术栈）自动推导。
    */
   buildDecisionsContext(): DecisionsContext {
     return { adrs: this.generateAdrEntries(), fromMcp: false };
   }
 
-  /** 从 MCP 图谱检测的设计模式 + 技术选型自动生成 ADR 条目 */
+  /**
+   * 从图谱证据推导 ADR 条目（泛化实现，不针对特定项目写死文案）。
+   * 证据来源：getArchitecture 的 layers/boundaries + scanner 技术栈（已按 import 过滤，R3）。
+   * 自动推导条目状态一律 proposed，由页面级「待确认」说明兜底。
+   */
   private generateAdrEntries(): DecisionsContext['adrs'] {
     const adrs: DecisionsContext['adrs'] = [];
     let id = 1;
+    const nextId = () => `ADR-${String(id++).padStart(3, '0')}`;
 
-    // 策略模式检测（Registry + Resolver）
-    const registryQ = this.client.queryGraph(
-      `MATCH (c:Class) WHERE c.name CONTAINS 'Registry' AND c.is_test = false
-       RETURN c.name AS name, c.file_path AS file LIMIT 3`,
-    );
-    if (registryQ.rows.length > 0) {
+    const arch = this.client.getArchitecture();
+
+    // 分层决策：layers 的 name/layer/reason 均为图谱分层分析结果
+    if (arch.layers.length > 0) {
+      const layers = arch.layers.slice(0, 5);
       adrs.push({
-        id: `ADR-${String(id++).padStart(3, '0')}`,
-        title: '采用策略模式 + 注册表实现可插拔页面注册',
-        status: 'accepted',
-        context: '项目需要支持多种 wiki 页面类型，且需可扩展（新增页面不改核心逻辑）。',
-        decision: '使用 PageRegistry 描述符注册各页面，三个 builder 各自按 page name 派发。',
-        consequences: '新增页面只需改一处注册表 + 三个 builder 各加一个 case。代价是 PageDescriptor 与 builder 间有隐式契约。',
-        files: ['src/knowledge/page-registry.ts'],
+        id: nextId(),
+        title: `分层结构：${layers.map(l => `${l.name}=${l.layer}`).join('、')}`,
+        status: 'proposed',
+        context: `知识图谱分层分析：${layers.map(l => `${l.name} → ${l.layer}（${l.reason}）`).join('；')}。`,
+        decision: '采用上述分层，依赖方向从外层指向内层，核心层不反向依赖调用方。',
+        consequences: '新增代码应归入对应层；反向跨层依赖会在模块边界统计中暴露。',
+        files: arch.entry_points.slice(0, 3).map(e => e.file),
       });
     }
 
-    // 知识图谱外部依赖决策（本项目核心架构决策）
-    if (this.scanResult.techStack.some(t => t.includes('ai-sdk') || t.includes('openai'))) {
+    // 模块边界决策：跨包调用统计（调用次数 top N）
+    const boundaries = arch.boundaries.slice(0, 5);
+    if (boundaries.length > 0) {
       adrs.push({
-        id: `ADR-${String(id++).padStart(3, '0')}`,
-        title: '采用 codebase-memory-mcp 知识图谱作为唯一数据源',
-        status: 'accepted',
-        context: '项目需要精确的代码结构数据（符号、调用关系、复杂度）。自建 tree-sitter 索引维护成本高、跨文件解析弱。',
-        decision: '删除自建 tree-sitter/SQLite 索引管线，改用外部 codebase-memory-mcp 通过子进程调用获取知识图谱。',
-        consequences: '数据质量提升（LSP 跨文件解析、复杂度指标），但引入外部二进制依赖。用户须预装 codebase-memory-mcp。',
-        files: ['src/mcp/codebase-memory-client.ts'],
+        id: nextId(),
+        title: `模块调用边界（调用次数 top ${boundaries.length}）`,
+        status: 'proposed',
+        context: `跨包调用统计：${boundaries.map(b => `${b.from}→${b.to}（${b.call_count} 次）`).join('、')}。`,
+        decision: '维持现有模块依赖方向，高频边界两端保持稳定接口。',
+        consequences: '边界两端模块形成耦合点，修改被调用方需评估所有调用方。',
+        files: [],
       });
     }
 
-    // 技术选型 ADR
-    if (this.scanResult.techStack.includes('commander')) {
+    // 技术选型：scanner 已过滤声明未用依赖，剩余均为源码实际 import（R3）
+    const tech = this.scanResult.techStack.slice(0, 6);
+    if (tech.length > 0) {
       adrs.push({
-        id: `ADR-${String(id++).padStart(3, '0')}`,
-        title: 'CLI 框架选用 Commander.js',
-        status: 'accepted',
-        context: '项目是命令行工具，需要命令注册、参数解析、子命令支持。',
-        decision: '采用 Commander.js，命令以 register*Command 函数注册。',
-        consequences: '成熟稳定、生态丰富。命令定义与业务逻辑分离清晰。',
-        files: ['src/cli/index.ts'],
-      });
-    }
-
-    if (this.scanResult.techStack.includes('ai') || this.scanResult.techStack.includes('@ai-sdk/openai')) {
-      adrs.push({
-        id: `ADR-${String(id++).padStart(3, '0')}`,
-        title: 'LLM 集成采用 Vercel AI SDK',
-        status: 'accepted',
-        context: 'wiki 生成需要 LLM 产出自然语言叙述，且需支持流式输出和多种 provider。',
-        decision: '采用 Vercel AI SDK（ai + @ai-sdk/openai），通过 streamText 流式生成。',
-        consequences: 'provider 无关、流式友好。需处理思考模型（thinking）的 reasoning 字段降级。',
-        files: ['src/knowledge/wiki-page-generator.ts'],
+        id: nextId(),
+        title: `核心技术选型：${tech.join('、')}`,
+        status: 'proposed',
+        context: `以下依赖在源码中被实际 import（声明未用依赖已被过滤）：${tech.join('、')}。`,
+        decision: `以 ${tech.join('、')} 构成核心技术栈。`,
+        consequences: '升级或替换这些依赖属于架构级变更，需回归核心调用链。',
+        files: [],
       });
     }
 

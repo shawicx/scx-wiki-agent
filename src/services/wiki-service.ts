@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
 import type { ScanResult } from '../core/scanner.js';
@@ -20,6 +20,9 @@ interface PageProduced {
   content: string;
   source: 'llm' | 'fallback';
 }
+
+/** 页面写盘结果状态 */
+type PageStatus = 'created' | 'updated' | 'unchanged';
 
 export class WikiService {
   constructor(
@@ -55,9 +58,10 @@ export class WikiService {
     const knownFiles = new Set(this.scanResult.files.map(f => f.relativePath));
 
     const filenames: string[] = [];
-    const writtenPages: Array<{ page: string; source: string }> = [];
+    const writtenPages: Array<{ page: string; relPath: string; source: string; status: PageStatus }> = [];
     const skippedPages: Array<{ page: string; reason: string }> = [];
     const qualityReports: PageQualityReport[] = [];
+    const mode = options?.mode ?? 'full';
 
     for (const page of pages) {
       const relPath = pageRelPath(page);
@@ -91,10 +95,20 @@ export class WikiService {
         continue;
       }
 
-      mkdirSync(dirname(join(wikiDir, relPath)), { recursive: true });
-      writeFileSync(join(wikiDir, relPath), content, 'utf-8');
+      const targetPath = join(wikiDir, relPath);
+      const existed = existsSync(targetPath);
+
+      // update 模式：内容与现有文件一致时跳过重写（project-wiki「只改过时部分」）
+      if (mode === 'update' && existed && readFileSync(targetPath, 'utf-8') === content) {
+        filenames.push(relPath);
+        writtenPages.push({ page, relPath, source: produced.source, status: 'unchanged' });
+        continue;
+      }
+
+      mkdirSync(dirname(targetPath), { recursive: true });
+      writeFileSync(targetPath, content, 'utf-8');
       filenames.push(relPath);
-      writtenPages.push({ page, source: produced.source });
+      writtenPages.push({ page, relPath, source: produced.source, status: existed ? 'updated' : 'created' });
     }
 
     this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved);
@@ -182,18 +196,32 @@ export class WikiService {
 
   /**
    * 构建报告（对应 project-wiki「完成后清单」）：
-   * 已写页面（按生成路径统计）、跳过页面及原因、锚点核验统计、告警汇总。
+   * 已写页面（新增/更新分计 + 生成路径统计）、update 模式变更摘要、
+   * 跳过页面及原因、锚点核验统计、告警汇总。
    */
   private printBuildReport(
-    written: Array<{ page: string; source: string }>,
+    written: Array<{ page: string; relPath: string; source: string; status: PageStatus }>,
     skipped: Array<{ page: string; reason: string }>,
     reports: PageQualityReport[],
     legacyRemoved: string[],
   ): void {
     const lines: string[] = ['[wiki] 构建报告：'];
 
+    const created = written.filter(w => w.status === 'created');
+    const updated = written.filter(w => w.status === 'updated');
+    const unchanged = written.filter(w => w.status === 'unchanged');
     const llmCount = written.filter(w => w.source === 'llm').length;
-    lines.push(`  已写入 ${written.length} 页（LLM ${llmCount} / 规则 ${written.length - llmCount}）`);
+    const writtenCount = created.length + updated.length;
+    lines.push(
+      `  已写入 ${writtenCount} 页（新增 ${created.length} / 更新 ${updated.length}；LLM ${llmCount} / 规则 ${writtenCount - llmCount}）`,
+    );
+
+    if (unchanged.length > 0) {
+      lines.push(`  未变 ${unchanged.length} 页（update 模式内容一致，跳过重写）`);
+    }
+    if (unchanged.length > 0 && writtenCount > 0) {
+      lines.push(`  本次变更文件：${[...created, ...updated].map(w => w.relPath).join('、')}`);
+    }
 
     if (legacyRemoved.length > 0) {
       lines.push(`  清理旧扁平产物 ${legacyRemoved.length} 个：${legacyRemoved.join(', ')}`);

@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { dirname, join } from 'path';
 import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
 import type { ScanResult } from '../core/scanner.js';
 import { WikiContextBuilder } from '../knowledge/wiki-context-builder.js';
@@ -9,7 +9,10 @@ import { sanitizeWikiOutput } from '../knowledge/wiki-output-sanitizer.js';
 import { validatePageContent } from '../knowledge/wiki-quality-validator.js';
 import type { PageQualityReport } from '../knowledge/wiki-quality-validator.js';
 import { ConfigDetector } from '../knowledge/config-detector.js';
-import { PAGE_REGISTRY, ALL_PAGE_NAMES, tier2PagesFor } from '../knowledge/page-registry.js';
+import {
+  PAGE_REGISTRY, ALL_PAGE_NAMES, tier2PagesFor,
+  findPageDescriptor, pageRelPath, buildRelatedSection,
+} from '../knowledge/page-registry.js';
 import type { WikiBuildOptions } from '../knowledge/types.js';
 
 /** 单页产出结果：最终内容 + 走的生成路径 */
@@ -44,8 +47,11 @@ export class WikiService {
     const noLlm = options?.noLlm ?? false;
     const onChunk = options?.onChunk ?? (() => {});
 
+    // 接管式重建：清理旧版扁平产物（wiki 根下本工具页面同名的 ${page}.md）
+    const legacyRemoved = this.cleanupLegacyFlatFiles(wikiDir, pages);
+
     // 质量闸门输入：本次计划写入的页面路径 + 仓库真实文件清单
-    const plannedPaths = new Set(pages.map(p => `${p}.md`));
+    const plannedPaths = new Set(pages.map(p => pageRelPath(p)));
     const knownFiles = new Set(this.scanResult.files.map(f => f.relativePath));
 
     const filenames: string[] = [];
@@ -54,23 +60,26 @@ export class WikiService {
     const qualityReports: PageQualityReport[] = [];
 
     for (const page of pages) {
-      const filename = `${page}.md`;
+      const relPath = pageRelPath(page);
 
-      // LLM 输出在生成阶段过闸：error 级违规直接降级规则路径（闸门内已告警）
+      // LLM 输出在生成阶段过闸：error 级违规直接降级规则路径
       const gate = (content: string): boolean =>
-        validatePageContent(content, { page, pagePath: filename, knownFiles, plannedPaths }).passed;
+        validatePageContent(content, { page, pagePath: relPath, knownFiles, plannedPaths }).passed;
 
       const produced = await this.generatePage(
-        page, contextBuilder, fallbackBuilder, pageGenerator, noLlm, onChunk, gate,
+        page, contextBuilder, fallbackBuilder, pageGenerator, noLlm, onChunk, gate, pages,
       );
       if (produced === null) {
         skippedPages.push({ page, reason: '页面 context 未实现，跳过写盘' });
         continue;
       }
 
+      // 页底 Related 区块（确定性追加，只链接计划内页面）
+      const content = produced.content + buildRelatedSection(page, pages);
+
       // 写盘前质量闸门（LLM 与规则路径都过闸）
       const report = validatePageContent(
-        produced.content, { page, pagePath: filename, knownFiles, plannedPaths },
+        content, { page, pagePath: relPath, knownFiles, plannedPaths },
       );
       qualityReports.push(report);
       if (!report.passed) {
@@ -82,12 +91,13 @@ export class WikiService {
         continue;
       }
 
-      writeFileSync(join(wikiDir, filename), produced.content, 'utf-8');
-      filenames.push(filename);
+      mkdirSync(dirname(join(wikiDir, relPath)), { recursive: true });
+      writeFileSync(join(wikiDir, relPath), content, 'utf-8');
+      filenames.push(relPath);
       writtenPages.push({ page, source: produced.source });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved);
     return filenames;
   }
 
@@ -120,6 +130,25 @@ export class WikiService {
     return valid.length > 0 ? valid : allPages;
   }
 
+  /**
+   * 清理旧版扁平输出（wiki 根下的 ${page}.md）。
+   * 只删除本工具拥有的页面文件；编号目录接管后这些扁平文件成为陈旧残留。
+   * readme 特例：旧 'readme.md' 让位于 'README.md'。
+   */
+  private cleanupLegacyFlatFiles(wikiDir: string, pages: string[]): string[] {
+    const removed: string[] = [];
+    for (const page of pages) {
+      const flat = `${page}.md`;
+      if (pageRelPath(page) === flat) continue;
+      const flatPath = join(wikiDir, flat);
+      if (existsSync(flatPath)) {
+        rmSync(flatPath);
+        removed.push(flat);
+      }
+    }
+    return removed;
+  }
+
   private async generatePage(
     page: string,
     ctx: WikiContextBuilder,
@@ -128,8 +157,9 @@ export class WikiService {
     noLlm: boolean,
     onChunk: (filename: string, text: string) => void,
     gate?: (content: string) => boolean,
+    plannedPages?: string[],
   ): Promise<PageProduced | null> {
-    const pageContext = ctx.buildByName(page);
+    const pageContext = ctx.buildByName(page, plannedPages);
     if (pageContext === null) return null;
 
     if (!noLlm && generator.hasModel()) {
@@ -158,11 +188,16 @@ export class WikiService {
     written: Array<{ page: string; source: string }>,
     skipped: Array<{ page: string; reason: string }>,
     reports: PageQualityReport[],
+    legacyRemoved: string[],
   ): void {
     const lines: string[] = ['[wiki] 构建报告：'];
 
     const llmCount = written.filter(w => w.source === 'llm').length;
     lines.push(`  已写入 ${written.length} 页（LLM ${llmCount} / 规则 ${written.length - llmCount}）`);
+
+    if (legacyRemoved.length > 0) {
+      lines.push(`  清理旧扁平产物 ${legacyRemoved.length} 个：${legacyRemoved.join(', ')}`);
+    }
 
     if (skipped.length > 0) {
       lines.push(`  跳过 ${skipped.length} 页：`);

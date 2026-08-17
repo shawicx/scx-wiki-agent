@@ -446,7 +446,8 @@ export class WikiFallbackBuilder {
 
   /**
    * README.md：导航索引（wiki 总入口）。
-   * 索引表覆盖全部已注册文档，含项目元数据。
+   * 按编号目录分组索引（project-wiki「总入口：使用方式/阅读路径/核心导航」），
+   * 索引表只列本次产出的文档，链接相对 wiki 根。
    */
   buildReadme(ctx: ReadmeContext): string {
     const builder = new WikiBuilder()
@@ -466,13 +467,29 @@ export class WikiFallbackBuilder {
       ],
     );
 
-    // 文档索引表（核心：覆盖全部文档）
+    // 阅读路径（纯文本页名导航，不造链接，避免子集构建时死链）
+    builder.addSection('阅读路径', [
+      '- 新人上手：overview → tech-stack → onboarding',
+      '- 理解结构：architecture → modules → data-flow',
+      '- 日常开发：conventions → constraints；排障看 troubleshooting',
+      '- 查证细节：calls → classes → glossary',
+    ].join('\n'));
+
+    // 按编号目录分组的文档索引
     if (ctx.docIndex.length > 0) {
-      builder.addSection('文档索引', '');
-      builder.addTable(
-        ['文档', '层级', '回答的问题'],
-        ctx.docIndex.map(d => [`[${d.file}](${d.file})`, d.tier, d.answer]),
-      );
+      const groups = new Map<string, typeof ctx.docIndex>();
+      for (const doc of ctx.docIndex) {
+        const key = doc.dir || '';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(doc);
+      }
+      for (const [dir, docs] of groups) {
+        builder.addSection(dir ? `${dir}/` : '根目录', '');
+        builder.addTable(
+          ['文档', '层级', '回答的问题'],
+          docs.map(d => [`[${d.file}](${d.file})`, d.tier, d.answer]),
+        );
+      }
     }
 
     return builder.build();

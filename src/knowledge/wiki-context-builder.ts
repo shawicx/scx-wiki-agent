@@ -4,7 +4,7 @@ import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
 import type { SnippetData } from '../mcp/types.js';
 import type { ScanResult } from '../core/scanner.js';
 import type { SymbolType, RelationType } from '../core/types.js';
-import { PAGE_REGISTRY } from './page-registry.js';
+import { PAGE_REGISTRY, pageRelPath } from './page-registry.js';
 import { ConfigDetector } from './config-detector.js';
 import type {
   OverviewContext,
@@ -47,8 +47,8 @@ export class WikiContextBuilder {
     private detector: ConfigDetector,
   ) {}
 
-  /** 按页面名派发上下文构建（供 PageRegistry 调用） */
-  buildByName(page: string): unknown {
+  /** 按页面名派发上下文构建（供 PageRegistry 调用）。plannedPages 用于 readme 索引只列本次产出的页面 */
+  buildByName(page: string, plannedPages?: string[]): unknown {
     switch (page) {
       case 'overview': return this.buildOverviewContext();
       case 'architecture': return this.buildArchitectureContext();
@@ -62,7 +62,7 @@ export class WikiContextBuilder {
       case 'glossary': return this.buildGlossaryContext();
       case 'calls': return this.buildCallsContext();
       case 'classes': return this.buildClassesContext();
-      case 'readme': return this.buildReadmeContext();
+      case 'readme': return this.buildReadmeContext(plannedPages);
       case 'environment': return this.buildEnvironmentContext();
       case 'testing': return this.buildTestingContext();
       case 'conventions': return this.buildConventionsContext();
@@ -613,7 +613,7 @@ export class WikiContextBuilder {
    * README.md 数据源：文档索引（来自 PAGE_REGISTRY）+ 项目元数据（package.json）。
    * README 是 wiki 总入口，索引表必须覆盖全部文档。
    */
-  buildReadmeContext(): ReadmeContext {
+  buildReadmeContext(plannedPages?: string[]): ReadmeContext {
     let projectName = '';
     let version = '';
     let license = '';
@@ -632,11 +632,15 @@ export class WikiContextBuilder {
       }
     } catch { /* ignore */ }
 
-    const docIndex = PAGE_REGISTRY.map(p => ({
-      file: `${p.name}.md`,
-      tier: p.tier,
-      answer: p.answer,
-    }));
+    const planned = plannedPages ?? PAGE_REGISTRY.map(p => p.name);
+    const docIndex = PAGE_REGISTRY
+      .filter(p => planned.includes(p.name))
+      .map(p => ({
+        file: pageRelPath(p.name),
+        dir: p.dir,
+        tier: p.tier,
+        answer: p.answer,
+      }));
 
     return { projectName, version, license, description, runtime, docIndex };
   }

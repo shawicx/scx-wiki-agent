@@ -188,8 +188,8 @@ export interface ReadmeContext {
   license: string;
   description: string;
   runtime: string;
-  /** 文档索引：文件名 → 该文档回答的核心问题 */
-  docIndex: Array<{ file: string; tier: string; answer: string }>;
+  /** 文档索引：文件名 → 该文档回答的核心问题（file 含编号目录前缀） */
+  docIndex: Array<{ file: string; dir: string; tier: string; answer: string }>;
 }
 
 /** Context for tech-stack page (技术栈，R3 拒绝编造用途) */

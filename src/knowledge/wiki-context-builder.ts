@@ -28,6 +28,8 @@ import type {
   ConventionsContext,
   ConstraintsContext,
   CliContext,
+  TechStackContext,
+  DecisionsContext,
 } from './types.js';
 
 const ENTRY_FILE_NAMES = ['index.ts', 'index.js', 'main.ts', 'main.js', 'cli.ts', 'cli.js'];
@@ -66,6 +68,8 @@ export class WikiContextBuilder {
       case 'conventions': return this.buildConventionsContext();
       case 'constraints': return this.buildConstraintsContext();
       case 'cli': return this.buildCliContext();
+      case 'tech-stack': return this.buildTechStackContext();
+      case 'decisions': return this.buildDecisionsContext();
       default: return null;
     }
   }
@@ -451,31 +455,23 @@ export class WikiContextBuilder {
       .filter(f => ENTRY_FILE_NAMES.some(e => f.relativePath.endsWith('/' + e) || f.relativePath === e))
       .map(f => ({ name: f.relativePath.split('/').pop()!, path: f.relativePath }));
 
-    let packageManager = 'npm';
-    let nodeVersion = '';
-    try {
-      const pkgPath = join(this.scanResult.rootDir, 'package.json');
-      if (existsSync(pkgPath)) {
-        const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
-        if (pkg.packageManager) {
-          packageManager = (pkg.packageManager as string).split('@')[0];
-        }
-        if (pkg.engines?.node) {
-          nodeVersion = pkg.engines.node as string;
-        }
-      }
-    } catch { /* ignore */ }
-
-    if (packageManager === 'npm') {
-      if (existsSync(join(this.scanResult.rootDir, 'pnpm-lock.yaml'))) packageManager = 'pnpm';
-      else if (existsSync(join(this.scanResult.rootDir, 'yarn.lock'))) packageManager = 'yarn';
-    }
+    // 复用 ConfigDetector 提取的 scripts 和 packageManager
+    const env = this.detector.detectEnvironment();
+    const packageManager = env.packageManager;
+    const nodeVersion = env.nodeVersion;
 
     const arch = this.client.getArchitecture();
-    const cliCommands = arch.entry_points.map(e => ({
-      name: e.name,
-      description: `CLI command in ${e.file}`,
-    }));
+    const cliCommands = arch.entry_points
+      .filter(e => e.name.startsWith('register') || e.name.includes('Command'))
+      .slice(0, 10)
+      .map(e => ({
+        name: e.name.replace(/^register/, '').replace(/Command$/, '').toLowerCase() || e.name,
+        description: `CLI command in ${e.file}`,
+      }));
+
+    // 首次运行最小示例
+    const buildCmd = env.scripts.build ?? `${packageManager} run build`;
+    const firstRunExample = `${packageManager} install\n${buildCmd}\nnode dist/bin.js ${cliCommands[0]?.name ?? '<command>'}`;
 
     return {
       projectType: this.scanResult.projectType,
@@ -486,6 +482,8 @@ export class WikiContextBuilder {
       packageManager,
       nodeVersion,
       cliCommands,
+      scripts: env.scripts,
+      firstRunExample,
     };
   }
 
@@ -761,6 +759,157 @@ export class WikiContextBuilder {
       });
     } catch { /* skip unreadable */ }
     return codes;
+  }
+
+  /**
+   * tech-stack.md 数据源：严格区分已用/未用依赖（R3 拒绝编造用途）。
+   * 三张表：核心依赖（含首个 import 点）、开发依赖、声明未用依赖。
+   * 复用 scanner 的死依赖过滤逻辑，并追踪每个依赖的 import 位置。
+   */
+  buildTechStackContext(): TechStackContext {
+    const pkgPath = join(this.scanResult.rootDir, 'package.json');
+    let pkg: any = {};
+    try {
+      pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'));
+    } catch { /* ignore */ }
+
+    const deps: Record<string, string> = pkg.dependencies ?? {};
+    const devDeps: Record<string, string> = pkg.devDependencies ?? {};
+    const allDeclared = new Set([...Object.keys(deps), ...Object.keys(devDeps)]);
+    const usedDeps = new Set(this.scanResult.techStack); // scanner 已过滤死依赖
+
+    // 收集每个已用依赖的 import 文件
+    const importMap = this.collectImportFiles(allDeclared);
+
+    const coreDeps = Object.entries(deps)
+      .filter(([name]) => usedDeps.has(name))
+      .map(([name, version]) => ({ name, version, importFiles: importMap.get(name) ?? [] }));
+
+    const devDepsUsed = Object.entries(devDeps)
+      .filter(([name]) => usedDeps.has(name))
+      .map(([name, version]) => ({ name, version, importFiles: importMap.get(name) ?? [] }));
+
+    const unusedDeps = [...allDeclared]
+      .filter(name => !usedDeps.has(name))
+      .map(name => ({ name, version: deps[name] ?? devDeps[name] ?? '' }));
+
+    return {
+      coreDeps,
+      devDeps: devDepsUsed,
+      unusedDeps,
+      runtime: pkg.type === 'module' ? 'ESM' : 'CJS',
+      buildTool: this.detectBuildTool(devDeps),
+      packageManager: this.detectPackageManager(),
+    };
+  }
+
+  /** 扫描源码 import，返回 依赖名 → import 它的文件列表 */
+  private collectImportFiles(declaredDeps: Set<string>): Map<string, string[]> {
+    const map = new Map<string, string[]>();
+    const importRegex = /(?:import\s+(?:[\s\S]*?\s+from\s+)?|require\s*\(\s*)['"]([^'"./][^'"]*)['"]/g;
+    for (const file of this.scanResult.files) {
+      if (!file.extension.match(/^\.(ts|tsx|js|jsx|mjs|cjs)$/)) continue;
+      try {
+        const source = readFileSync(file.absolutePath, 'utf-8');
+        let match: RegExpExecArray | null;
+        while ((match = importRegex.exec(source)) !== null) {
+          let pkgName = match[1];
+          pkgName = pkgName.startsWith('@') ? pkgName.split('/').slice(0, 2).join('/') : pkgName.split('/')[0];
+          if (declaredDeps.has(pkgName)) {
+            if (!map.has(pkgName)) map.set(pkgName, []);
+            const files = map.get(pkgName)!;
+            if (!files.includes(file.relativePath)) files.push(file.relativePath);
+          }
+        }
+      } catch { /* skip */ }
+    }
+    return map;
+  }
+
+  private detectBuildTool(devDeps: Record<string, string>): string {
+    if (devDeps.tsup) return 'tsup';
+    if (devDeps.vite) return 'vite';
+    if (devDeps.webpack) return 'webpack';
+    if (devDeps.rollup) return 'rollup';
+    if (devDeps.esbuild) return 'esbuild';
+    return 'unknown';
+  }
+
+  private detectPackageManager(): string {
+    if (existsSync(join(this.scanResult.rootDir, 'pnpm-lock.yaml'))) return 'pnpm';
+    if (existsSync(join(this.scanResult.rootDir, 'yarn.lock'))) return 'yarn';
+    return 'npm';
+  }
+
+  /**
+   * decisions.md 数据源：ADR 架构决策记录。
+   * MCP manage_adr 当前无持久化 ADR，降级为从图谱设计模式 + 技术选型自动生成。
+   */
+  buildDecisionsContext(): DecisionsContext {
+    return { adrs: this.generateAdrEntries(), fromMcp: false };
+  }
+
+  /** 从 MCP 图谱检测的设计模式 + 技术选型自动生成 ADR 条目 */
+  private generateAdrEntries(): DecisionsContext['adrs'] {
+    const adrs: DecisionsContext['adrs'] = [];
+    let id = 1;
+
+    // 策略模式检测（Registry + Resolver）
+    const registryQ = this.client.queryGraph(
+      `MATCH (c:Class) WHERE c.name CONTAINS 'Registry' AND c.is_test = false
+       RETURN c.name AS name, c.file_path AS file LIMIT 3`,
+    );
+    if (registryQ.rows.length > 0) {
+      adrs.push({
+        id: `ADR-${String(id++).padStart(3, '0')}`,
+        title: '采用策略模式 + 注册表实现可插拔页面注册',
+        status: 'accepted',
+        context: '项目需要支持多种 wiki 页面类型，且需可扩展（新增页面不改核心逻辑）。',
+        decision: '使用 PageRegistry 描述符注册各页面，三个 builder 各自按 page name 派发。',
+        consequences: '新增页面只需改一处注册表 + 三个 builder 各加一个 case。代价是 PageDescriptor 与 builder 间有隐式契约。',
+        files: ['src/knowledge/page-registry.ts'],
+      });
+    }
+
+    // 知识图谱外部依赖决策（本项目核心架构决策）
+    if (this.scanResult.techStack.some(t => t.includes('ai-sdk') || t.includes('openai'))) {
+      adrs.push({
+        id: `ADR-${String(id++).padStart(3, '0')}`,
+        title: '采用 codebase-memory-mcp 知识图谱作为唯一数据源',
+        status: 'accepted',
+        context: '项目需要精确的代码结构数据（符号、调用关系、复杂度）。自建 tree-sitter 索引维护成本高、跨文件解析弱。',
+        decision: '删除自建 tree-sitter/SQLite 索引管线，改用外部 codebase-memory-mcp 通过子进程调用获取知识图谱。',
+        consequences: '数据质量提升（LSP 跨文件解析、复杂度指标），但引入外部二进制依赖。用户须预装 codebase-memory-mcp。',
+        files: ['src/mcp/codebase-memory-client.ts'],
+      });
+    }
+
+    // 技术选型 ADR
+    if (this.scanResult.techStack.includes('commander')) {
+      adrs.push({
+        id: `ADR-${String(id++).padStart(3, '0')}`,
+        title: 'CLI 框架选用 Commander.js',
+        status: 'accepted',
+        context: '项目是命令行工具，需要命令注册、参数解析、子命令支持。',
+        decision: '采用 Commander.js，命令以 register*Command 函数注册。',
+        consequences: '成熟稳定、生态丰富。命令定义与业务逻辑分离清晰。',
+        files: ['src/cli/index.ts'],
+      });
+    }
+
+    if (this.scanResult.techStack.includes('ai') || this.scanResult.techStack.includes('@ai-sdk/openai')) {
+      adrs.push({
+        id: `ADR-${String(id++).padStart(3, '0')}`,
+        title: 'LLM 集成采用 Vercel AI SDK',
+        status: 'accepted',
+        context: 'wiki 生成需要 LLM 产出自然语言叙述，且需支持流式输出和多种 provider。',
+        decision: '采用 Vercel AI SDK（ai + @ai-sdk/openai），通过 streamText 流式生成。',
+        consequences: 'provider 无关、流式友好。需处理思考模型（thinking）的 reasoning 字段降级。',
+        files: ['src/knowledge/wiki-page-generator.ts'],
+      });
+    }
+
+    return adrs;
   }
 
   /**

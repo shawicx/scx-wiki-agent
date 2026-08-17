@@ -42,6 +42,10 @@ export const PAGE_REGISTRY: PageDescriptor[] = [
   { name: 'testing', tier: 'operations', answer: '框架、测试目录、覆盖率、夹具' },
   { name: 'conventions', tier: 'operations', answer: '命名、导入、注释规范与禁止项' },
   { name: 'constraints', tier: 'operations', answer: '性能预算、复杂度上限、已知限制' },
+  { name: 'tech-stack', tier: 'operations', answer: '技术栈与依赖说明（含声明未用，R3）' },
+  { name: 'decisions', tier: 'structure', answer: '架构决策记录（ADR：编号+状态+背景+决策+后果）' },
+  { name: 'onboarding', tier: 'operations', answer: '上手指南：环境准备、安装、首次运行、脚本' },
+  { name: 'troubleshooting', tier: 'operations', answer: '排障手册：错误分类、诊断步骤、常见陷阱' },
   { name: 'cli', tier: 'surface', answer: 'CLI 命令、参数、退出码' },
 ];
 

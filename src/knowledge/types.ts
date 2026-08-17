@@ -192,6 +192,36 @@ export interface ReadmeContext {
   docIndex: Array<{ file: string; tier: string; answer: string }>;
 }
 
+/** Context for tech-stack page (技术栈，R3 拒绝编造用途) */
+export interface TechStackContext {
+  /** 核心依赖（dependencies 中被实际 import 的） */
+  coreDeps: Array<{ name: string; version: string; importFiles: string[] }>;
+  /** 开发依赖（devDependencies 中被 import 的） */
+  devDeps: Array<{ name: string; version: string; importFiles: string[] }>;
+  /** 声明未用依赖（package.json 声明但 src/ 中 0 import） */
+  unusedDeps: Array<{ name: string; version: string }>;
+  /** 运行时/构建信息 */
+  runtime: string;
+  buildTool: string;
+  packageManager: string;
+}
+
+/** Context for decisions page (ADR 架构决策记录) */
+export interface DecisionsContext {
+  /** ADR 条目（编号+状态+背景+决策+后果） */
+  adrs: Array<{
+    id: string;
+    title: string;
+    status: 'accepted' | 'proposed' | 'deprecated';
+    context: string;
+    decision: string;
+    consequences: string;
+    files: string[];
+  }>;
+  /** 是否来自 MCP 持久化（false=自动降级生成） */
+  fromMcp: boolean;
+}
+
 /** Context for environment page (运行态) */
 export interface EnvironmentContext {
   packageName: string;
@@ -251,6 +281,8 @@ export interface OnboardingContext {
   packageManager: string;
   nodeVersion: string;
   cliCommands: Array<{ name: string; description: string }>;
+  scripts: Record<string, string>;
+  firstRunExample: string;
 }
 
 /** Context for troubleshooting page */

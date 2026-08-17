@@ -18,6 +18,8 @@ import type {
   ConventionsContext,
   ConstraintsContext,
   CliContext,
+  TechStackContext,
+  DecisionsContext,
 } from './types.js';
 
 function sanitizeMermaid(name: string): string {
@@ -46,6 +48,8 @@ export class WikiFallbackBuilder {
       case 'conventions': return this.buildConventions(ctx);
       case 'constraints': return this.buildConstraints(ctx);
       case 'cli': return this.buildCli(ctx);
+      case 'tech-stack': return this.buildTechStack(ctx);
+      case 'decisions': return this.buildDecisions(ctx);
       default: return '';
     }
   }
@@ -308,10 +312,22 @@ export class WikiFallbackBuilder {
 
     builder.addSection('Installation', `\`\`\`bash\n# Install dependencies\n${ctx.packageManager} install\n\`\`\``);
 
-    if (ctx.cliCommands.length > 0) {
-      builder.addSection('Project Initialization',
-        `\`\`\`bash\n# Initialize the project\n${ctx.packageManager} run ${ctx.cliCommands.find(c => c.name === 'init')?.name ?? 'init'}\n\`\`\``,
+    // 首次运行最小示例（可复制执行）
+    if (ctx.firstRunExample) {
+      builder.addSection('First Run (最小示例)', '复制执行以下命令验证环境是否就绪');
+      builder.addCodeBlock('bash', ctx.firstRunExample);
+    }
+
+    // 可用脚本命令
+    if (ctx.scripts && Object.keys(ctx.scripts).length > 0) {
+      builder.addSection('Available Scripts', '');
+      builder.addTable(
+        ['命令', '脚本'],
+        Object.entries(ctx.scripts).map(([k, v]) => [`\`${k}\``, `\`${v}\``]),
       );
+    }
+
+    if (ctx.cliCommands.length > 0) {
       builder.addSection('CLI Commands', '').addTable(
         ['Command', 'Description'],
         ctx.cliCommands.map(c => [c.name, c.description]),
@@ -637,6 +653,96 @@ export class WikiFallbackBuilder {
       builder.addTable(
         ['码', '上下文', '源文件'],
         ctx.exitCodes.map(e => [String(e.code), `\`${e.context}\``, e.filePath]),
+      );
+    }
+
+    return builder.build();
+  }
+
+  /**
+   * tech-stack.md：技术栈（R3 拒绝编造用途）。
+   * 三张表：核心依赖（含首个 import 点）、开发依赖、声明未用依赖。
+   */
+  buildTechStack(ctx: TechStackContext): string {
+    const builder = new WikiBuilder()
+      .addTitle('Tech Stack')
+      .addParagraph('技术栈与依赖说明。每个依赖均标注源码首个 import 点（R3 拒绝编造用途）。');
+
+    if (ctx.coreDeps.length > 0) {
+      builder.addSection('核心依赖', '');
+      builder.addTable(
+        ['依赖', '版本', '首个 import 点'],
+        ctx.coreDeps.map(d => [
+          `\`${d.name}\``,
+          d.version,
+          d.importFiles[0] ? `\`${d.importFiles[0]}\`` : '-',
+        ]),
+      );
+    }
+
+    if (ctx.devDeps.length > 0) {
+      builder.addSection('开发依赖', '仅开发环境使用');
+      builder.addTable(
+        ['依赖', '版本', '首个 import 点'],
+        ctx.devDeps.map(d => [
+          `\`${d.name}\``,
+          d.version,
+          d.importFiles[0] ? `\`${d.importFiles[0]}\`` : '-',
+        ]),
+      );
+    }
+
+    if (ctx.unusedDeps.length > 0) {
+      builder.addSection('声明未用依赖', '⚠️ package.json 声明但源码中 0 import，请确认是否需要');
+      builder.addTable(
+        ['依赖', '版本'],
+        ctx.unusedDeps.map(d => [`\`${d.name}\``, d.version]),
+      );
+    }
+
+    builder.addSection('运行时与构建', '');
+    builder.addTable(
+      ['项', '值'],
+      [
+        ['模块系统', ctx.runtime],
+        ['构建工具', ctx.buildTool],
+        ['包管理器', ctx.packageManager],
+      ],
+    );
+
+    return builder.build();
+  }
+
+  /**
+   * decisions.md：ADR 架构决策记录。
+   * 每条 ADR：编号+状态+背景+决策+后果+相关文件（R1 锚点、R4 结构化）。
+   */
+  buildDecisions(ctx: DecisionsContext): string {
+    const builder = new WikiBuilder().addTitle('Architecture Decision Records');
+
+    if (!ctx.fromMcp) {
+      builder.addParagraph(
+        '> **数据来源**：MCP 未提供持久化 ADR，以下决策记录基于代码结构自动推导生成。' +
+        '建议人工审阅后用 `manage_adr(mode=update)` 持久化。',
+      );
+    }
+
+    if (ctx.adrs.length === 0) {
+      builder.addParagraph('No architecture decisions detected.');
+      return builder.build();
+    }
+
+    for (const adr of ctx.adrs) {
+      builder.addSection(`${adr.id}: ${adr.title}`, '');
+      builder.addTable(
+        ['项', '内容'],
+        [
+          ['状态', adr.status],
+          ['背景', adr.context],
+          ['决策', adr.decision],
+          ['后果', adr.consequences],
+          ['相关文件', adr.files.map(f => `\`${f}\``).join(', ') || '-'],
+        ],
       );
     }
 

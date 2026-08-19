@@ -11,7 +11,8 @@ const binaryExists = existsSync(BINARY);
  * 无二进制时自动跳过（CI 环境友好）。
  */
 describe.skipIf(!binaryExists)('MCP 集成测试（需真实 codebase-memory-mcp）', () => {
-  it('ensureIndexed + getArchitecture 端到端', () => {
+  // 真实二进制的索引/查询是重操作，放宽到 60s（客户端 exec 超时为 120s）
+  it('ensureIndexed + getArchitecture 端到端', { timeout: 60_000 }, () => {
     const client = new CodebaseMemoryClient(process.cwd(), BINARY);
     const idx = client.ensureIndexed('fast');
     expect(idx.status).toBe('indexed');
@@ -22,13 +23,13 @@ describe.skipIf(!binaryExists)('MCP 集成测试（需真实 codebase-memory-mcp
     expect(arch.entry_points.length).toBeGreaterThan(0);
   });
 
-  it('queryGraph Cypher 返回符号', () => {
+  it('queryGraph Cypher 返回符号', { timeout: 60_000 }, () => {
     const client = new CodebaseMemoryClient(process.cwd(), BINARY);
     const q = client.queryGraph('MATCH (n:Class) RETURN n.name AS name LIMIT 3');
     expect(q.rows.length).toBeGreaterThan(0);
   });
 
-  it('tracePath 返回调用链', () => {
+  it('tracePath 返回调用链', { timeout: 60_000 }, () => {
     const client = new CodebaseMemoryClient(process.cwd(), BINARY);
     const trace = client.tracePath('registerBuildCommand', 'outbound', 3);
     expect(trace.callees?.length ?? 0).toBeGreaterThan(0);

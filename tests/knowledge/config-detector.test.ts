@@ -80,6 +80,27 @@ describe('ConfigDetector', () => {
       expect(testing.framework).toBe('vitest');
     });
 
+    it('无配置文件时从 devDependencies 反推框架', () => {
+      writeFileSync(join(tempDir, 'package.json'), JSON.stringify({
+        name: 't', version: '0.0.0',
+        devDependencies: { vitest: '^1.0.0' },
+        scripts: { test: 'vitest run' },
+      }));
+      const detector = new ConfigDetector(tempDir);
+      const testing = detector.detectTesting();
+      expect(testing.framework).toBe('vitest');
+    });
+
+    it('无配置文件时从 scripts.test 反推 jest', () => {
+      writeFileSync(join(tempDir, 'package.json'), JSON.stringify({
+        name: 't', version: '0.0.0',
+        scripts: { test: 'jest --coverage' },
+      }));
+      const detector = new ConfigDetector(tempDir);
+      const testing = detector.detectTesting();
+      expect(testing.framework).toBe('jest');
+    });
+
     it('探测 tests/ 目录', () => {
       mkdirSync(join(tempDir, 'tests'));
       mkdirSync(join(tempDir, 'tests', 'fixtures'));

@@ -176,6 +176,22 @@ export class ConfigDetector {
     return { hasLinter, linterConfig, hasEditorConfig, editorConfig, agentsMd };
   }
 
+  /** 读取 package.json（容错），供依赖/脚本反推 */
+  private readPackageJsonLoose(): {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+    scripts?: Record<string, string>;
+  } | null {
+    try {
+      const p = join(this.rootDir, 'package.json');
+      if (!existsSync(p)) return null;
+      const parsed = JSON.parse(readFileSync(p, 'utf-8'));
+      return typeof parsed === 'object' && parsed !== null ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+
   detectTesting(): TestingInfo {
     let framework: string | null = null;
     let configPath: string | null = null;
@@ -192,6 +208,31 @@ export class ConfigDetector {
         framework = fw;
         configPath = file;
         break;
+      }
+    }
+
+    // 配置文件未识别时，从 package.json 依赖与 scripts.test 反推框架
+    // （project-wiki 调查清单：构建与依赖以 package.json 为准；依赖声明+脚本调用即 R3 证据）
+    if (framework === null) {
+      const pkg = this.readPackageJsonLoose();
+      if (pkg) {
+        const deps: Record<string, string> = {
+          ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}),
+        };
+        const testScript = pkg.scripts?.test ?? '';
+        const candidates: Array<[string, string]> = [
+          ['vitest', 'vitest'],
+          ['jest', 'jest'],
+          ['mocha', 'mocha'],
+          ['@playwright/test', '@playwright/test'],
+          ['ava', 'ava'],
+        ];
+        for (const [dep, name] of candidates) {
+          if (deps[dep] || testScript.includes(name)) {
+            framework = name;
+            break;
+          }
+        }
       }
     }
 

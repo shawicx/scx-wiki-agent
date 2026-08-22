@@ -88,22 +88,22 @@ describe('WikiContextBuilder (MCP-backed)', () => {
   });
 
   describe('buildDataFlowContext', () => {
-    it('从 entry_points + CALLS 边构建真实调用序列', () => {
-      // data-flow 用 Cypher CALLS 边 BFS，过滤测试节点
+    it('从 entry_points + CALLS 边构建真实调用序列（带行号，子链去重）', () => {
+      // data-flow 用 Cypher CALLS 边 BFS，过滤测试节点，RETURN 携带 start_line
       const callsEdgeCypher = `MATCH (caller)-[:CALLS]->(callee)
          WHERE caller.name IN ["registerBuildCommand"]
            AND caller.is_test = false
            AND callee.is_test = false
          RETURN caller.name AS caller, callee.name AS callee,
-                callee.file_path AS file, callee.label AS label
+                callee.file_path AS file, callee.label AS label, callee.start_line AS line
          LIMIT 40`;
       const queryResults = new Map<string, QueryResult>([
         [callsEdgeCypher, {
-          columns: ['caller', 'callee', 'file', 'label'],
+          columns: ['caller', 'callee', 'file', 'label', 'line'],
           rows: [
-            ['registerBuildCommand', 'FileScanner', 'src/core/scanner.ts', 'Class'],
-            ['registerBuildCommand', 'WikiService', 'src/services/wiki-service.ts', 'Class'],
-            ['registerBuildCommand', 'CodebaseMemoryClient', 'src/mcp/codebase-memory-client.ts', 'Class'],
+            ['registerBuildCommand', 'FileScanner', 'src/core/scanner.ts', 'Class', 67],
+            ['registerBuildCommand', 'WikiService', 'src/services/wiki-service.ts', 'Class', 19],
+            ['registerBuildCommand', 'CodebaseMemoryClient', 'src/mcp/codebase-memory-client.ts', 'Class', 24],
           ],
           total: 3,
         }],
@@ -119,6 +119,11 @@ describe('WikiContextBuilder (MCP-backed)', () => {
       // 每条消息的 from 都是真实 caller（registerBuildCommand），不是线性串联
       expect(seq.messages.every(m => m.from === 'registerBuildCommand')).toBe(true);
       expect(seq.participants.length).toBe(4); // entry + 3 callees
+      // 行号来自图谱 start_line，不再产出 file:0 残缺锚点
+      expect(seq.messages.every(m => m.callLine > 0)).toBe(true);
+      // createProgram 不是 registerBuildCommand 链的参与者，应保留自己的序列尝试
+      // （其 BFS 查询无结果 → 不产生序列；registerBuildCommand 链内符号不重复成节）
+      expect(ctx.sequences.filter(s => s.name === 'FileScanner').length).toBe(0);
     });
   });
 
@@ -182,13 +187,17 @@ describe('WikiContextBuilder (MCP-backed)', () => {
   });
 
   describe('buildApiContext', () => {
-    it('commands 来自 entry_points', () => {
+    it('只有 register*/*Command 入口标为命令，普通导出函数归入导出函数表', () => {
       const client = createMockClient();
       const builder = new WikiContextBuilder(client as any, makeScanResult());
       const ctx = builder.buildApiContext();
 
-      expect(ctx.commands.length).toBe(2);
-      expect(ctx.commands.map(c => c.name)).toContain('registerBuildCommand');
+      // mock entry_points: registerBuildCommand + createProgram（非命令）
+      expect(ctx.commands.length).toBe(1);
+      expect(ctx.commands[0].name).toBe('registerBuildCommand');
+      // createProgram 是无调用者的导出符号，应出现在导出函数表而非命令表
+      expect(ctx.commands.map(c => c.name)).not.toContain('createProgram');
+      expect(ctx.exportedFunctions.map(f => f.name)).toContain('createProgram');
     });
   });
 

@@ -150,7 +150,9 @@ export class WikiFallbackBuilder {
           seq.messages.map(m => [
             m.from,
             m.to,
-            m.filePath ? `${m.filePath}:${m.callLine}` : '-',
+            m.filePath
+              ? (m.callLine > 0 ? `${m.filePath}:${m.callLine}` : m.filePath)
+              : '-',
           ]),
         );
       }

@@ -155,11 +155,20 @@ export class WikiContextBuilder {
 
   buildDataFlowContext(): DataFlowContext {
     const arch = this.client.getArchitecture();
-    const sequences: ExecutionSequence[] = [];
 
+    // 已被先前序列覆盖的符号不再单独成节（前缀序列已包含其调用链，避免重复展示）
+    const sequences: ExecutionSequence[] = [];
+    const covered = new Set<string>();
     for (const entry of arch.entry_points.slice(0, 6)) {
+      if (covered.has(entry.name)) continue;
       const seq = this.buildCallChainFromEdges(entry.name, entry.file);
-      if (seq) sequences.push(seq);
+      if (seq) {
+        sequences.push(seq);
+        for (const m of seq.messages) {
+          covered.add(m.from);
+          covered.add(m.to);
+        }
+      }
     }
 
     return { sequences };
@@ -193,7 +202,7 @@ export class WikiContextBuilder {
            AND caller.is_test = false
            AND callee.is_test = false
          RETURN caller.name AS caller, callee.name AS callee,
-                callee.file_path AS file, callee.label AS label
+                callee.file_path AS file, callee.label AS label, callee.start_line AS line
          LIMIT 40`,
       );
 
@@ -203,6 +212,7 @@ export class WikiContextBuilder {
         const calleeName = row[1] as string;
         const calleeFile = (row[2] as string) ?? '';
         const calleeLabel = row[3] as string;
+        const calleeLine = Number(row[4] ?? 0);
 
         // 跳过自调用
         if (callerName === calleeName) continue;
@@ -223,7 +233,7 @@ export class WikiContextBuilder {
           from: callerName,
           to: calleeName,
           label: calleeName,
-          callLine: 0,
+          callLine: calleeLine,
           filePath: calleeFile,
         });
 
@@ -296,16 +306,24 @@ export class WikiContextBuilder {
   buildApiContext(): ApiContext {
     const arch = this.client.getArchitecture();
 
-    // entry_points 即 CLI 命令：用 getCodeSnippet 获取源码片段，提升信息密度
-    const commands = arch.entry_points.slice(0, 8).map(e => {
-      const snippet = this.safeGetSnippet(e.name);
-      return {
-        name: e.name,
-        filePath: e.file,
-        startLine: snippet?.start_line ?? 0,
-        description: snippet?.docstring ?? '',
-      };
-    });
+    // entry_points 的语义是"无内部调用者的导出符号"，不等于 CLI 命令——
+    // MCP 会把普通导出函数（如 saveWidgets）也列为 entry point。
+    // project-wiki 规则「图谱结果与源码抽查一致，冲突以源码为准」：
+    // 只有 register*/*Command 命名约定的入口才标为命令，其余并入导出函数表。
+    const isCommandEntry = (name: string) =>
+      name.startsWith('register') || name.includes('Command');
+    const entries = arch.entry_points.slice(0, 8);
+    const commands = entries
+      .filter(e => isCommandEntry(e.name))
+      .map(e => {
+        const snippet = this.safeGetSnippet(e.name);
+        return {
+          name: e.name,
+          filePath: e.file,
+          startLine: snippet?.start_line ?? 0,
+          description: snippet?.docstring ?? '',
+        };
+      });
 
     // 查导出函数（有 signature/docstring 的），对核心函数取源码片段
     const q = this.client.queryGraph(
@@ -327,6 +345,20 @@ export class WikiContextBuilder {
         docstring: (row[4] as string | null) ?? snippet?.docstring ?? null,
       };
     });
+
+    // 非命令的 entry point（无调用者的导出函数）并入导出函数表，按名去重
+    const seen = new Set(exportedFunctions.map(f => f.name));
+    for (const e of entries) {
+      if (isCommandEntry(e.name) || seen.has(e.name)) continue;
+      const snippet = this.safeGetSnippet(e.name);
+      exportedFunctions.push({
+        name: e.name,
+        filePath: e.file,
+        startLine: snippet?.start_line ?? 0,
+        signature: snippet?.signature ?? null,
+        docstring: snippet?.docstring ?? null,
+      });
+    }
 
     return {
       commands,

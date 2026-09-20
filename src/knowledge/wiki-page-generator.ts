@@ -12,7 +12,9 @@ import type {
   DecisionsContext,
   TestingContext,
   ConstraintsContext,
+  TopicContext,
 } from './types.js';
+import { isTopicPage } from './page-registry.js';
 
 interface PageConfig {
   systemPrompt: string;
@@ -47,6 +49,7 @@ export class WikiPageGenerator {
 
   /** 按页面名派发 LLM 生成（供 PageRegistry 调用） */
   async generateByName(page: string, ctx: any, onChunk: (text: string) => void): Promise<string> {
+    if (isTopicPage(page)) return this.generateTopic(ctx, onChunk);
     switch (page) {
       case 'overview': return this.generateOverview(ctx, onChunk);
       case 'architecture': return this.generateArchitecture(ctx, onChunk);
@@ -81,6 +84,8 @@ export class WikiPageGenerator {
         projectType: ctx.projectType,
         hasTypeScript: ctx.hasTypeScript,
         fileCount: ctx.fileCount,
+        packageName: ctx.packageName ?? '',
+        packageDescription: ctx.packageDescription ?? '',
         techStack: ctx.techStack,
         sourceDirs: ctx.sourceDirs,
         entryFiles: ctx.entryFiles.map(f => f.path),
@@ -333,12 +338,50 @@ export class WikiPageGenerator {
         symbols: symbols.map(s => ({
           name: s.name,
           type: s.type,
-          file: s.filePath,
+          file: s.startLine && s.startLine > 0 ? `${s.filePath}:${s.startLine}` : s.filePath,
           docstring: s.docstring,
           signature: s.signature,
           complexity: s.complexity,
         })),
         supplementalSymbols: ctx.supplementalSymbols ?? [],
+      }, null, 2),
+      maxOutputTokens: 8000,
+    });
+  }
+
+  async generateTopic(ctx: TopicContext, onChunk: (text: string) => void): Promise<string> {
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个资深软件架构师。请根据主题数据生成详尽、专业的仓库专属主题文档页面（Markdown格式）。
+
+该主题是从知识图谱聚类推导出的「跨模块协作面」——它横跨多个模块，是固定文档页面未覆盖的仓库特有主题。
+
+要求：
+- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
+- 开头用一段话说明该主题是什么、为什么值得单独成页（跨哪些模块、解决什么协作问题）
+- "职责与范围"：说明主题覆盖的文件清单及其分工（基于 files 与 symbols）
+- "关键符号"：对每个核心符号，用1-2段说明其用途与在主题中的角色（基于 docstring/signature，锚点用 file:line）
+- "协作方式"：基于 edges 边表分析文件间如何配合（调用方向、数据流），用表格呈现调用边（R2 严禁时序图）
+- "跨模块边界"：基于 boundaries 分析该主题与外部的耦合点及修改代价
+- "设计动机"：基于符号命名与协作模式推断该主题的设计意图，推断处须标注为推断
+- 严禁编造数据外的方法、参数或行为（R1/R3）`,
+      userPrompt: JSON.stringify({
+        id: ctx.id,
+        title: ctx.title,
+        files: ctx.files,
+        symbols: ctx.symbols.map(s => ({
+          name: s.name,
+          type: s.type,
+          file: s.startLine && s.startLine > 0 ? `${s.file}:${s.startLine}` : s.file,
+          docstring: s.docstring,
+          signature: s.signature,
+          complexity: s.complexity,
+        })),
+        edges: ctx.edges.map(e => ({
+          caller: e.caller,
+          callee: e.callee,
+          location: e.line > 0 ? `${e.file}:${e.line}` : e.file,
+        })),
+        boundaries: ctx.boundaries,
       }, null, 2),
       maxOutputTokens: 8000,
     });

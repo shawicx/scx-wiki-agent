@@ -10,9 +10,11 @@ import { validatePageContent } from '../knowledge/wiki-quality-validator.js';
 import type { PageQualityReport } from '../knowledge/wiki-quality-validator.js';
 import { collectEvidenceFiles, buildEvidenceBlock, injectEvidenceBlock } from '../knowledge/wiki-evidence.js';
 import { ConfigDetector } from '../knowledge/config-detector.js';
+import { TopicDiscovery, loadTopics, saveTopics } from '../knowledge/topic-discovery.js';
 import {
   PAGE_REGISTRY, ALL_PAGE_NAMES, tier2PagesFor,
   findPageDescriptor, pageRelPath, buildRelatedSection, RETIRED_WIKI_PATHS,
+  isTopicPage, topicPageName, TOPIC_DIR,
 } from '../knowledge/page-registry.js';
 import type { WikiBuildOptions } from '../knowledge/types.js';
 
@@ -37,8 +39,17 @@ export class WikiService {
     // 确保图谱已索引（替代旧的 index 阶段）
     this.client.ensureIndexed('moderate');
 
+    // 主题页定义：topics.json 锁定（缺失或 --refresh-topics 时确定性探测）
+    const agentDir = join(dirname(wikiDir), '.scx-wiki-agent');
+    let topics = options?.refreshTopics ? null : loadTopics(agentDir);
+    if (topics === null) {
+      topics = new TopicDiscovery(this.client, this.scanResult).discover();
+      saveTopics(agentDir, topics);
+    }
+    const topicPages = topics.map(t => topicPageName(t.id));
+
     // 决定生成哪些页面（校验页名合法性）
-    const pages = this.resolvePages(options?.pages);
+    const pages = this.resolvePages(options?.pages, topicPages);
 
     // 检测式配置探测器：探测项目实际配置（package.json/lockfile/eslint/...），
     // 复用 scanResult 的源文件列表避免重复扫描
@@ -46,15 +57,17 @@ export class WikiService {
     detector.setSourceFiles(this.scanResult.files.map(f => f.absolutePath));
 
     const contextBuilder = new WikiContextBuilder(this.client, this.scanResult, detector);
+    contextBuilder.setTopics(topics);
     const fallbackBuilder = new WikiFallbackBuilder();
     const pageGenerator = new WikiPageGenerator(options?.model, options?.baseURL, options?.apiKey);
     const noLlm = options?.noLlm ?? false;
     const onChunk = options?.onChunk ?? (() => {});
 
-    // 接管式重建：清理旧版扁平产物 + 已退休页面路径的残留
+    // 接管式重建：清理旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页残留
     const legacyRemoved = [
       ...this.cleanupLegacyFlatFiles(wikiDir, pages),
       ...this.cleanupRetiredPages(wikiDir),
+      ...this.cleanupStaleTopicPages(wikiDir, pages),
     ];
 
     // 质量闸门输入：本次计划写入的页面路径 + 仓库真实文件清单
@@ -134,23 +147,23 @@ export class WikiService {
    *   + 按 projectType 激活的 surface 层（Tier2）。
    * surface 页面（cli/routes/components/...）只在对应项目类型下默认生成。
    */
-  private resolvePages(requested?: string[]): string[] {
+  private resolvePages(requested: string[] | undefined, topicPages: string[]): string[] {
     const basePages = PAGE_REGISTRY
       .filter(p => p.tier !== 'surface')
       .map(p => p.name);
     const tier2 = tier2PagesFor(this.scanResult.projectType);
-    const allPages = [...basePages, ...tier2];
+    const allPages = [...basePages, ...tier2, ...topicPages];
 
     if (!requested || requested.length === 0) {
       return allPages;
     }
-    // 校验：过滤非法页名并告警
+    // 校验：过滤非法页名并告警（注册表页名与已锁定的 topic:<id> 均合法）
     const valid: string[] = [];
     for (const name of requested) {
-      if (ALL_PAGE_NAMES.includes(name)) {
+      if (ALL_PAGE_NAMES.includes(name) || (isTopicPage(name) && topicPages.includes(name))) {
         valid.push(name);
       } else {
-        console.warn(`[wiki] 未知页面 "${name}"，已跳过。可用页面: ${ALL_PAGE_NAMES.join(', ')}`);
+        console.warn(`[wiki] 未知页面 "${name}"，已跳过。可用页面: ${ALL_PAGE_NAMES.join(', ')}${topicPages.length > 0 ? `，${topicPages.join(', ')}` : ''}`);
       }
     }
     return valid.length > 0 ? valid : allPages;
@@ -192,6 +205,20 @@ export class WikiService {
         rmSync(target);
         removed.push(rel);
       }
+    }
+    return removed;
+  }
+
+  /** 清理 08-topics 下未列入本次计划的主题文件（目录为工具所有） */
+  private cleanupStaleTopicPages(wikiDir: string, pages: string[]): string[] {
+    const topicDir = join(wikiDir, TOPIC_DIR);
+    if (!existsSync(topicDir)) return [];
+    const planned = new Set(pages.filter(isTopicPage).map(pageRelPath));
+    const removed: string[] = [];
+    for (const entry of readdirSync(topicDir)) {
+      if (!entry.endsWith('.md') || planned.has(`${TOPIC_DIR}/${entry}`)) continue;
+      rmSync(join(topicDir, entry));
+      removed.push(`${TOPIC_DIR}/${entry}`);
     }
     return removed;
   }

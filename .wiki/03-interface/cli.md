@@ -10,8 +10,6 @@
 
 ## 命令
 
-
-
 | 命令 | 说明 | 源文件:行号 |
 | --- | --- | --- |
 | `build` | - | src/cli/commands/build.ts:9 |
@@ -19,8 +17,6 @@
 | `scan` | - | src/cli/commands/scan.ts:4 |
 
 ## `build` 参数
-
-
 
 | 参数 | 说明 |
 | --- | --- |
@@ -32,10 +28,9 @@
 | `--no-llm` | Generate wiki without LLM (pure rules) |
 | `--pages <pages>` | Comma-separated page names to generate |
 | `--mode <mode>` | Build mode: full (rewrite all) or update (skip unchanged pages) |
+| `--refresh-topics` | Re-detect adaptive topic pages and overwrite topics.json |
 
 ## `init` 参数
-
-
 
 | 参数 | 说明 |
 | --- | --- |
@@ -43,16 +38,12 @@
 
 ## `scan` 参数
 
-
-
 | 参数 | 说明 |
 | --- | --- |
 | `--project-root <path>` | Project root directory |
 | `-v, --verbose` | Show detailed output |
 
 ## 退出码
-
-
 
 | 码 | 上下文 | 源文件 |
 | --- | --- | --- |

@@ -290,4 +290,46 @@ describe('WikiService', () => {
     // 注入位置：紧跟首个 # 标题之后（标题 + 空行 + 锚定块）
     expect(overview.startsWith('# Project Overview\n\n<details>')).toBe(true);
   });
+
+  it('should generate locked topic pages, index them in README, and clean stale topic files', async () => {
+    const client = createMockClient();
+    const wikiDir = join(tmpDir, 'wiki');
+    const agentDir = join(tmpDir, '.scx-wiki-agent');
+    // 预置锁定主题 + 一个陈旧主题文件
+    mkdirSync(join(wikiDir, '08-topics'), { recursive: true });
+    writeFileSync(join(wikiDir, '08-topics', 'stale.md'), '# stale', 'utf-8');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'topics.json'), JSON.stringify([
+      { id: 't1', title: '质量闸门', files: ['src/index.ts'] },
+    ]), 'utf-8');
+
+    const service = new WikiService(client as any, makeBackendScanResult());
+    const generated = await service.buildWiki(wikiDir, { noLlm: true });
+
+    expect(generated).toContain('08-topics/t1.md');
+    // 陈旧主题文件被清理（目录为工具所有）
+    expect(existsSync(join(wikiDir, '08-topics', 'stale.md'))).toBe(false);
+    const topic = readFileSync(join(wikiDir, '08-topics', 't1.md'), 'utf-8');
+    expect(topic).toContain('# 质量闸门');
+    expect(topic).toContain('src/index.ts');
+    // README 索引纳入主题组
+    const readme = readFileSync(join(wikiDir, 'README.md'), 'utf-8');
+    expect(readme).toContain('08-topics/');
+    expect(readme).toContain('[08-topics/t1.md](08-topics/t1.md)');
+  });
+
+  it('should support generating a single topic page via --pages topic:<id>', async () => {
+    const client = createMockClient();
+    const wikiDir = join(tmpDir, 'wiki');
+    const agentDir = join(tmpDir, '.scx-wiki-agent');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'topics.json'), JSON.stringify([
+      { id: 't1', title: '质量闸门', files: ['src/index.ts'] },
+    ]), 'utf-8');
+
+    const service = new WikiService(client as any, makeBackendScanResult());
+    const generated = await service.buildWiki(wikiDir, { noLlm: true, pages: ['topic:t1'] });
+
+    expect(generated).toEqual(['08-topics/t1.md']);
+  });
 });

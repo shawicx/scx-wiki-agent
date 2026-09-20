@@ -18,6 +18,9 @@ export interface OverviewContext {
   fileCount: number;
   techStack: string[];
   sourceDirs: string[];
+  /** package.json 的 name/description（缺失为空串） */
+  packageName?: string;
+  packageDescription?: string;
   entryFiles: Array<{ name: string; path: string }>;
   topSymbols: Array<{ name: string; type: SymbolType; docstring?: string | null; complexity?: number }>;
   supplementalSymbols?: SupplementalSymbol[];
@@ -120,6 +123,7 @@ export interface GlossaryContext {
     name: string;
     type: SymbolType;
     filePath: string;
+    startLine?: number;
     docstring?: string | null;
     signature?: string | null;
     complexity?: number;
@@ -282,6 +286,27 @@ export interface TroubleshootingContext {
   modules: Array<{ name: string }>;
 }
 
+/** Context for topic pages（仓库专属主题，图谱推导） */
+export interface TopicContext {
+  id: string;
+  title: string;
+  /** 主题覆盖的生产文件（扫描清单内） */
+  files: string[];
+  symbols: Array<{
+    name: string;
+    type: SymbolType;
+    file: string;
+    startLine?: number;
+    docstring?: string | null;
+    signature?: string | null;
+    complexity?: number;
+  }>;
+  /** 主题文件间的 CALLS 边（边表，R2） */
+  edges: Array<{ caller: string; callee: string; file: string; line: number }>;
+  /** 主题涉及的跨包调用边界 */
+  boundaries: Array<{ from: string; to: string; callCount: number }>;
+}
+
 /** Build options for wiki generation */
 export interface WikiBuildOptions {
   model?: string;
@@ -291,5 +316,7 @@ export interface WikiBuildOptions {
   pages?: string[];
   /** full=全量覆盖重写；update=内容一致时跳过重写并输出变更摘要 */
   mode?: 'full' | 'update';
+  /** 重新探测主题页并覆盖 topics.json */
+  refreshTopics?: boolean;
   onChunk?: (filename: string, text: string) => void;
 }

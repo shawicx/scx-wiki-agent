@@ -18,6 +18,7 @@ export function registerBuildCommand(program: Command) {
     .option('--no-llm', 'Generate wiki without LLM (pure rules)')
     .option('--pages <pages>', 'Comma-separated page names to generate', 'all')
     .option('--mode <mode>', 'Build mode: full (rewrite all) or update (skip unchanged pages)', 'full')
+    .option('--refresh-topics', 'Re-detect adaptive topic pages and overwrite topics.json')
     .action(async (options) => {
       const root = options.projectRoot ?? process.cwd();
       const wikiDir = join(root, WIKI_DIR);
@@ -33,6 +34,7 @@ export function registerBuildCommand(program: Command) {
         noLlm: options.llm === false,
         pages,
         mode: options.mode === 'update' ? 'update' : 'full',
+        refreshTopics: options.refreshTopics === true,
         onChunk: (filename, text) => {
           process.stdout.write(text);
         },

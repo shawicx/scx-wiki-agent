@@ -1,0 +1,22 @@
+[
+  {
+    "id": "topic-6",
+    "title": "generateByName 协作面",
+    "files": [
+      "src/knowledge/wiki-page-generator.ts",
+      "src/services/wiki-service.ts",
+      "src/knowledge/wiki-output-sanitizer.ts"
+    ]
+  },
+  {
+    "id": "topic-9",
+    "title": "registerBuildCommand 协作面",
+    "files": [
+      "src/mcp/codebase-memory-client.ts",
+      "src/core/scanner.ts",
+      "src/cli/index.ts",
+      "src/cli/commands/build.ts",
+      "src/cli/commands/scan.ts"
+    ]
+  }
+]

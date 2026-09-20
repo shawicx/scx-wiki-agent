@@ -59,13 +59,16 @@ node dist/bin.js build --mode update
 | `--base-url <url>` | — | OpenAI 兼容 API 地址（Ollama：`http://localhost:11434/v1`） |
 | `--api-key <key>` | `OPENAI_API_KEY` | API 密钥 |
 | `--no-llm` | 关闭 | 纯规则生成，不调用 LLM |
-| `--pages <列表>` | `all` | 逗号分隔页名；默认 = 全部非 surface 页 + 按项目类型激活的表层页 |
+| `--pages <列表>` | `all` | 逗号分隔页名；默认 = 全部非 surface 页 + 按项目类型激活的表层页 + 已锁定主题页 |
 | `--mode <mode>` | `full` | `full` 全量重写 / `update` 内容一致时跳过 |
+| `--refresh-topics` | 关闭 | 重新探测自适应主题页并覆盖 topics.json |
 | `--mcp-binary <path>` | 自动探测 | codebase-memory-mcp 二进制路径 |
 
 ### 生成的 Wiki 页面
 
-`build` 在 `.wiki/` 下按编号目录生成 18 个页面（以 `PAGE_REGISTRY` 为准）：overview / tech-stack / environment / architecture / data-flow / modules / api / cli（按项目类型激活）/ decisions / onboarding / testing / troubleshooting / conventions / constraints / calls / classes / glossary + README 索引。每页页首含源文件锚定块，页底含 Related 导航。
+`build` 在 `.wiki/` 下按编号目录生成 18 个固定页面（以 `PAGE_REGISTRY` 为准）：overview / tech-stack / environment / architecture / data-flow / modules / api / cli（按项目类型激活）/ decisions / onboarding / testing / troubleshooting / conventions / constraints / calls / classes / glossary + README 索引。
+
+在此之外，还会从图谱聚类**确定性推导最多 4 个仓库专属主题页**（`08-topics/`，跨 ≥2 模块的协作面，如"MCP 子进程客户端"）：主题定义锁定在 `.scx-wiki-agent/topics.json`（可手工编辑删改，`--refresh-topics` 重新探测）；探测不出就一个不生成。每页页首含源文件锚定块，页底含 Related 导航。
 
 ## 架构
 

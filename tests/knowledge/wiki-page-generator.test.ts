@@ -152,4 +152,28 @@ describe('WikiPageGenerator', () => {
     expect(callArgs.prompt).toContain('buildWiki');
     expect(callArgs.system).toContain('R6');
   });
+
+  it('generateByName 派发主题页并注入主题数据', async () => {
+    mockStreamText.mockReturnValue({
+      fullStream: (async function* () {
+        yield { type: 'text-delta', text: '# 质量闸门' };
+      })(),
+    } as any);
+
+    const generator = new WikiPageGenerator('gpt-4o-mini');
+    const result = await generator.generateByName('topic:t1', {
+      id: 't1',
+      title: '质量闸门',
+      files: ['src/knowledge/wiki-quality-validator.ts'],
+      symbols: [{ name: 'validatePageContent', type: 'function', file: 'src/knowledge/wiki-quality-validator.ts', startLine: 65, docstring: '质量闸门' }],
+      edges: [{ caller: 'buildWiki', callee: 'validatePageContent', file: 'src/knowledge/wiki-quality-validator.ts', line: 85 }],
+      boundaries: [],
+    }, vi.fn());
+
+    const callArgs = mockStreamText.mock.calls[0][0] as any;
+    expect(callArgs.prompt).toContain('质量闸门');
+    expect(callArgs.prompt).toContain('wiki-quality-validator.ts:65');
+    expect(callArgs.system).toContain('跨模块协作面');
+    expect(result).toBe('# 质量闸门');
+  });
 });

@@ -84,16 +84,20 @@ export function tier2PagesFor(projectType: string): string[] {
   return TIER2_BY_TYPE[projectType] ?? [];
 }
 
-/** 查找页面描述符 */
+/** 查找页面描述符（主题页动态合成） */
 export function findPageDescriptor(name: string): PageDescriptor | undefined {
+  if (isTopicPage(name)) {
+    return { name, dir: TOPIC_DIR, tier: 'structure', answer: TOPIC_ANSWER };
+  }
   return PAGE_REGISTRY.find(p => p.name === name);
 }
 
 /**
  * 页面在 wiki 内的输出相对路径（编号目录 + 文件名）。
- * readme 特例输出为 README.md（wiki 总入口约定）。
+ * readme 特例输出为 README.md（wiki 总入口约定）；主题页输出到 08-topics/<id>.md。
  */
 export function pageRelPath(name: string): string {
+  if (isTopicPage(name)) return `${TOPIC_DIR}/${topicIdFromPage(name)}.md`;
   const desc = findPageDescriptor(name);
   const filename = name === 'readme' ? 'README.md' : `${name}.md`;
   if (!desc || !desc.dir) return filename;
@@ -111,6 +115,25 @@ export const RETIRED_WIKI_PATHS: string[] = [
   '06-constraints/limitations.md',     // → constraints
 ];
 
+/** 主题页名前缀（动态页：`topic:<id>`） */
+export const TOPIC_PAGE_PREFIX = 'topic:';
+/** 主题页输出目录（工具所有，未列入计划的主题文件会被清理） */
+export const TOPIC_DIR = '08-topics';
+/** 主题页描述（README 索引用） */
+export const TOPIC_ANSWER = '仓库专属主题（图谱聚类推导）';
+
+export function isTopicPage(name: string): boolean {
+  return name.startsWith(TOPIC_PAGE_PREFIX);
+}
+
+export function topicIdFromPage(name: string): string {
+  return name.slice(TOPIC_PAGE_PREFIX.length);
+}
+
+export function topicPageName(id: string): string {
+  return `${TOPIC_PAGE_PREFIX}${id}`;
+}
+
 /**
  * 页底 Related 区块（project-wiki「页底 Related 链接」要求）。
  * 只链接本次构建计划内的页面，保证零死链；数据全部来自 PAGE_REGISTRY。
@@ -119,13 +142,23 @@ export function buildRelatedSection(page: string, plannedPages: readonly string[
   const desc = findPageDescriptor(page);
   if (!desc || page === 'readme') return '';
 
-  const siblings = PAGE_REGISTRY.filter(
-    p => p.name !== page && p.dir === desc.dir && plannedPages.includes(p.name),
-  );
+  let siblings: string[];
+  if (isTopicPage(page)) {
+    siblings = plannedPages.filter(p => p !== page && isTopicPage(p));
+  } else {
+    siblings = PAGE_REGISTRY
+      .filter(p => p.name !== page && p.dir === desc.dir && plannedPages.includes(p.name))
+      .filter(p => !isTopicPage(p.name))
+      .map(p => p.name);
+  }
 
   const items: string[] = [];
   if (siblings.length > 0) {
-    items.push(`- 同目录：${siblings.map(p => `[${p.name}.md](${p.name}.md)`).join(' · ')}`);
+    const links = siblings.map(p => {
+      const label = isTopicPage(p) ? `${topicIdFromPage(p)}.md` : `${p}.md`;
+      return `[${label}](${label})`;
+    });
+    items.push(`- 同目录：${links.join(' · ')}`);
   }
   if (plannedPages.includes('readme')) {
     const readmeLink = desc.dir ? '../README.md' : 'README.md';

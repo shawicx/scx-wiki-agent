@@ -79,4 +79,12 @@ describe('WikiBuilder', () => {
     const result = builder.addTitle('Test');
     expect(result).toBe(builder);
   });
+
+  it('空内容 section 不产生多余空行（标题后直接接下一节）', () => {
+    const doc = new WikiBuilder()
+      .addSection('Fan-in', '')
+      .addTable(['A', 'B'], [['1', '2']])
+      .build();
+    expect(doc).toBe('## Fan-in\n\n| A | B |\n| --- | --- |\n| 1 | 2 |');
+  });
 });

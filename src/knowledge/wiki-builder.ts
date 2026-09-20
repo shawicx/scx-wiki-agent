@@ -13,15 +13,15 @@ export class WikiBuilder {
     return this;
   }
 
-  /** Add a second-level section: `## title\n\ncontent` */
+  /** Add a second-level section: `## title` +（content 非空时）`\n\ncontent` */
   addSection(title: string, content: string): this {
-    this.sections.push(`## ${title}\n\n${content}`);
+    this.sections.push(content ? `## ${title}\n\n${content}` : `## ${title}`);
     return this;
   }
 
-  /** Add a third-level sub-section: `### title\n\ncontent` */
+  /** Add a third-level sub-section: `### title` +（content 非空时）`\n\ncontent` */
   addSubSection(title: string, content: string): this {
-    this.sections.push(`### ${title}\n\n${content}`);
+    this.sections.push(content ? `### ${title}\n\n${content}` : `### ${title}`);
     return this;
   }
 

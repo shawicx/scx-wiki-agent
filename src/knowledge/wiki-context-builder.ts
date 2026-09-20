@@ -4,9 +4,11 @@ import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
 import type { SnippetData } from '../mcp/types.js';
 import type { ScanResult } from '../core/scanner.js';
 import type { SymbolType, RelationType } from '../core/types.js';
-import { PAGE_REGISTRY, pageRelPath } from './page-registry.js';
+import { isTestPath } from '../shared/utils.js';
+import { PAGE_REGISTRY, pageRelPath, isTopicPage, topicIdFromPage, TOPIC_DIR, TOPIC_ANSWER } from './page-registry.js';
 import { ConfigDetector } from './config-detector.js';
 import { collectEvidenceFiles, toKnownRelativePath, EVIDENCE_MIN_FILES } from './wiki-evidence.js';
+import type { TopicDefinition } from './topic-discovery.js';
 import type {
   OverviewContext,
   ArchitectureContext,
@@ -28,6 +30,7 @@ import type {
   CliContext,
   TechStackContext,
   DecisionsContext,
+  TopicContext,
 } from './types.js';
 
 const ENTRY_FILE_NAMES = ['index.ts', 'index.js', 'main.ts', 'main.js', 'cli.ts', 'cli.js'];
@@ -54,6 +57,12 @@ export class WikiContextBuilder {
   ) {}
 
   private knownFiles: Set<string> | null = null;
+  /** 主题页定义（由 WikiService 从 topics.json 装配注入） */
+  private topics: TopicDefinition[] = [];
+
+  setTopics(topics: TopicDefinition[]): void {
+    this.topics = topics;
+  }
 
   /** 按页面名派发上下文构建（供 PageRegistry 调用）。plannedPages 用于 readme 索引只列本次产出的页面 */
   buildByName(page: string, plannedPages?: string[]): unknown {
@@ -63,6 +72,7 @@ export class WikiContextBuilder {
   }
 
   private dispatchContext(page: string, plannedPages?: string[]): unknown {
+    if (isTopicPage(page)) return this.buildTopicContext(topicIdFromPage(page));
     switch (page) {
       case 'overview': return this.buildOverviewContext();
       case 'architecture': return this.buildArchitectureContext();
@@ -113,7 +123,7 @@ export class WikiContextBuilder {
         signature: (row[4] as string | null) ?? null,
       }))
       .map(s => ({ ...s, file: toKnownRelativePath(s.file, known, this.scanResult.rootDir) ?? '' }))
-      .filter(s => s.file !== '');
+      .filter(s => s.file !== '' && !isTestPath(s.file));
     if (supplementalSymbols.length === 0) return ctx;
     return { ...(ctx as Record<string, unknown>), supplementalSymbols };
   }
@@ -127,7 +137,9 @@ export class WikiContextBuilder {
 
   buildOverviewContext(): OverviewContext {
     const arch = this.client.getArchitecture();
+    // 入口文件只认生产代码（tests/fixtures 下的同名文件不算项目入口）
     const entryFiles = this.scanResult.files
+      .filter(f => !isTestPath(f.relativePath))
       .filter(f => ENTRY_FILE_NAMES.some(e => f.relativePath.endsWith('/' + e) || f.relativePath === e))
       .map(f => ({ name: f.relativePath.split('/').pop()!, path: f.relativePath }));
 
@@ -138,15 +150,29 @@ export class WikiContextBuilder {
       complexity: h.fan_in,
     }));
 
+    const pkgMeta = this.readPackageMeta();
+
     return {
       projectType: this.scanResult.projectType,
       hasTypeScript: this.scanResult.hasTypeScript,
       fileCount: this.scanResult.files.length,
       techStack: this.scanResult.techStack,
       sourceDirs: this.scanResult.sourceDirs,
+      packageName: pkgMeta.name,
+      packageDescription: pkgMeta.description,
       entryFiles,
       topSymbols,
     };
+  }
+
+  /** package.json 的 name/description（读取失败返回空串，诚实降级） */
+  private readPackageMeta(): { name: string; description: string } {
+    try {
+      const pkg = JSON.parse(readFileSync(join(this.scanResult.rootDir, 'package.json'), 'utf-8'));
+      return { name: pkg.name ?? '', description: pkg.description ?? '' };
+    } catch {
+      return { name: '', description: '' };
+    }
   }
 
   buildArchitectureContext(): ArchitectureContext {
@@ -160,10 +186,11 @@ export class WikiContextBuilder {
               n.signature AS sig, n.complexity AS cx, n.file_path AS file
        ORDER BY n.complexity DESC LIMIT 50`,
     );
-    // 按 package（文件路径段）聚合
+    // 按 package（文件路径段）聚合（跳过测试路径）
     const symbolsByPkg = new Map<string, ModuleSummary['symbols']>();
     for (const row of symQ.rows) {
       const file = (row[5] as string) ?? '';
+      if (isTestPath(file)) continue;
       const pkg = arch.packages.find(p => file.includes(`/${p.name}/`));
       if (!pkg) continue;
       if (!symbolsByPkg.has(pkg.name)) symbolsByPkg.set(pkg.name, []);
@@ -319,11 +346,11 @@ export class WikiContextBuilder {
        ORDER BY n.file_path, n.complexity DESC LIMIT 60`,
     );
 
-    // 按文件聚合符号
+    // 按文件聚合符号（跳过测试路径的文件）
     const symbolsByFile = new Map<string, Array<{ name: string; type: SymbolType; docstring?: string | null; signature?: string | null; complexity?: number }>>();
     for (const row of q.rows) {
       const file = row[5] as string;
-      if (!file) continue;
+      if (!file || isTestPath(file)) continue;
       if (!symbolsByFile.has(file)) symbolsByFile.set(file, []);
       symbolsByFile.get(file)!.push({
         name: row[0] as string,
@@ -380,12 +407,12 @@ export class WikiContextBuilder {
     const commands = entries
       .filter(e => isCommandEntry(e.name))
       .map(e => {
-        const snippet = this.safeGetSnippet(e.name);
+        const { description, startLine } = this.commandDescription(e.name);
         return {
           name: e.name,
           filePath: e.file,
-          startLine: snippet?.start_line ?? 0,
-          description: snippet?.docstring ?? '',
+          startLine,
+          description,
         };
       });
 
@@ -398,7 +425,9 @@ export class WikiContextBuilder {
        ORDER BY n.complexity DESC LIMIT 15`,
     );
 
-    const exportedFunctions = q.rows.map(row => {
+    const exportedFunctions = q.rows
+      .filter(row => !isTestPath((row[2] as string) ?? ''))
+      .map(row => {
       const qn = row[1] as string | null;
       const snippet = qn ? this.safeGetSnippet(qn) : null;
       return {
@@ -413,7 +442,7 @@ export class WikiContextBuilder {
     // 非命令的 entry point（无调用者的导出函数）并入导出函数表，按名去重
     const seen = new Set(exportedFunctions.map(f => f.name));
     for (const e of entries) {
-      if (isCommandEntry(e.name) || seen.has(e.name)) continue;
+      if (isCommandEntry(e.name) || seen.has(e.name) || isTestPath(e.file)) continue;
       const snippet = this.safeGetSnippet(e.name);
       exportedFunctions.push({
         name: e.name,
@@ -436,7 +465,8 @@ export class WikiContextBuilder {
       `MATCH (n) WHERE n.docstring IS NOT NULL AND n.is_test = false
          AND n.label IN ['Class', 'Method', 'Function', 'Interface']
        RETURN n.name AS name, n.label AS type, n.docstring AS doc,
-              n.signature AS sig, n.complexity AS cx, n.file_path AS file
+              n.signature AS sig, n.complexity AS cx, n.file_path AS file,
+              n.start_line AS line
        ORDER BY
          CASE n.label WHEN 'Class' THEN 0 WHEN 'Method' THEN 1 WHEN 'Function' THEN 2 ELSE 3 END,
          n.complexity DESC
@@ -445,10 +475,12 @@ export class WikiContextBuilder {
 
     const seen = new Set<string>();
     const symbols = q.rows
+      .filter(row => !isTestPath((row[5] as string) ?? ''))
       .map(row => ({
         name: row[0] as string,
         type: this.labelToSymbolType(row[1] as string),
         filePath: row[5] as string,
+        startLine: row[6] as number | undefined,
         docstring: (row[2] as string | null) ?? null,
         signature: (row[3] as string | null) ?? null,
         complexity: row[4] as number | undefined,
@@ -465,6 +497,7 @@ export class WikiContextBuilder {
 
   buildOnboardingContext(): OnboardingContext {
     const entryFiles = this.scanResult.files
+      .filter(f => !isTestPath(f.relativePath))
       .filter(f => ENTRY_FILE_NAMES.some(e => f.relativePath.endsWith('/' + e) || f.relativePath === e))
       .map(f => ({ name: f.relativePath.split('/').pop()!, path: f.relativePath }));
 
@@ -476,10 +509,11 @@ export class WikiContextBuilder {
     const arch = this.client.getArchitecture();
     const cliCommands = arch.entry_points
       .filter(e => e.name.startsWith('register') || e.name.includes('Command'))
+      .filter(e => !isTestPath(e.file))
       .slice(0, 10)
       .map(e => ({
         name: e.name.replace(/^register/, '').replace(/Command$/, '').toLowerCase() || e.name,
-        description: `CLI command in ${e.file}`,
+        description: this.commandDescription(e.name).description || `CLI command in ${e.file}`,
       }));
 
     // 首次运行最小示例
@@ -546,7 +580,7 @@ export class WikiContextBuilder {
           const calleeLine = (row[3] as number) ?? 0;
 
           if (callerName === calleeName) continue;
-          if (/\.(test|spec)\.|__tests__/.test(calleeFile)) continue;
+          if (isTestPath(calleeFile)) continue;
 
           const edgeKey = `${callerName}->${calleeName}`;
           if (globalSeen.has(edgeKey)) continue;
@@ -567,10 +601,21 @@ export class WikiContextBuilder {
       }
     }
 
-    // 扇入表：被调用最多的符号（从 hotspots 取）
-    const fanIn: CallsContext['fanIn'] = arch.hotspots.slice(0, 15).map(h => ({
+    // 扇入表：被调用最多的符号（从 hotspots 取），文件列查图谱取真实 file_path
+    const hotspotSlice = arch.hotspots.slice(0, 15);
+    const nameList = hotspotSlice.map(n => `"${n.name.replace(/"/g, '\\"')}"`).join(',');
+    const fileQ = this.client.queryGraph(
+      `MATCH (n) WHERE n.name IN [${nameList}] AND n.is_test = false
+       RETURN n.name AS name, n.file_path AS file LIMIT 15`,
+    );
+    const fileBySymbol = new Map<string, string>();
+    for (const row of fileQ.rows) {
+      const file = (row[1] as string) ?? '';
+      if (file && !isTestPath(file)) fileBySymbol.set(row[0] as string, file);
+    }
+    const fanIn: CallsContext['fanIn'] = hotspotSlice.map(h => ({
       symbol: h.name,
-      file: h.qualified_name.split('.').slice(-2, -1)[0] ?? '',
+      file: fileBySymbol.get(h.name) ?? '',
       inDegree: h.fan_in,
     }));
 
@@ -596,6 +641,7 @@ export class WikiContextBuilder {
     const classMap = new Map<string, ClassesContext['classes'][number]>();
     for (const row of q.rows) {
       const clsName = row[0] as string;
+      if (isTestPath((row[2] as string) ?? '')) continue;
       if (!classMap.has(clsName)) {
         classMap.set(clsName, {
           name: clsName,
@@ -620,6 +666,66 @@ export class WikiContextBuilder {
       classes: Array.from(classMap.values()),
       hasInheritance: false, // MCP 当前不支持 INHERITS 边
     };
+  }
+
+  /**
+   * 主题页数据源：主题文件集的符号 + 文件间 CALLS 边 + 相关跨包边界。
+   * 文件清单来自 topics.json（确定性锁定），查询复用现有 Cypher 模式。
+   */
+  buildTopicContext(topicId: string): TopicContext | null {
+    const def = this.topics.find(t => t.id === topicId);
+    if (!def) return null;
+
+    const fileList = def.files.map(f => `"${f.replace(/"/g, '\\"')}"`).join(',');
+    const symQ = this.client.queryGraph(
+      `MATCH (n) WHERE n.file_path IN [${fileList}] AND n.is_test = false
+         AND n.docstring IS NOT NULL AND n.label IN ['Class', 'Method', 'Function']
+       RETURN n.name AS name, n.label AS label, n.file_path AS file, n.start_line AS line,
+              n.docstring AS doc, n.signature AS sig, n.complexity AS cx
+       ORDER BY n.complexity DESC LIMIT 25`,
+    );
+    const symbols = symQ.rows
+      .filter(row => !isTestPath((row[2] as string) ?? ''))
+      .map(row => ({
+        name: row[0] as string,
+        type: this.labelToSymbolType(row[1] as string),
+        file: row[2] as string,
+        startLine: row[3] as number | undefined,
+        docstring: (row[4] as string | null) ?? null,
+        signature: (row[5] as string | null) ?? null,
+        complexity: row[6] as number | undefined,
+      }));
+
+    const edgeQ = this.client.queryGraph(
+      `MATCH (a)-[:CALLS]->(b)
+       WHERE a.file_path IN [${fileList}] AND b.file_path IN [${fileList}]
+         AND a.is_test = false AND b.is_test = false
+       RETURN a.name AS caller, b.name AS callee, b.file_path AS file, b.start_line AS line
+       LIMIT 30`,
+    );
+    const edges = edgeQ.rows
+      .filter(row => !isTestPath((row[2] as string) ?? ''))
+      .map(row => ({
+        caller: row[0] as string,
+        callee: row[1] as string,
+        file: row[2] as string,
+        line: (row[3] as number) ?? 0,
+      }));
+
+    // 主题涉及的跨包边界（文件所属 package 与边界端点匹配）
+    const arch = this.client.getArchitecture();
+    const topicPkgs = new Set<string>();
+    for (const file of def.files) {
+      for (const pkg of arch.packages) {
+        if (file.includes(`/${pkg.name}/`)) topicPkgs.add(pkg.name);
+      }
+    }
+    const boundaries = arch.boundaries
+      .filter(b => topicPkgs.has(b.from) || topicPkgs.has(b.to))
+      .slice(0, 5)
+      .map(b => ({ from: b.from, to: b.to, callCount: b.call_count }));
+
+    return { id: def.id, title: def.title, files: def.files, symbols, edges, boundaries };
   }
 
   /**
@@ -654,6 +760,12 @@ export class WikiContextBuilder {
         tier: p.tier,
         answer: p.answer,
       }));
+
+    // 主题页动态纳入索引（08-topics 组）
+    for (const name of planned) {
+      if (!isTopicPage(name)) continue;
+      docIndex.push({ file: pageRelPath(name), dir: TOPIC_DIR, tier: 'structure', answer: TOPIC_ANSWER });
+    }
 
     return { projectName, version, license, description, runtime, docIndex };
   }
@@ -746,6 +858,23 @@ export class WikiContextBuilder {
     return { commands, exitCodes };
   }
 
+  /** 命令入口的真实描述：docstring 优先，缺失时从 commander 源码 .command('name', 'desc') 提取 */
+  private commandDescription(entryName: string): { description: string; startLine: number } {
+    const snippet = this.safeGetSnippet(entryName);
+    const fromDoc = snippet?.docstring ?? '';
+    const fromCommand = snippet ? this.parseCommanderDescription(snippet.source ?? '') : '';
+    return {
+      description: fromDoc || fromCommand,
+      startLine: snippet?.start_line ?? 0,
+    };
+  }
+
+  /** 从 commander 源码提取 .command('name', 'description') 的描述文本 */
+  private parseCommanderDescription(source: string): string {
+    const m = source.match(/\.command\(\s*['"`][^'"`]+['"`]\s*,\s*['"`]([^'"`]+)['"`]/);
+    return m ? m[1] : '';
+  }
+
   /** 从 commander 源码解析 .option('flag', 'description') 调用 */
   private parseCommanderOptions(source: string): Array<{ flag: string; description: string }> {
     const options: Array<{ flag: string; description: string }> = [];
@@ -820,12 +949,13 @@ export class WikiContextBuilder {
     };
   }
 
-  /** 扫描源码 import，返回 依赖名 → import 它的文件列表 */
+  /** 扫描源码 import，返回 依赖名 → import 它的文件列表（仅生产代码） */
   private collectImportFiles(declaredDeps: Set<string>): Map<string, string[]> {
     const map = new Map<string, string[]>();
     const importRegex = /(?:import\s+(?:[\s\S]*?\s+from\s+)?|require\s*\(\s*)['"]([^'"./][^'"]*)['"]/g;
     for (const file of this.scanResult.files) {
       if (!file.extension.match(/^\.(ts|tsx|js|jsx|mjs|cjs)$/)) continue;
+      if (isTestPath(file.relativePath)) continue;
       try {
         const source = readFileSync(file.absolutePath, 'utf-8');
         let match: RegExpExecArray | null;

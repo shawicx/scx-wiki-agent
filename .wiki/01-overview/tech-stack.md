@@ -9,22 +9,13 @@
 - src/cli/index.ts
 - src/core/scanner.ts
 - src/knowledge/wiki-page-generator.ts
-- tests/cli/commands.test.ts
-- tests/core/scanner.test.ts
-- tests/helpers/mock-mcp-client.ts
-- tests/integration/mcp-build-pipeline.test.ts
-- tests/knowledge/config-detector.test.ts
-- tests/knowledge/wiki-builder.test.ts
-- tests/knowledge/wiki-context-builder.test.ts
-- tests/knowledge/wiki-evidence.test.ts
-- tests/knowledge/wiki-output-sanitizer.test.ts
+- tsup.config.ts
+- vitest.config.ts
 </details>
 
 技术栈与依赖说明。每个依赖均标注源码首个 import 点（R3 拒绝编造用途）。
 
 ## 核心依赖
-
-
 
 | 依赖 | 版本 | 首个 import 点 |
 | --- | --- | --- |
@@ -40,7 +31,7 @@
 | 依赖 | 版本 | 首个 import 点 |
 | --- | --- | --- |
 | `tsup` | ^8.5.1 | `tsup.config.ts` |
-| `vitest` | ^4.1.7 | `tests/cli/commands.test.ts` |
+| `vitest` | ^4.1.7 | `vitest.config.ts` |
 
 ## 声明未用依赖
 
@@ -52,8 +43,6 @@
 | `typescript` | ^6.0.3 |
 
 ## 运行时与构建
-
-
 
 | 项 | 值 |
 | --- | --- |

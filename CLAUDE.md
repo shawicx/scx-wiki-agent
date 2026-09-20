@@ -59,6 +59,7 @@ shared/           → Constants and utilities
 - **Anti-hallucination rules R1-R6** are injected into every LLM system prompt (`ANTI_HALLUCINATION` in `src/knowledge/wiki-page-generator.ts`): anchor enforcement, edge tables over sequence diagrams, no fabricated usage, structured output, 待确认 markers, diagram truthfulness.
 - **Quality gate is pure-function** (`wiki-quality-validator.ts`): empty-shell & secret are errors; dead-link / broken-anchor / thin-evidence / mermaid-ghost / diagram-misuse are warnings surfaced in the build report.
 - **Evidence anchoring is deterministic** — the `<details>` source-file block is injected by the tool from scanned file lists; LLMs never generate it.
+- **Adaptive topic pages** — up to 4 repo-specific cross-module topics (08-topics/) are derived deterministically from graph clusters (boundaries as fallback; skip when none qualify). Definitions are locked in `.scx-wiki-agent/topics.json` (hand-editable; `--refresh-topics` re-detects). Topic page names use the `topic:<id>` form throughout the pipeline.
 - **LLM prompts and all wiki output are in Chinese.** AI SDK v6 uses `maxOutputTokens` (not `maxTokens`).
 
 ### Adding a New Wiki Page

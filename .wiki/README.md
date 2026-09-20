@@ -15,8 +15,6 @@
 
 ## 01-overview/
 
-
-
 | 文档 | 层级 | 回答的问题 |
 | --- | --- | --- |
 | [01-overview/overview.md](01-overview/overview.md) | structure | 项目是什么、解决什么问题 |
@@ -24,8 +22,6 @@
 | [01-overview/environment.md](01-overview/environment.md) | operations | 运行时、包管理器、env 变量、脚本命令 |
 
 ## 02-architecture/
-
-
 
 | 文档 | 层级 | 回答的问题 |
 | --- | --- | --- |
@@ -35,8 +31,6 @@
 
 ## 03-interface/
 
-
-
 | 文档 | 层级 | 回答的问题 |
 | --- | --- | --- |
 | [03-interface/api.md](03-interface/api.md) | structure | 导出函数与 CLI 命令（带 file:line） |
@@ -44,15 +38,11 @@
 
 ## 04-design/
 
-
-
 | 文档 | 层级 | 回答的问题 |
 | --- | --- | --- |
 | [04-design/decisions.md](04-design/decisions.md) | structure | 架构决策记录（ADR：编号+状态+背景+决策+后果） |
 
 ## 05-guides/
-
-
 
 | 文档 | 层级 | 回答的问题 |
 | --- | --- | --- |
@@ -62,8 +52,6 @@
 
 ## 06-constraints/
 
-
-
 | 文档 | 层级 | 回答的问题 |
 | --- | --- | --- |
 | [06-constraints/conventions.md](06-constraints/conventions.md) | operations | 命名、导入、注释规范与禁止项 |
@@ -71,10 +59,15 @@
 
 ## 07-reference/
 
-
-
 | 文档 | 层级 | 回答的问题 |
 | --- | --- | --- |
 | [07-reference/calls.md](07-reference/calls.md) | structure | 调用关系边表（按入口分组，带 file:line） |
 | [07-reference/classes.md](07-reference/classes.md) | structure | 类清单与成员方法（继承树待 MCP 支持） |
 | [07-reference/glossary.md](07-reference/glossary.md) | structure | 类型/枚举字典（含成员值） |
+
+## 08-topics/
+
+| 文档 | 层级 | 回答的问题 |
+| --- | --- | --- |
+| [08-topics/topic-6.md](08-topics/topic-6.md) | structure | 仓库专属主题（图谱聚类推导） |
+| [08-topics/topic-9.md](08-topics/topic-9.md) | structure | 仓库专属主题（图谱聚类推导） |

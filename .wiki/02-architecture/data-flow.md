@@ -1,66 +1,103 @@
-# 数据流
+# 核心数据流
 
-> 遵守 R2（边表优于时序图）：本文用**阶段表**描述数据变换；符号级调用边见 [calls](../07-reference/calls.md)。
+<details>
+<summary>Relevant source files</summary>
 
-## 命令 1：`scan` 的数据流
+- src/cli/commands/build.ts
+- src/cli/commands/init.ts
+- src/cli/commands/scan.ts
+- src/cli/index.ts
+- src/core/scanner.ts
+- src/mcp/codebase-memory-client.ts
+- src/services/scan-service.ts
+- src/services/wiki-service.ts
+</details>
 
-| 阶段 | 输入 | 输出 | 关键函数 | 位置 |
-| --- | --- | --- | --- | --- |
-| 目录遍历 | 项目根目录 | `ScannedFile[]`（过滤 gitignore/隐藏目录/node_modules，仅保留 SUPPORTED_EXTENSIONS） | `FileScanner.walkDirectory` | `src/core/scanner.ts` |
-| 依赖收集 | `ScannedFile[]` 源码内容 | 被实际 import 的包名集合 | `FileScanner.collectImportedPackages` | `src/core/scanner.ts` |
-| 技术栈过滤 | package.json 依赖 ∪ import 集合 | `techStack`（死依赖被剔除；import 集为空则回退全量） | `FileScanner.detectTechStack` | `src/core/scanner.ts` |
-| 项目类型打分 | techStack + workspace 特征文件 | `ProjectType`（indicator 命中计分最高者） | `FileScanner.detectProjectType` | `src/core/scanner.ts` |
-| 输出 | `ScanResult` | 终端表格 | `scan.ts` action | `src/cli/commands/scan.ts` |
+> 本页基于执行序列数据描述项目从 CLI 入口到各服务的调用与数据流转路径。所有事实声明均带 `file:line` 锚点；调用关系以表格形式呈现（遵循 R2），不使用时序图。
 
-## 命令 2：`build` 的数据流（核心管线）
+## 数据流概览
 
-| 阶段 | 输入 | 输出 | 关键函数 | 位置 |
-| --- | --- | --- | --- | --- |
-| ① 扫描 | 项目根 | `ScanResult` | `FileScanner.scan` | `src/cli/commands/build.ts:46` |
-| ② 索引图谱 | 仓库绝对路径 | MCP `IndexResult`（幂等，mode=moderate） | `CodebaseMemoryClient.ensureIndexed` | `src/services/wiki-service.ts:24` |
-| ③ 页面集解析 | `--pages` 参数 + `scanResult.projectType` | 页名列表（默认=非 surface 页 + 按类型激活的 Tier2 页；非法页名告警跳过） | `WikiService.resolvePages` | `src/services/wiki-service.ts:29-60` |
-| ④ 配置探测 | 项目根 + 源文件列表 | environment/conventions/testing/constraints 信息 | `ConfigDetector.detect*` | `src/knowledge/config-detector.ts` |
-| ⑤ 上下文构建 | MCP 图谱（getArchitecture/queryGraph/getCodeSnippet）+ ScanResult + ConfigDetector | 每页一个 Context 对象（如 `CallsContext`） | `WikiContextBuilder.buildByName` | `src/knowledge/wiki-context-builder.ts:44-71` |
-| ⑥a LLM 生成（主路径） | Context JSON + 中文 system prompt（含四条铁律） | 流式 Markdown 文本 | `WikiPageGenerator.generateByName` → `generate`（`streamText`） | `src/knowledge/wiki-page-generator.ts` |
-| ⑥b 规则回退（降级路径） | 同一 Context | 确定性 Markdown（WikiBuilder 模板） | `WikiFallbackBuilder.buildByName` | `src/knowledge/wiki-fallback-builder.ts:31-53` |
-| ⑦ 输出清理 | LLM 原始输出 | 净化文本（去寒暄前导语/围栏） | `sanitizeWikiOutput` | `src/knowledge/wiki-output-sanitizer.ts` |
-| ⑧ 写盘 | 页名 + 净化文本 | `.wiki/<page>.md` | `writeFileSync` | `src/services/wiki-service.ts:48` |
+项目的执行起点是 CLI 程序工厂函数 `createProgram`（`src/cli/index.ts`），它负责把各个 CLI 子命令注册到命令行程序中。`createProgram` 分别调用 `registerInitCommand`（`src/cli/commands/init.ts:6`）、`registerScanCommand`（`src/cli/commands/scan.ts:4`）与 `registerBuildCommand`（`src/cli/commands/build.ts:9`），从而完成命令层的组装。
 
-### ⑥ 的降级逻辑（错误路径）
+命令注册后，各子命令在运行时实例化并调用其依赖的服务与核心组件。`registerBuildCommand`（`src/cli/commands/build.ts`）在构建流程中分别触达 `FileScanner`（`src/core/scanner.ts:37`）、`CodebaseMemoryClient`（`src/mcp/codebase-memory-client.ts:119`）与 `WikiService`（`src/services/wiki-service.ts:28`）；`registerScanCommand`（`src/cli/commands/scan.ts`）则触达 `ScanService`（`src/services/scan-service.ts:3`）。
 
-```text
-generatePage(page):
-  context = ctx.buildByName(page)          → null 则跳过该页（返回 ''，不写盘内容为空）
-  if noLlm 或 未配置模型 → fallback
-  try LLM:
-    content 非空 → sanitizeWikiOutput → 返回
-    content 为空 → 落到 fallback
-  catch（网络/超时/任何异常）→ 落到 fallback
+数据在模块间的流转体现为：CLI 命令层接收用户输入 → 调用核心/服务组件（扫描、内存客户端、Wiki 服务、扫描服务）→ 由这些组件执行具体的数据处理。以下阶段表按调用序列中出现的转换步骤进行归纳。
+
+## 数据阶段表
+
+下表按数据流经过的处理阶段列出：输入类型、输出类型、关键函数与源文件锚点。由于提供的数据仅包含调用点位（未包含参数与返回值定义），输入/输出类型标注为「待确认」并说明缺证内容。
+
+| 阶段 | 输入类型 | 输出类型 | 关键函数 | 源文件:行号 |
+|------|----------|----------|----------|-------------|
+| 程序组装与命令注册 | 待确认（缺 CLI context/argv 定义） | 待确认（缺 program 返回类型定义） | `createProgram` | `src/cli/index.ts` |
+| 注册 init 命令 | 待确认 | 待确认 | `registerInitCommand` | `src/cli/commands/init.ts:6` |
+| 注册 scan 命令 | 待确认 | 待确认 | `registerScanCommand` | `src/cli/commands/scan.ts:4` |
+| 注册 build 命令 | 待确认 | 待确认 | `registerBuildCommand` | `src/cli/commands/build.ts:9` |
+| 扫描构建输入（build 路径） | 待确认 | 待确认 | `FileScanner` | `src/core/scanner.ts:37` |
+| 与代码库内存客户端交互（build 路径） | 待确认 | 待确认 | `CodebaseMemoryClient` | `src/mcp/codebase-memory-client.ts:119` |
+| Wiki 生成/处理（build 路径） | 待确认 | 待确认 | `WikiService` | `src/services/wiki-service.ts:28` |
+| 扫描服务执行（scan 路径） | 待确认 | 待确认 | `ScanService` | `src/services/scan-service.ts:3` |
+
+> 说明：数据提供了调用点位（构造函数或调用的 `file:line`），但未提供各函数的参数签名与返回类型，因此无法安全推断每个阶段的输入/输出数据类型，统一标注「待确认」。
+
+## 调用关系边表
+
+以下边表列出该数据集中所有可静态确认的调用/引用关系（替代时序图表达静态可达性）。每条边均来自 `sequences` 数据中的 `messages`。
+
+| 调用方 | 被调用方 | 位置 |
+|--------|----------|------|
+| `createProgram` | `registerInitCommand` | `src/cli/commands/init.ts:6` |
+| `createProgram` | `registerScanCommand` | `src/cli/commands/scan.ts:4` |
+| `createProgram` | `registerBuildCommand` | `src/cli/commands/build.ts:9` |
+| `registerBuildCommand` | `FileScanner` | `src/core/scanner.ts:37` |
+| `registerBuildCommand` | `CodebaseMemoryClient` | `src/mcp/codebase-memory-client.ts:119` |
+| `registerBuildCommand` | `WikiService` | `src/services/wiki-service.ts:28` |
+| `registerScanCommand` | `ScanService` | `src/services/scan-service.ts:3` |
+
+> 注：`registerBuildCommand` → `FileScanner` / `CodebaseMemoryClient` / `WikiService` 与 `registerScanCommand` → `ScanService` 等边，其 `location` 指向被调用方的类定义起始行。由于数据未给出确切调用表达式所在行，此处以 `messages[].location` 原文为准，不做推断。
+
+## 模块依赖图
+
+下图节点均取自数据中的真实模块文件路径与符号名，边表示数据中记录的调用/注册关系。
+
+```mermaid
+graph TD
+    createProgram["createProgram<br/>src/cli/index.ts"]
+    registerInitCommand["registerInitCommand<br/>src/cli/commands/init.ts"]
+    registerScanCommand["registerScanCommand<br/>src/cli/commands/scan.ts"]
+    registerBuildCommand["registerBuildCommand<br/>src/cli/commands/build.ts"]
+    FileScanner["FileScanner<br/>src/core/scanner.ts"]
+    CodebaseMemoryClient["CodebaseMemoryClient<br/>src/mcp/codebase-memory-client.ts"]
+    WikiService["WikiService<br/>src/services/wiki-service.ts"]
+    ScanService["ScanService<br/>src/services/scan-service.ts"]
+
+    createProgram --> registerInitCommand
+    createProgram --> registerScanCommand
+    createProgram --> registerBuildCommand
+    registerBuildCommand --> FileScanner
+    registerBuildCommand --> CodebaseMemoryClient
+    registerBuildCommand --> WikiService
+    registerScanCommand --> ScanService
 ```
 
-## 子流程：⑤ 中的图谱查询模式
+## 错误路径
 
-`WikiContextBuilder` 各 build*Context 使用三类数据获取方式（均为对 `CodebaseMemoryClient` 的调用）：
+本数据集（`sequences` 与 `supplementalSymbols`）中**未包含任何错误处理、异常抛出或报错分支的调用信息**。因此：
 
-| 模式 | 用途 | 典型调用 |
-| --- | --- | --- |
-| 一次性架构概览 | packages/entry_points/hotspots/layers/clusters | `getArchitecture()` |
-| Cypher 边查询 | CALLS 边、DEFINES_METHOD 边、复杂度筛选 | `queryGraph(...)`（如 calls 页 BFS 两层） |
-| 单符号片段 | 源码/docstring/签名（容错，失败返回 null） | `safeGetSnippet(qn)` → `getCodeSnippet` |
+- 无法描述任何错误路径调用链，标注为「待确认」。
+- 待确认项：各命令/服务的异常捕获、错误传播及失败回退逻辑所在代码位置，需补充源码中的 `try/catch`、`throw`、错误回调等证据。
 
-## 子流程：MCP 子进程调用（每次查询）
+## 待确认与信息缺口
 
-| 阶段 | 输入 | 输出 | 位置 |
-| --- | --- | --- | --- |
-| 序列化 | tool 名 + args 对象 | `codebase-memory-mcp cli <tool> '<json>'` argv | `CodebaseMemoryClient.exec` |
-| 执行 | argv | stdout（可能混入 `level=info` 日志行） | `execFileSync`（timeout 120s，maxBuffer 100MB） |
-| 解析 | stdout | 从末尾向前第一个可解析的 JSON 行 | `parseJsonOutput` |
+- **函数签名与数据类型**：数据仅含调用点位，未提供参数与返回类型，所有阶段的输入/输出类型均待确认。
+- **数据承载内容**：`FileScanner`、`CodebaseMemoryClient`、`WikiService`、`ScanService` 之间是否存在进一步的数据传递（如扫描结果→客户端索引→Wiki 生成）在本数据中无证据，故不作推断。
+- **初始化命令链路**：`registerInitCommand`（`src/cli/commands/init.ts`）在数据中作为被 `createProgram` 调用的节点出现，但未记录其进一步的调用边，无法描述其数据流。
+- **入口之外的调用方**：`registerBuildCommand` / `registerScanCommand` 是否被 `createProgram` 之外的路径调用，数据中无记录。
 
-## 命令 3：`init` 的数据流
+## 数据来源说明
 
-仅两次幂等 `mkdirSync`（`.scx-wiki-agent/cache/`、`.wiki/`），无数据变换（`src/cli/commands/init.ts`）。
-
+本页全部结论基于执行序列数据（`sequences`）中的 `participants` 与 `messages`，以及各节点附带的 `file` / `location` 字段。未纳入 `tests/` 下任何代码作为功能描述依据；数据中亦未出现相关测试节点。
 ## Related
 
-- Code: `src/services/wiki-service.ts` · `src/knowledge/wiki-context-builder.ts` · `src/mcp/codebase-memory-client.ts`
-- Docs: [architecture](architecture.md) · [calls](../07-reference/calls.md) · [cli-commands](../03-interface/cli-commands.md)
+- 同目录：[architecture.md](architecture.md) · [modules.md](modules.md)
+- 总入口：[README](../README.md)

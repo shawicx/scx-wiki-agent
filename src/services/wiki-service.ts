@@ -8,10 +8,11 @@ import { WikiPageGenerator } from '../knowledge/wiki-page-generator.js';
 import { sanitizeWikiOutput } from '../knowledge/wiki-output-sanitizer.js';
 import { validatePageContent } from '../knowledge/wiki-quality-validator.js';
 import type { PageQualityReport } from '../knowledge/wiki-quality-validator.js';
+import { collectEvidenceFiles, buildEvidenceBlock, injectEvidenceBlock } from '../knowledge/wiki-evidence.js';
 import { ConfigDetector } from '../knowledge/config-detector.js';
 import {
   PAGE_REGISTRY, ALL_PAGE_NAMES, tier2PagesFor,
-  findPageDescriptor, pageRelPath, buildRelatedSection,
+  findPageDescriptor, pageRelPath, buildRelatedSection, RETIRED_WIKI_PATHS,
 } from '../knowledge/page-registry.js';
 import type { WikiBuildOptions } from '../knowledge/types.js';
 
@@ -50,8 +51,11 @@ export class WikiService {
     const noLlm = options?.noLlm ?? false;
     const onChunk = options?.onChunk ?? (() => {});
 
-    // 接管式重建：清理旧版扁平产物（wiki 根下本工具页面同名的 ${page}.md）
-    const legacyRemoved = this.cleanupLegacyFlatFiles(wikiDir, pages);
+    // 接管式重建：清理旧版扁平产物 + 已退休页面路径的残留
+    const legacyRemoved = [
+      ...this.cleanupLegacyFlatFiles(wikiDir, pages),
+      ...this.cleanupRetiredPages(wikiDir),
+    ];
 
     // 质量闸门输入：本次计划写入的页面路径 + 仓库真实文件清单
     const plannedPaths = new Set(pages.map(p => pageRelPath(p)));
@@ -66,24 +70,32 @@ export class WikiService {
     for (const page of pages) {
       const relPath = pageRelPath(page);
 
+      const pageContext = contextBuilder.buildByName(page, pages);
+      if (pageContext === null || pageContext === undefined) {
+        skippedPages.push({ page, reason: '页面 context 未实现，跳过写盘' });
+        continue;
+      }
+
       // LLM 输出在生成阶段过闸：error 级违规直接降级规则路径
       const gate = (content: string): boolean =>
         validatePageContent(content, { page, pagePath: relPath, knownFiles, plannedPaths }).passed;
 
       const produced = await this.generatePage(
-        page, contextBuilder, fallbackBuilder, pageGenerator, noLlm, onChunk, gate, pages,
+        page, pageContext, fallbackBuilder, pageGenerator, noLlm, onChunk, gate,
       );
-      if (produced === null) {
-        skippedPages.push({ page, reason: '页面 context 未实现，跳过写盘' });
-        continue;
-      }
 
-      // 页底 Related 区块（确定性追加，只链接计划内页面）
-      const content = produced.content + buildRelatedSection(page, pages);
+      // 页首证据锚定块（确定性注入，LLM 无法伪造）+ 页底 Related 区块
+      const evidenceFiles = collectEvidenceFiles(pageContext, knownFiles, this.scanResult.rootDir);
+      const content =
+        injectEvidenceBlock(produced.content, buildEvidenceBlock(evidenceFiles)) +
+        buildRelatedSection(page, pages);
 
       // 写盘前质量闸门（LLM 与规则路径都过闸）
       const report = validatePageContent(
-        content, { page, pagePath: relPath, knownFiles, plannedPaths },
+        content, {
+          page, pagePath: relPath, knownFiles, plannedPaths,
+          tier: findPageDescriptor(page)?.tier,
+        },
       );
       qualityReports.push(report);
       if (!report.passed) {
@@ -171,19 +183,28 @@ export class WikiService {
     return removed;
   }
 
+  /** 清理已退休页面路径的残留文件（改名/下线登记于 RETIRED_WIKI_PATHS） */
+  private cleanupRetiredPages(wikiDir: string): string[] {
+    const removed: string[] = [];
+    for (const rel of RETIRED_WIKI_PATHS) {
+      const target = join(wikiDir, rel);
+      if (existsSync(target)) {
+        rmSync(target);
+        removed.push(rel);
+      }
+    }
+    return removed;
+  }
+
   private async generatePage(
     page: string,
-    ctx: WikiContextBuilder,
+    pageContext: unknown,
     fallback: WikiFallbackBuilder,
     generator: WikiPageGenerator,
     noLlm: boolean,
     onChunk: (filename: string, text: string) => void,
     gate?: (content: string) => boolean,
-    plannedPages?: string[],
-  ): Promise<PageProduced | null> {
-    const pageContext = ctx.buildByName(page, plannedPages);
-    if (pageContext === null) return null;
-
+  ): Promise<PageProduced> {
     if (!noLlm && generator.hasModel()) {
       try {
         const content = await generator.generateByName(page, pageContext, (text) => onChunk(page, text));
@@ -232,7 +253,7 @@ export class WikiService {
     }
 
     if (legacyRemoved.length > 0) {
-      lines.push(`  清理旧扁平产物 ${legacyRemoved.length} 个：${legacyRemoved.join(', ')}`);
+      lines.push(`  清理陈旧产物 ${legacyRemoved.length} 个：${legacyRemoved.join(', ')}`);
     }
 
     if (skipped.length > 0) {
@@ -248,6 +269,11 @@ export class WikiService {
     );
     if (anchors.total > 0) {
       lines.push(`  锚点核验：${anchors.valid}/${anchors.total} 可追溯到扫描文件清单`);
+    }
+
+    const evidenceCovered = reports.filter(r => r.evidence > 0).length;
+    if (reports.length > 0) {
+      lines.push(`  证据锚定：${evidenceCovered}/${reports.length} 页含源文件锚定块`);
     }
 
     const warns = reports.flatMap(r => r.issues.filter(i => i.severity === 'warn'));

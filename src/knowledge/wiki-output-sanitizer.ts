@@ -19,14 +19,14 @@ const PREAMBLE_PATTERNS = [
  * 处理顺序：先 stripPreamble（把 ``` 也视为结构行，截到围栏处），
  * 再 stripCodeFences（此时围栏已在开头）。
  *
- * @param pageName 页面名，用于 R2 sequenceDiagram 违规告警（data-flow 等页禁用时序图）
+ * @param pageName 页面名，用于 R2 sequenceDiagram 违规告警（仅 calls 页允许时序图）
  */
 export function sanitizeWikiOutput(raw: string, pageName?: string): string {
   let text = stripPreamble(raw);
   text = stripCodeFences(text);
-  // R2: data-flow 页禁用 sequenceDiagram 表达调用关系（仅告警，不修改）
-  if (pageName === 'data-flow' && /sequenceDiagram/.test(text)) {
-    console.warn('[wiki-sanitizer] R2 违规：data-flow.md 检测到 sequenceDiagram，应改用 calls.md 边表。');
+  // R2: sequenceDiagram 仅允许出现在 calls 页（其他页应使用边表）
+  if (pageName && pageName !== 'calls' && /sequenceDiagram/.test(text)) {
+    console.warn(`[wiki-sanitizer] R2 违规：${pageName}.md 检测到 sequenceDiagram，应改用边表（时序图仅 calls 页允许）。`);
   }
   return text.trim();
 }

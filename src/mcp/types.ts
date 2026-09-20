@@ -58,40 +58,9 @@ export interface TraceResult {
   callees?: TraceNode[];
 }
 
-/** search_graph 返回的节点 */
-export interface GraphSearchResult {
-  name: string;
-  qualified_name: string;
-  label: string;
-  file_path: string;
-  in_degree: number;
-  out_degree: number;
-  complexity: number;
-  lines: number;
-  is_exported: boolean;
-  is_test: boolean;
-  is_entry_point: boolean;
-}
-
 /** query_graph (Cypher) 返回 */
 export interface QueryResult {
   columns: string[];
   rows: unknown[][];
   total?: number;
-}
-
-/** detect_changes 返回 */
-export interface ChangeResult {
-  project: string;
-  changed?: boolean;
-  summary?: string;
-}
-
-/** search_graph 查询参数 */
-export interface SearchGraphParams {
-  query?: string;
-  label?: string;
-  name_pattern?: string;
-  file_pattern?: string;
-  limit?: number;
 }

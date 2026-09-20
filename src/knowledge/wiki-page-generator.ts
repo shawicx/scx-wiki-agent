@@ -6,11 +6,12 @@ import type {
   DataFlowContext,
   ModulesContext,
   ApiContext,
-  BusinessContext,
-  DesignDecisionsContext,
   GlossaryContext,
   OnboardingContext,
   TroubleshootingContext,
+  DecisionsContext,
+  TestingContext,
+  ConstraintsContext,
 } from './types.js';
 
 interface PageConfig {
@@ -52,11 +53,12 @@ export class WikiPageGenerator {
       case 'data-flow': return this.generateDataFlow(ctx, onChunk);
       case 'modules': return this.generateModules(ctx, onChunk);
       case 'api': return this.generateApi(ctx, onChunk);
-      case 'business': return this.generateBusiness(ctx, onChunk);
-      case 'design-decisions': return this.generateDesignDecisions(ctx, onChunk);
       case 'onboarding': return this.generateOnboarding(ctx, onChunk);
       case 'troubleshooting': return this.generateTroubleshooting(ctx, onChunk);
       case 'glossary': return this.generateGlossary(ctx, onChunk);
+      case 'decisions': return this.generateDecisions(ctx, onChunk);
+      case 'testing': return this.generateTesting(ctx, onChunk);
+      case 'constraints': return this.generateConstraints(ctx, onChunk);
       default: return '';
     }
   }
@@ -91,6 +93,7 @@ export class WikiPageGenerator {
             docstring: s.docstring,
             complexity: s.complexity,
           })),
+        supplementalSymbols: ctx.supplementalSymbols ?? [],
       }, null, 2),
       maxOutputTokens: 8000,
     });
@@ -134,6 +137,7 @@ export class WikiPageGenerator {
         layers: ctx.layers,
         boundaries: ctx.boundaries,
         clusters: ctx.clusters,
+        supplementalSymbols: ctx.supplementalSymbols ?? [],
       }, null, 2),
       maxOutputTokens: 8000,
     });
@@ -168,7 +172,7 @@ export class WikiPageGenerator {
 - 每条事实声明必须带 file:line 或函数名锚点（R1 锚点强制）
 - 严禁使用 sequenceDiagram 表达调用关系（R2 边表优于时序图）；调用关系详见 calls.md
 - 内容要充实，要让读者理解数据在各阶段如何变换`,
-      userPrompt: JSON.stringify({ sequences }, null, 2),
+      userPrompt: JSON.stringify({ sequences, supplementalSymbols: ctx.supplementalSymbols ?? [] }, null, 2),
       maxOutputTokens: 8000,
     });
   }
@@ -206,10 +210,15 @@ export class WikiPageGenerator {
   - "交互方式"：与其他模块的协作方式（基于 dependsOn 和 usedBy）
   - "文件结构"：用表格列出该模块的文件及其关键符号和职责（文件名 | 关键符号 | 职责）
   - "核心符号"：对每个 topSymbol，用1-2句说明其用途（基于 docstring/signature）
+- 如果提供 otherModules（模块过多时的概要聚合），在文末用一张表汇总其名称与规模，严禁虚构聚合模块的内部细节
 - 不要输出原始代码片段，但要引用关键函数的签名
 - 按模块重要性排序
 - 内容要充实，每个模块都要有实质性的深入描述`,
-      userPrompt: JSON.stringify({ modules }, null, 2),
+      userPrompt: JSON.stringify({
+        modules,
+        otherModules: ctx.otherModules ?? [],
+        supplementalSymbols: ctx.supplementalSymbols ?? [],
+      }, null, 2),
       maxOutputTokens: 8000,
     });
   }
@@ -248,69 +257,7 @@ export class WikiPageGenerator {
           file: `${f.filePath}:${f.startLine}`,
         })),
         frameworkNodes: nodes.map(n => ({ name: n.name, type: n.type, file: n.filePath })),
-      }, null, 2),
-      maxOutputTokens: 8000,
-    });
-  }
-
-  async generateBusiness(ctx: BusinessContext, onChunk: (text: string) => void): Promise<string> {
-    const services = ctx.services.map(s => ({
-      name: s.name,
-      filePath: s.filePath,
-      methods: s.methods
-        .filter((m, i, a) => a.findIndex(t => t.name === m.name) === i)
-        .slice(0, 10)
-        .map(m => ({
-          name: m.name,
-          visibility: m.visibility,
-          docstring: m.docstring,
-        })),
-      dependencies: [...new Set(s.dependencies.map(d => d.target))].slice(0, 5),
-      codeSnippet: s.codeSnippet,
-    }));
-
-    return this.generate(onChunk, {
-      systemPrompt: `你是一个资深代码文档专家。请根据业务服务数据生成详尽、专业的业务逻辑文档页面（Markdown格式）。
-
-重要：只描述数据中实际存在的服务和方法，严禁编造。如果一个服务只有一个类，就如实描述它是单个类（不要拆分成"两个服务"）。
-
-要求：
-- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- "业务架构概述"：用2-3段概述项目的业务架构、服务/类的组织方式、协作模式
-- 对每个服务/类，包含：
-  - "职责"：该类承担的核心职责（基于 codeSnippet 和方法的 docstring）
-  - "关键方法"：用表格列出方法（方法名 | 可见性 | 说明），引用每个方法的 docstring
-  - "设计意图"：这个类为什么这样设计、在架构中的角色
-- "服务协作"章节：分析服务/类之间的依赖关系和协作方式
-- 如实反映数据：如果一个类同时有 register/getClient 等方法，说明它们是同一个类的不同方法，不要拆分成多个服务
-- 内容要充实，每个服务/类都要有实质性描述`,
-      userPrompt: JSON.stringify({ services }, null, 2),
-      maxOutputTokens: 8000,
-    });
-  }
-
-  async generateDesignDecisions(ctx: DesignDecisionsContext, onChunk: (text: string) => void): Promise<string> {
-    return this.generate(onChunk, {
-      systemPrompt: `你是一个资深软件架构师。请根据设计模式和技术选型数据生成详尽、专业的设计决策文档页面（Markdown格式）。
-
-要求：
-- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- "设计哲学"：用2-3段概述项目的设计哲学和核心设计原则
-- "设计模式分析"：对每个检测到的设计模式，详细说明：
-  - 模式名称和定义
-  - 在项目中的具体应用（引用相关文件和类名）
-  - 解决了什么问题、带来的好处
-  - 相关文件路径
-- "技术选型"：对每项技术，详细说明：
-  - 技术名称和版本
-  - 选型理由（为什么选它而非替代品）
-  - 在项目中的具体角色
-  - 与其他技术如何配合
-- 用自然语言深入分析，不要只列举
-- 内容要充实，每个模式和选型都要有充分的论证`,
-      userPrompt: JSON.stringify({
-        patterns: ctx.patterns,
-        techChoices: ctx.techChoices,
+        supplementalSymbols: ctx.supplementalSymbols ?? [],
       }, null, 2),
       maxOutputTokens: 8000,
     });
@@ -391,7 +338,62 @@ export class WikiPageGenerator {
           signature: s.signature,
           complexity: s.complexity,
         })),
+        supplementalSymbols: ctx.supplementalSymbols ?? [],
       }, null, 2),
+      maxOutputTokens: 8000,
+    });
+  }
+
+  async generateDecisions(ctx: DecisionsContext, onChunk: (text: string) => void): Promise<string> {
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个资深软件架构师。请根据 ADR 数据生成详尽、专业的架构决策记录页面（Markdown格式）。
+
+要求：
+- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
+- 开头一段说明本页定位：记录影响架构走向的关键决策及其代价
+- 对每条 ADR，包含："编号+标题"作为章节，章节内先用表格列出（状态/背景/决策/后果/相关文件），再用1-2段深入解读该决策的动机与代价
+- 状态必须原样保留（如 proposed），严禁改为 accepted；fromMcp 为 false 时必须保留「自动推导/待确认」的诚实说明，禁止伪装成人工评审过的决策
+- "相关文件"必须只使用提供的 files 锚点，严禁添加数据之外的文件
+- "决策脉络"章节：分析各决策之间的关联（如分层决策如何约束模块边界、技术选型如何固化分层）
+- 内容要充实，让读者理解决策的 why 而不仅是 what`,
+      userPrompt: JSON.stringify({
+        adrs: ctx.adrs,
+        fromMcp: ctx.fromMcp,
+        supplementalSymbols: ctx.supplementalSymbols ?? [],
+      }, null, 2),
+      maxOutputTokens: 8000,
+    });
+  }
+
+  async generateTesting(ctx: TestingContext, onChunk: (text: string) => void): Promise<string> {
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个资深代码文档专家。请根据测试配置探测结果生成详尽、专业的测试文档页面（Markdown格式）。
+
+要求：
+- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
+- "测试体系概览"：用表格列出框架/配置文件/测试目录/夹具目录的事实
+- "运行方式"：基于 runCommand 给出完整命令，说明其做了什么、预期产出
+- "测试策略解读"：基于检测到的事实（框架特性、目录组织、夹具位置）用1-2段分析项目的测试策略与覆盖重点
+- 未检测到的项（framework 为 null 等）必须诚实标注「未检测到」，严禁编造框架特性、用例数量或覆盖率数字（R5）
+- 内容要充实，让读者知道如何运行测试、测试覆盖了什么`,
+      userPrompt: JSON.stringify({ ...ctx }, null, 2),
+      maxOutputTokens: 8000,
+    });
+  }
+
+  async generateConstraints(ctx: ConstraintsContext, onChunk: (text: string) => void): Promise<string> {
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个资深代码文档专家。请根据限制常量与复杂度数据生成详尽、专业的约束文档页面（Markdown格式）。
+
+要求：
+- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
+- "限制常量"：用表格列出（常量 | 值 | 源文件），并逐个解读该常量防止的是什么失控场景（超时/内存/规模上限等）
+- "复杂度热点"：用表格列出（函数 | 源文件 | 复杂度 | 循环深度），对复杂度最高的前几个函数深入分析潜在风险与重构方向
+- "已知边界"：总结上述数据反映出的项目边界（哪些地方最脆弱、改动代价在哪）
+- 无数据的分类诚实标注「未检测到」，严禁编造阈值或性能数字（R5）
+- 每条事实声明必须带 file 锚点（R1）
+- 内容要充实，让读者理解项目的硬边界与维护成本所在`,
+      userPrompt: JSON.stringify({ ...ctx }, null, 2),
       maxOutputTokens: 8000,
     });
   }
@@ -409,6 +411,9 @@ export class WikiPageGenerator {
     'R3 拒绝编造用途：任何依赖/函数的"用途"必须有源码调用点佐证；无调用点则标注"声明未用"。',
     'R4 结构化优先：用表格/列表而非散文；签名用代码块。',
     'R5 待确认标记：数据不足以描述的方面，写「待确认」并简述缺什么证据，禁止猜测或编造合理化解释。',
+    'R6 图表真实性：Mermaid 图中的节点/标签必须来自数据中的真实模块名、符号名或文件路径；无继承数据时严禁编造 classDiagram 继承边。',
+    '',
+    '图表选型指引：模块依赖→graph TD；调用关系→表格（R2）；数据流→阶段表；类层次→仅当数据含继承关系时用 classDiagram；状态变迁→仅当数据含状态枚举与转换证据时用 stateDiagram。',
     '',
     '页面质量要求（project-wiki 方法论）：',
     '- 单页最低内容：开头一句话说明本页职责，随后是基于数据的事实要点（表格/列表优先），不产出空章节。',

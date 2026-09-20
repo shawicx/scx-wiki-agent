@@ -2,6 +2,15 @@
 
 import type { SymbolType, RelationType } from '../core/types.js';
 
+/** Hotspot 补强符号：structure 页证据不足时从图谱补充的真实符号（二次扩展检索） */
+export interface SupplementalSymbol {
+  name: string;
+  type: SymbolType;
+  file: string;
+  complexity?: number;
+  signature?: string | null;
+}
+
 /** Context for overview page */
 export interface OverviewContext {
   projectType: string;
@@ -11,6 +20,7 @@ export interface OverviewContext {
   sourceDirs: string[];
   entryFiles: Array<{ name: string; path: string }>;
   topSymbols: Array<{ name: string; type: SymbolType; docstring?: string | null; complexity?: number }>;
+  supplementalSymbols?: SupplementalSymbol[];
 }
 
 /** Module summary for architecture and modules pages */
@@ -38,6 +48,7 @@ export interface ArchitectureContext {
   boundaries?: Array<{ from: string; to: string; callCount: number }>;
   /** 聚类（来自 MCP get_architecture） */
   clusters?: Array<{ label: string; members: number; topNodes: string[] }>;
+  supplementalSymbols?: SupplementalSymbol[];
 }
 
 /** A participant in a sequence diagram (function/class/module) */
@@ -67,11 +78,15 @@ export interface ExecutionSequence {
 /** Context for data-flow page */
 export interface DataFlowContext {
   sequences: ExecutionSequence[];
+  supplementalSymbols?: SupplementalSymbol[];
 }
 
 /** Context for modules page */
 export interface ModulesContext {
   modules: ModuleSummary[];
+  /** 模块数超过详述上限时的概要聚合（其余模块只列名称与规模） */
+  otherModules?: Array<{ name: string; fileCount: number; symbolCount: number }>;
+  supplementalSymbols?: SupplementalSymbol[];
 }
 
 /** Context for api page */
@@ -96,34 +111,7 @@ export interface ApiContext {
     startLine: number;
     metadata: Record<string, unknown>;
   }>;
-}
-
-/** Context for business page */
-export interface BusinessContext {
-  services: Array<{
-    name: string;
-    filePath: string;
-    methods: Array<{ name: string; visibility: string | null; docstring?: string | null }>;
-    dependencies: Array<{ target: string; type: RelationType }>;
-    codeSnippet: string;
-  }>;
-}
-
-/** Detected design pattern */
-export interface DesignPattern {
-  pattern: string;
-  evidence: string[];
-  files: string[];
-}
-
-/** Context for design-decisions page */
-export interface DesignDecisionsContext {
-  patterns: DesignPattern[];
-  techChoices: Array<{
-    technology: string;
-    category: string;
-    evidence: string[];
-  }>;
+  supplementalSymbols?: SupplementalSymbol[];
 }
 
 /** Context for glossary page */
@@ -136,6 +124,7 @@ export interface GlossaryContext {
     signature?: string | null;
     complexity?: number;
   }>;
+  supplementalSymbols?: SupplementalSymbol[];
 }
 
 /** Context for calls page (调用边表，R2 边表优于时序图) */
@@ -220,6 +209,7 @@ export interface DecisionsContext {
   }>;
   /** 是否来自 MCP 持久化（false=自动降级生成） */
   fromMcp: boolean;
+  supplementalSymbols?: SupplementalSymbol[];
 }
 
 /** Context for environment page (运行态) */
@@ -291,17 +281,6 @@ export interface TroubleshootingContext {
   techStack: string[];
   modules: Array<{ name: string }>;
 }
-
-/** Union type for all page contexts */
-export type WikiPageContext =
-  | OverviewContext
-  | ArchitectureContext
-  | DataFlowContext
-  | ModulesContext
-  | ApiContext
-  | BusinessContext
-  | DesignDecisionsContext
-  | GlossaryContext;
 
 /** Build options for wiki generation */
 export interface WikiBuildOptions {

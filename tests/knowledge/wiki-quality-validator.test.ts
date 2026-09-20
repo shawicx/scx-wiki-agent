@@ -89,3 +89,49 @@ describe('validatePageContent', () => {
     expect(r.issues.some(i => i.rule === 'dead-link')).toBe(false);
   });
 });
+
+describe('证据锚定与图表规则', () => {
+  const evidencePage = (n: number): string =>
+    `# Overview\n\n<details>\n<summary>Relevant source files</summary>\n\n${
+      Array.from({ length: n }, (_, i) => `- src/file${i}.ts`).join('\n')
+    }\n</details>\n\n正文见 \`src/index.ts:1\`。`;
+
+  it('structure 页证据不足产生 thin-evidence 告警（warn，不拦截）', () => {
+    const r = validatePageContent(evidencePage(2), { ...baseOpts, tier: 'structure' });
+    expect(r.passed).toBe(true);
+    expect(r.evidence).toBe(2);
+    expect(r.issues.some(i => i.rule === 'thin-evidence')).toBe(true);
+  });
+
+  it('structure 页证据达标不告警', () => {
+    const r = validatePageContent(evidencePage(3), { ...baseOpts, tier: 'structure' });
+    expect(r.evidence).toBe(3);
+    expect(r.issues.some(i => i.rule === 'thin-evidence')).toBe(false);
+  });
+
+  it('operations 页与 readme 索引页豁免 thin-evidence', () => {
+    const ops = validatePageContent('# Environment\n\n未检出。', {
+      ...baseOpts, page: 'environment', tier: 'operations',
+    });
+    expect(ops.issues.some(i => i.rule === 'thin-evidence')).toBe(false);
+    const readme = validatePageContent('# Wiki\n\n索引页。', {
+      ...baseOpts, page: 'readme', tier: 'structure',
+    });
+    expect(readme.issues.some(i => i.rule === 'thin-evidence')).toBe(false);
+  });
+
+  it('Mermaid 引用扫描清单外文件产生 mermaid-ghost 告警', () => {
+    const content = '# Architecture\n\n```mermaid\ngraph TD\n  A[src/index.ts] --> B[src/ghost.ts]\n```\n';
+    const r = validatePageContent(content, baseOpts);
+    expect(r.issues.some(i => i.rule === 'mermaid-ghost' && i.message.includes('src/ghost.ts'))).toBe(true);
+    expect(r.issues.some(i => i.rule === 'mermaid-ghost' && i.message.includes('src/index.ts'))).toBe(false);
+  });
+
+  it('sequenceDiagram 出现在 calls 页之外产生 diagram-misuse 告警，calls 页豁免', () => {
+    const content = '# Data Flow\n\n```mermaid\nsequenceDiagram\n  A->>B: hi\n```\n';
+    const r = validatePageContent(content, baseOpts);
+    expect(r.issues.some(i => i.rule === 'diagram-misuse')).toBe(true);
+    const calls = validatePageContent(content, { ...baseOpts, page: 'calls' });
+    expect(calls.issues.some(i => i.rule === 'diagram-misuse')).toBe(false);
+  });
+});

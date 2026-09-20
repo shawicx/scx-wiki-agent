@@ -72,13 +72,11 @@ export function createMockClient(overrides?: Partial<{
         source: 'async buildWiki() {}',
       } as SnippetData),
     ),
-    searchGraph: vi.fn().mockReturnValue([]),
     queryGraph: vi.fn().mockImplementation((cypher: string) => {
       const exact = overrides?.queryResults?.get(cypher);
       if (exact) return exact;
       // 模糊匹配：若 cypher 不在 map 中但含特定关键词，返回空结果
       return { columns: [], rows: [], total: 0 } as QueryResult;
     }),
-    detectChanges: vi.fn().mockReturnValue({ project: 'test', changed: false }),
   };
 }

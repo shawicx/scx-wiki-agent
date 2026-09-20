@@ -101,6 +101,17 @@ export function pageRelPath(name: string): string {
 }
 
 /**
+ * 已退休的 wiki 页面路径（页面改名/下线时在此登记，build 时自动清理残留文件）。
+ * 只删登记过的路径，绝不碰未登记的用户文件。
+ */
+export const RETIRED_WIKI_PATHS: string[] = [
+  '01-overview/project-overview.md',   // → overview
+  '03-interface/cli-commands.md',      // → cli
+  '04-design/page-registry.md',        // 注册表机制并入源码注释与 README
+  '06-constraints/limitations.md',     // → constraints
+];
+
+/**
  * 页底 Related 区块（project-wiki「页底 Related 链接」要求）。
  * 只链接本次构建计划内的页面，保证零死链；数据全部来自 PAGE_REGISTRY。
  */

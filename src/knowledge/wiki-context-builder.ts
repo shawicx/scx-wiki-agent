@@ -6,6 +6,7 @@ import type { ScanResult } from '../core/scanner.js';
 import type { SymbolType, RelationType } from '../core/types.js';
 import { PAGE_REGISTRY, pageRelPath } from './page-registry.js';
 import { ConfigDetector } from './config-detector.js';
+import { collectEvidenceFiles, toKnownRelativePath, EVIDENCE_MIN_FILES } from './wiki-evidence.js';
 import type {
   OverviewContext,
   ArchitectureContext,
@@ -16,9 +17,6 @@ import type {
   TroubleshootingContext,
   ModulesContext,
   ApiContext,
-  BusinessContext,
-  DesignDecisionsContext,
-  DesignPattern,
   GlossaryContext,
   CallsContext,
   ClassesContext,
@@ -34,6 +32,14 @@ import type {
 
 const ENTRY_FILE_NAMES = ['index.ts', 'index.js', 'main.ts', 'main.js', 'cli.ts', 'cli.js'];
 
+/** modules 页详述上限：超过后其余模块聚合为概要（DeepWiki 目录分组分块的防超限映射） */
+const MODULE_DETAIL_LIMIT = 12;
+
+/** 走 LLM 路径且证据可能偏薄的 structure 页，触发 hotspot 补强 */
+const EVIDENCE_ENRICH_PAGES = [
+  'overview', 'architecture', 'data-flow', 'modules', 'api', 'glossary', 'decisions',
+];
+
 /**
  * 从 codebase-memory-mcp 知识图谱构建各 wiki 页面的上下文数据。
  *
@@ -47,16 +53,22 @@ export class WikiContextBuilder {
     private detector: ConfigDetector,
   ) {}
 
+  private knownFiles: Set<string> | null = null;
+
   /** 按页面名派发上下文构建（供 PageRegistry 调用）。plannedPages 用于 readme 索引只列本次产出的页面 */
   buildByName(page: string, plannedPages?: string[]): unknown {
+    const ctx = this.dispatchContext(page, plannedPages);
+    if (ctx === null || ctx === undefined) return ctx;
+    return this.enrichIfThinEvidence(page, ctx);
+  }
+
+  private dispatchContext(page: string, plannedPages?: string[]): unknown {
     switch (page) {
       case 'overview': return this.buildOverviewContext();
       case 'architecture': return this.buildArchitectureContext();
       case 'data-flow': return this.buildDataFlowContext();
       case 'modules': return this.buildModulesContext();
       case 'api': return this.buildApiContext();
-      case 'business': return this.buildBusinessContext();
-      case 'design-decisions': return this.buildDesignDecisionsContext();
       case 'onboarding': return this.buildOnboardingContext();
       case 'troubleshooting': return this.buildTroubleshootingContext();
       case 'glossary': return this.buildGlossaryContext();
@@ -72,6 +84,45 @@ export class WikiContextBuilder {
       case 'decisions': return this.buildDecisionsContext();
       default: return null;
     }
+  }
+
+  /**
+   * 证据补强（DeepWiki「二次扩展检索」的图谱版）：
+   * LLM 路径的 structure 页证据文件低于下限时，从图谱补一批高复杂度真实符号，
+   * 只保留扫描清单内的文件路径。
+   */
+  private enrichIfThinEvidence(page: string, ctx: unknown): unknown {
+    if (!EVIDENCE_ENRICH_PAGES.includes(page)) return ctx;
+    const known = this.getKnownFiles();
+    if (collectEvidenceFiles(ctx, known, this.scanResult.rootDir).length >= EVIDENCE_MIN_FILES) {
+      return ctx;
+    }
+    const q = this.client.queryGraph(
+      `MATCH (n) WHERE n.is_test = false AND n.file_path IS NOT NULL
+         AND n.label IN ['Class', 'Method', 'Function']
+       RETURN n.name AS name, n.label AS label, n.file_path AS file,
+              n.complexity AS cx, n.signature AS sig
+       ORDER BY n.complexity DESC LIMIT 8`,
+    );
+    const supplementalSymbols = q.rows
+      .map(row => ({
+        name: row[0] as string,
+        type: this.labelToSymbolType(row[1] as string),
+        file: row[2] as string,
+        complexity: row[3] as number | undefined,
+        signature: (row[4] as string | null) ?? null,
+      }))
+      .map(s => ({ ...s, file: toKnownRelativePath(s.file, known, this.scanResult.rootDir) ?? '' }))
+      .filter(s => s.file !== '');
+    if (supplementalSymbols.length === 0) return ctx;
+    return { ...(ctx as Record<string, unknown>), supplementalSymbols };
+  }
+
+  private getKnownFiles(): Set<string> {
+    if (!this.knownFiles) {
+      this.knownFiles = new Set(this.scanResult.files.map(f => f.relativePath));
+    }
+    return this.knownFiles;
   }
 
   buildOverviewContext(): OverviewContext {
@@ -300,7 +351,20 @@ export class WikiContextBuilder {
       };
     });
 
-    return { modules };
+    // 大仓库防超限：模块数超过详述上限时，按符号数取前 N 详述，其余聚合为概要
+    if (modules.length <= MODULE_DETAIL_LIMIT) {
+      return { modules };
+    }
+    const sorted = [...modules].sort(
+      (a, b) => (b.symbols.length - a.symbols.length) || (b.files.length - a.files.length),
+    );
+    const detailed = sorted.slice(0, MODULE_DETAIL_LIMIT);
+    const otherModules = sorted.slice(MODULE_DETAIL_LIMIT).map(m => ({
+      name: m.name,
+      fileCount: m.files.length,
+      symbolCount: m.symbols.length,
+    }));
+    return { modules: detailed, otherModules };
   }
 
   buildApiContext(): ApiContext {
@@ -365,89 +429,6 @@ export class WikiContextBuilder {
       exportedFunctions,
       frameworkNodes: [],
     };
-  }
-
-  buildBusinessContext(): BusinessContext {
-    // Cypher 查核心业务类（Service/Repository/Client/Scanner/Builder 等）及其方法
-    // 注意：DEFINES_METHOD 方向是 Class -> Method（类定义方法）
-    const q = this.client.queryGraph(
-      `MATCH (c)-[:DEFINES_METHOD]->(m)
-       WHERE c.is_test = false
-         AND (c.name ENDS WITH 'Service' OR c.name ENDS WITH 'Repository'
-              OR c.name ENDS WITH 'Client' OR c.name ENDS WITH 'Scanner'
-              OR c.name ENDS WITH 'Builder' OR c.name ENDS WITH 'Generator')
-       RETURN c.name AS cls, c.qualified_name AS qn, m.name AS method, m.docstring AS doc,
-              m.visibility AS vis, c.file_path AS file
-       ORDER BY cls, m.start_line LIMIT 200`,
-    );
-
-    const serviceMap = new Map<string, { filePath: string; qn: string; methods: BusinessContext['services'][number]['methods'] }>();
-    for (const row of q.rows) {
-      const cls = row[0] as string;
-      if (!serviceMap.has(cls)) {
-        serviceMap.set(cls, { filePath: row[5] as string, qn: row[1] as string, methods: [] });
-      }
-      serviceMap.get(cls)!.methods.push({
-        name: row[2] as string,
-        visibility: (row[4] as string | null) ?? null,
-        docstring: (row[3] as string | null) ?? null,
-      });
-    }
-
-    return {
-      services: Array.from(serviceMap.entries()).map(([name, data]) => {
-        // 取服务类的类定义源码片段，让 LLM 能看到完整的类结构
-        const snippet = this.safeGetSnippet(data.qn);
-        return {
-          name,
-          filePath: data.filePath,
-          methods: data.methods.slice(0, 10),
-          dependencies: [],
-          codeSnippet: snippet?.source ?? '',
-        };
-      }),
-    };
-  }
-
-  buildDesignDecisionsContext(): DesignDecisionsContext {
-    const patterns: DesignPattern[] = [];
-
-    // Strategy Pattern: Registry + Resolver
-    const registryQ = this.client.queryGraph(
-      `MATCH (c:Class) WHERE c.name CONTAINS 'Registry' AND c.is_test = false
-       RETURN c.name AS name, c.file_path AS file LIMIT 5`,
-    );
-    if (registryQ.rows.length > 0) {
-      patterns.push({
-        pattern: 'Strategy Pattern',
-        evidence: [
-          `${registryQ.rows.length} 个 Registry 类：${registryQ.rows.map(r => r[0]).join(', ')}`,
-          'Registry 模式实现可插拔策略注册与分发',
-        ],
-        files: registryQ.rows.map(r => r[1] as string),
-      });
-    }
-
-    // Builder Pattern
-    const builderQ = this.client.queryGraph(
-      `MATCH (c:Class) WHERE c.name CONTAINS 'Builder' AND c.is_test = false
-       RETURN c.name AS name, c.file_path AS file LIMIT 3`,
-    );
-    if (builderQ.rows.length > 0) {
-      patterns.push({
-        pattern: 'Builder Pattern',
-        evidence: builderQ.rows.map(r => `${r[0]} 提供流式构造 API`),
-        files: builderQ.rows.map(r => r[1] as string),
-      });
-    }
-
-    const techChoices = this.scanResult.techStack.map(t => ({
-      technology: t,
-      category: 'detected',
-      evidence: [`scanResult 检测到 ${t}`],
-    }));
-
-    return { patterns, techChoices };
   }
 
   buildGlossaryContext(): GlossaryContext {

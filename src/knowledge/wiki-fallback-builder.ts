@@ -6,8 +6,6 @@ import type {
   DataFlowContext,
   ModulesContext,
   ApiContext,
-  BusinessContext,
-  DesignDecisionsContext,
   GlossaryContext,
   OnboardingContext,
   TroubleshootingContext,
@@ -36,8 +34,6 @@ export class WikiFallbackBuilder {
       case 'data-flow': return this.buildDataFlow(ctx);
       case 'modules': return this.buildModules(ctx);
       case 'api': return this.buildApi(ctx);
-      case 'business': return this.buildBusiness(ctx);
-      case 'design-decisions': return this.buildDesignDecisions(ctx);
       case 'onboarding': return this.buildOnboarding(ctx);
       case 'troubleshooting': return this.buildTroubleshooting(ctx);
       case 'glossary': return this.buildGlossary(ctx);
@@ -194,6 +190,18 @@ export class WikiFallbackBuilder {
       }
     }
 
+    // 大仓库聚合：详述上限外的模块只列名称与规模
+    if (ctx.otherModules && ctx.otherModules.length > 0) {
+      builder.addSection(
+        `其他模块（${ctx.otherModules.length} 个，概要）`,
+        '模块数超过详述上限，以下仅列名称与规模（详述按符号数取前 12）。',
+      );
+      builder.addTable(
+        ['模块', '文件数', '符号数'],
+        ctx.otherModules.map(m => [m.name, String(m.fileCount), String(m.symbolCount)]),
+      );
+    }
+
     return builder.build();
   }
 
@@ -221,59 +229,6 @@ export class WikiFallbackBuilder {
 
     if (commands.length === 0 && functions.length === 0) {
       builder.addParagraph('No API surface detected.');
-    }
-
-    return builder.build();
-  }
-
-  buildBusiness(ctx: BusinessContext): string {
-    const builder = new WikiBuilder()
-      .addTitle('Business Logic');
-
-    if (ctx.services.length === 0) {
-      builder.addParagraph('No services or repositories found.');
-      return builder.build();
-    }
-
-    for (const svc of ctx.services) {
-      const methods = svc.methods
-        .filter((m, i, a) => a.findIndex(t => t.name === m.name) === i)
-        .slice(0, 8)
-        .map(m => `\`${m.name}\``)
-        .join(', ');
-      const deps = [...new Set(svc.dependencies.map(d => d.target))].slice(0, 5);
-
-      const parts: string[] = [];
-      if (methods) parts.push(`Methods: ${methods}`);
-      if (deps.length > 0) parts.push(`Dependencies: ${deps.map(d => `\`${d}\``).join(', ')}`);
-
-      builder.addSection(svc.name, parts.length > 0 ? parts.join('\n\n') : 'No details available.');
-    }
-
-    return builder.build();
-  }
-
-  buildDesignDecisions(ctx: DesignDecisionsContext): string {
-    const builder = new WikiBuilder()
-      .addTitle('Design Decisions');
-
-    if (ctx.patterns.length > 0) {
-      builder.addSection('Design Patterns', '');
-      for (const pattern of ctx.patterns) {
-        builder.addSubSection(pattern.pattern,
-          pattern.evidence.map(e => `- ${e}`).join('\n'));
-      }
-    }
-
-    if (ctx.techChoices.length > 0) {
-      builder.addSection('Technology Choices', '').addTable(
-        ['Technology', 'Category', 'Evidence'],
-        ctx.techChoices.map(t => [t.technology, t.category, t.evidence.join('; ')]),
-      );
-    }
-
-    if (ctx.patterns.length === 0 && ctx.techChoices.length === 0) {
-      builder.addParagraph('No design patterns or technology choices detected.');
     }
 
     return builder.build();

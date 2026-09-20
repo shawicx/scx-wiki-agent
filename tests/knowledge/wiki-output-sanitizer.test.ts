@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { sanitizeWikiOutput } from '../../src/knowledge/wiki-output-sanitizer.js';
 
 describe('sanitizeWikiOutput', () => {
@@ -51,5 +51,22 @@ describe('sanitizeWikiOutput', () => {
     expect(result.startsWith('# 架构文档')).toBe(true);
     expect(result).not.toContain('好的');
     expect(result).not.toContain('我将');
+  });
+
+  it('R2 扩展：非 calls 页出现 sequenceDiagram 时告警（内容不改）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const input = '# Data Flow\n\n```mermaid\nsequenceDiagram\n  A->>B: hi\n```';
+    const result = sanitizeWikiOutput(input, 'overview');
+    expect(result).toBe(input);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('calls 页允许 sequenceDiagram，不告警', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const input = '# Calls\n\n```mermaid\nsequenceDiagram\n  A->>B: hi\n```';
+    sanitizeWikiOutput(input, 'calls');
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

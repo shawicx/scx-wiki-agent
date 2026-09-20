@@ -211,4 +211,79 @@ describe('WikiContextBuilder (MCP-backed)', () => {
       expect(ctx.modules.map(m => m.name)).toContain('core');
     });
   });
+
+  describe('证据补强（二次扩展检索）', () => {
+    const supplementalCypher = `MATCH (n) WHERE n.is_test = false AND n.file_path IS NOT NULL
+         AND n.label IN ['Class', 'Method', 'Function']
+       RETURN n.name AS name, n.label AS label, n.file_path AS file,
+              n.complexity AS cx, n.signature AS sig
+       ORDER BY n.complexity DESC LIMIT 8`;
+
+    it('structure 页证据不足时附加 supplementalSymbols（只保留扫描清单内文件）', () => {
+      const queryResults = new Map<string, QueryResult>([
+        [supplementalCypher, {
+          columns: ['name', 'label', 'file', 'cx', 'sig'],
+          rows: [
+            ['buildWiki', 'Method', 'src/services/wiki-service.ts', 9, 'async buildWiki()'],
+            ['ghostFn', 'Function', 'src/ghost.ts', 5, 'ghostFn()'],
+          ],
+          total: 2,
+        }],
+      ]);
+      const client = createMockClient({ queryResults });
+      const builder = new WikiContextBuilder(client as any, makeScanResult({
+        files: [
+          { absolutePath: '/tmp/test-project/src/index.ts', relativePath: 'src/index.ts', language: 'typescript' as const, extension: '.ts', size: 100 },
+          { absolutePath: '/tmp/test-project/src/services/wiki-service.ts', relativePath: 'src/services/wiki-service.ts', language: 'typescript' as const, extension: '.ts', size: 100 },
+        ],
+      }));
+      // overview ctx 证据仅 entryFiles（1 个）→ 触发补强
+      const ctx = builder.buildByName('overview') as { supplementalSymbols?: Array<{ name: string; file: string }> };
+      expect(ctx.supplementalSymbols).toBeDefined();
+      expect(ctx.supplementalSymbols!.map(s => s.name)).toEqual(['buildWiki']);
+      expect(ctx.supplementalSymbols![0].file).toBe('src/services/wiki-service.ts');
+    });
+
+    it('证据充足时不触发补强查询', () => {
+      const client = createMockClient();
+      const builder = new WikiContextBuilder(client as any, makeScanResult({
+        files: [
+          'src/index.ts', 'src/cli.ts', 'src/main.ts',
+        ].map(rel => ({
+          absolutePath: `/tmp/test-project/${rel}`,
+          relativePath: rel,
+          language: 'typescript' as const,
+          extension: '.ts',
+          size: 100,
+        })),
+      }));
+      // 3 个入口文件 → 证据达标
+      const ctx = builder.buildByName('overview') as { supplementalSymbols?: unknown };
+      expect(ctx.supplementalSymbols).toBeUndefined();
+      expect(client.queryGraph).not.toHaveBeenCalledWith(expect.stringContaining('file_path IS NOT NULL'));
+    });
+  });
+
+  describe('buildModulesContext 大仓库分组', () => {
+    it('模块数超过 12 时详述前 12、其余聚合为概要', () => {
+      const manyPackages = Array.from({ length: 15 }, (_, i) => ({
+        name: `mod${i}`, node_count: 2, fan_in: 0, fan_out: 1,
+      }));
+      const client = createMockClient({
+        architecture: {
+          total_nodes: 30, total_edges: 10,
+          node_labels: [], edge_types: [], languages: [],
+          packages: manyPackages,
+          entry_points: [], hotspots: [], boundaries: [], layers: [], clusters: [],
+        },
+      });
+      const builder = new WikiContextBuilder(client as any, makeScanResult());
+      const ctx = builder.buildModulesContext();
+
+      expect(ctx.modules.length).toBe(12);
+      expect(ctx.otherModules).toBeDefined();
+      expect(ctx.otherModules!.length).toBe(3);
+      expect(ctx.otherModules!.map(m => m.name)).toEqual(['mod12', 'mod13', 'mod14']);
+    });
+  });
 });

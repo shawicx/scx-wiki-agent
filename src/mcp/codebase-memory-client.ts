@@ -5,10 +5,7 @@ import type {
   ArchitectureData,
   SnippetData,
   TraceResult,
-  GraphSearchResult,
   QueryResult,
-  ChangeResult,
-  SearchGraphParams,
 } from './types.js';
 
 const DEFAULT_BINARY = 'codebase-memory-mcp';
@@ -119,24 +116,6 @@ function adaptTrace(raw: Record<string, any>): TraceResult {
 
 type TraceNodeLike = { name: string; qualified_name: string; hop: number };
 
-/** search_graph 列式表 → GraphSearchResult[] */
-function adaptSearchResults(raw: Record<string, any>): GraphSearchResult[] {
-  if (Array.isArray(raw.results)) return raw.results; // 旧形态
-  return tableToObjects(raw).map((r: any) => ({
-    name: r.name ?? lastSegment(r.qualified_name ?? r.qn),
-    qualified_name: r.qualified_name ?? r.qn ?? '',
-    label: r.label ?? '',
-    file_path: r.file_path ?? r.file ?? '',
-    in_degree: r.in_degree ?? 0,
-    out_degree: r.out_degree ?? 0,
-    complexity: r.complexity ?? 0,
-    lines: r.lines ?? 0,
-    is_exported: Boolean(r.is_exported),
-    is_test: Boolean(r.is_test),
-    is_entry_point: Boolean(r.is_entry_point),
-  }));
-}
-
 export class CodebaseMemoryClient {
   private readonly binaryPath: string;
   private readonly projectName: string;
@@ -192,16 +171,6 @@ export class CodebaseMemoryClient {
     }) as SnippetData;
   }
 
-  /** BM25 全文检索 */
-  searchGraph(params: SearchGraphParams): GraphSearchResult[] {
-    const raw = this.exec('search_graph', {
-      project: this.projectName,
-      ...params,
-      format: 'json',
-    });
-    return adaptSearchResults(raw as Record<string, any>);
-  }
-
   /** Cypher 查询 */
   queryGraph(cypher: string, maxRows = 100): QueryResult {
     const result = this.exec('query_graph', {
@@ -212,11 +181,6 @@ export class CodebaseMemoryClient {
     });
     // format=json 下返回 {columns, rows, total}，与 QueryResult 一致
     return result as QueryResult;
-  }
-
-  /** 增量变更检测 */
-  detectChanges(): ChangeResult {
-    return this.exec('detect_changes', { project: this.projectName, format: 'json' }) as ChangeResult;
   }
 
   // --- 内部方法 ---

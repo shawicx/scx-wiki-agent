@@ -8,15 +8,27 @@
  * - dead-link      (warn) ：markdown 相对导航链接指向本次不产出的页面。
  * - broken-anchor  (warn) ：file:line 锚点无法在扫描文件清单中追溯到（R1 事后核验），
  *   含 `:0` 残缺锚点。
+ * - thin-evidence  (warn) ：structure 层页面证据锚定块内源文件数不足下限
+ *   （readme 索引页与 operations 配置驱动页豁免）。
+ * - mermaid-ghost  (warn) ：Mermaid 图中引用扫描清单外的文件路径（防幽灵节点）。
+ * - diagram-misuse (warn) ：sequenceDiagram 出现在 calls 页之外（R2 边表优于时序图）。
  *
  * error 拒绝写盘；warn 记入构建报告。纯函数，不做 I/O。
  */
 
 import { posix } from 'node:path';
+import { EVIDENCE_MIN_FILES, EVIDENCE_SUMMARY } from './wiki-evidence.js';
 
 export type QualitySeverity = 'error' | 'warn';
 
-export type QualityRule = 'empty-shell' | 'secret' | 'dead-link' | 'broken-anchor';
+export type QualityRule =
+  | 'empty-shell'
+  | 'secret'
+  | 'dead-link'
+  | 'broken-anchor'
+  | 'thin-evidence'
+  | 'mermaid-ghost'
+  | 'diagram-misuse';
 
 export interface QualityIssue {
   rule: QualityRule;
@@ -32,6 +44,8 @@ export interface PageQualityReport {
   issues: QualityIssue[];
   /** 锚点核验统计 */
   anchors: { total: number; valid: number };
+  /** 证据锚定块内源文件数 */
+  evidence: number;
 }
 
 export interface ValidateOptions {
@@ -42,6 +56,8 @@ export interface ValidateOptions {
   knownFiles: ReadonlySet<string>;
   /** 本次构建将写入的 wiki 相对路径集合（如 'overview.md'） */
   plannedPaths: ReadonlySet<string>;
+  /** 页面层级（structure/operations/surface），thin-evidence 仅对 structure 生效 */
+  tier?: string;
 }
 
 /** 密钥值特征（只报类别与行号，值不回显） */
@@ -70,12 +86,15 @@ export function validatePageContent(content: string, opts: ValidateOptions): Pag
   checkSecrets(text, issues);
   const anchors = checkAnchors(text, opts, issues);
   checkDeadLinks(text, opts, issues);
+  const evidence = checkThinEvidence(text, opts, issues);
+  checkMermaid(text, opts, issues);
 
   return {
     page: opts.page,
     passed: !issues.some(i => i.severity === 'error'),
     issues,
     anchors,
+    evidence,
   };
 }
 
@@ -149,5 +168,47 @@ function checkDeadLinks(text: string, opts: ValidateOptions, issues: QualityIssu
   }
   for (const d of dead) {
     issues.push({ rule: 'dead-link', severity: 'warn', message: `相对链接目标本次未产出: ${d}` });
+  }
+}
+
+/** 锚定块（页首 <details>）内文件计数；structure 层低于下限时告警 */
+const EVIDENCE_BLOCK_RE = new RegExp(
+  `<summary>${EVIDENCE_SUMMARY}</summary>\\s*\\n([\\s\\S]*?)</details>`,
+);
+
+function checkThinEvidence(text: string, opts: ValidateOptions, issues: QualityIssue[]): number {
+  const m = text.match(EVIDENCE_BLOCK_RE);
+  const count = m ? (m[1].match(/^- /gm) ?? []).length : 0;
+  const exempt = opts.tier !== 'structure' || opts.page === 'readme';
+  if (!exempt && count < EVIDENCE_MIN_FILES) {
+    issues.push({
+      rule: 'thin-evidence',
+      severity: 'warn',
+      message: `证据锚定块仅 ${count} 个源文件（< ${EVIDENCE_MIN_FILES}），页面叙述依据可能不足`,
+    });
+  }
+  return count;
+}
+
+/** Mermaid 图质量：幽灵文件节点 + sequenceDiagram 误用（R2） */
+const MERMAID_BLOCK_RE = /```mermaid\s*\n([\s\S]*?)```/g;
+const MERMAID_FILE_RE =
+  /\b(?:[\w.@-]+\/)*[\w.@-]+\.(?:ts|tsx|js|jsx|mjs|cjs|cts|mts|py|go|java|rs|rb|php|cs|swift|kt|sql)\b/g;
+
+function checkMermaid(text: string, opts: ValidateOptions, issues: QualityIssue[]): void {
+  for (const block of text.matchAll(MERMAID_BLOCK_RE)) {
+    const body = block[1];
+    if (/^\s*sequenceDiagram/m.test(body) && opts.page !== 'calls') {
+      issues.push({
+        rule: 'diagram-misuse',
+        severity: 'warn',
+        message: 'sequenceDiagram 仅允许出现在 calls 页（R2 边表优于时序图）',
+      });
+    }
+    for (const f of body.matchAll(MERMAID_FILE_RE)) {
+      if (!opts.knownFiles.has(f[0])) {
+        issues.push({ rule: 'mermaid-ghost', severity: 'warn', message: `Mermaid 图引用未知文件: ${f[0]}` });
+      }
+    }
   }
 }

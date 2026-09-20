@@ -104,6 +104,24 @@ describe('WikiService', () => {
     expect(existsSync(join(wikiDir, '01-overview', 'overview.md'))).toBe(true);
   });
 
+  it('should remove retired page paths left behind by renames', async () => {
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
+    const wikiDir = join(tmpDir, 'wiki');
+    mkdirSync(join(wikiDir, '01-overview'), { recursive: true });
+    writeFileSync(join(wikiDir, '01-overview', 'project-overview.md'), '# stale renamed page', 'utf-8');
+
+    await service.buildWiki(wikiDir, { noLlm: true });
+
+    // 登记过的退休路径被清理
+    expect(existsSync(join(wikiDir, '01-overview', 'project-overview.md'))).toBe(false);
+    // 未登记的用户文件不受影响
+    const keepPath = join(wikiDir, '01-overview', 'my-notes.md');
+    writeFileSync(join(wikiDir, '01-overview', 'my-notes.md'), '# 手写笔记', 'utf-8');
+    await service.buildWiki(wikiDir, { noLlm: true });
+    expect(existsSync(keepPath)).toBe(true);
+  });
+
   it('should call ensureIndexed on the client', async () => {
     const client = createMockClient();
     const service = new WikiService(client as any, makeBackendScanResult());
@@ -257,5 +275,19 @@ describe('WikiService', () => {
     // 自动推导条目状态一律 proposed（不再伪装成 accepted）
     expect(decisions).toContain('proposed');
     expect(decisions).not.toContain('accepted');
+  });
+
+  it('should inject evidence block with real source files after the page title', async () => {
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
+    const wikiDir = join(tmpDir, 'wiki');
+    await service.buildWiki(wikiDir, { noLlm: true });
+
+    const overview = readFileSync(join(wikiDir, '01-overview', 'overview.md'), 'utf-8');
+    expect(overview).toContain('<summary>Relevant source files</summary>');
+    // 只列扫描清单内的真实文件（overview ctx 的 entryFiles）
+    expect(overview).toContain('- src/index.ts');
+    // 注入位置：紧跟首个 # 标题之后（标题 + 空行 + 锚定块）
+    expect(overview.startsWith('# Project Overview\n\n<details>')).toBe(true);
   });
 });

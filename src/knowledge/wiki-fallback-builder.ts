@@ -316,11 +316,43 @@ export class WikiFallbackBuilder {
       .addTitle('Troubleshooting');
 
     builder.addParagraph(
-      unconfirmedNote('本页为规则模板生成，仅基于项目类型/技术栈，未采集项目真实错误日志与告警，具体条目'),
+      unconfirmedNote('本页为规则模板生成，仅基于项目类型/技术栈/运行态探测，未采集项目真实错误日志与告警，具体条目'),
     );
+
+    // 运行态速查（排障起点：实际命令与版本）
+    const envRows: string[][] = [];
+    if (ctx.packageManager) envRows.push(['包管理器', ctx.packageManager]);
+    if (ctx.nodeVersion) envRows.push(['Node 版本要求', ctx.nodeVersion]);
+    if (ctx.scripts && Object.keys(ctx.scripts).length > 0) {
+      for (const [k, v] of Object.entries(ctx.scripts)) envRows.push([`脚本 ${k}`, `\`${v}\``]);
+    }
+    if (envRows.length > 0) {
+      builder.addSection('运行环境速查', '');
+      builder.addTable(['项', '值'], envRows);
+    }
+
+    if (ctx.entryFiles && ctx.entryFiles.length > 0) {
+      builder.addSection('排障起点（入口文件）', ctx.entryFiles.map(f => `- \`${f}\``).join('\n'));
+    }
 
     builder.addSection('Build Issues', 'If the build fails, check that all dependencies are installed.');
     builder.addSection('Runtime Issues', 'Common runtime issues and their solutions.');
+
+    if (ctx.constants && ctx.constants.length > 0) {
+      builder.addSection('限制常量（超界即故障的边界）', '');
+      builder.addTable(
+        ['常量', '值', '源文件'],
+        ctx.constants.map(c => [`\`${c.name}\``, `\`${c.value}\``, c.filePath]),
+      );
+    }
+
+    if (ctx.envVars && ctx.envVars.length > 0) {
+      builder.addSection('环境变量', '从源码 process.env 引用提取');
+      builder.addTable(
+        ['变量名', '敏感', '用途'],
+        ctx.envVars.map(v => [v.name, v.sensitive ? '⚠️ 是' : '否', UNCONFIRMED_CELL]),
+      );
+    }
 
     if (ctx.techStack.length > 0) {
       builder.addSection('Technology-Specific Issues',

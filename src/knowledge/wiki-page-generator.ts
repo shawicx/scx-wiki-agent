@@ -276,8 +276,9 @@ export class WikiPageGenerator {
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - "环境准备"章节：详细列出所需环境（Node.js版本、包管理器、系统要求），说明每个依赖的作用
 - "安装步骤"章节：给出完整的安装流程，使用提供的包管理器，包含每步的预期输出和验证方法
-- "项目初始化"章节：列出实际的CLI命令（从提供的命令列表中获取），说明每个命令的作用和参数
+- "项目初始化"章节：列出实际的CLI命令（从提供的命令列表中获取），说明每个命令的作用、参数（options 数据直接引用）与使用场景
 - "基本使用"章节：详细列出核心命令和用法，用代码块展示命令示例，说明典型工作流（如 scan → build 的完整流程）
+- "环境变量"章节：如提供 envVars 数据，用表格列出变量名与敏感标记；未提供则不设该章节（不要标注待确认）
 - "项目结构概览"章节：逐一描述每个源代码目录的含义和作用
 - "开发指南"章节：说明如何构建、如何运行测试、如何开发调试
 - 只描述基于数据可以确定的内容，不要编造具体命令参数
@@ -302,18 +303,24 @@ export class WikiPageGenerator {
 
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- "环境问题"章节：详细列出与项目技术栈相关的环境配置问题、版本冲突、依赖安装问题及解决方案
-- "构建问题"章节：详细列出可能的构建失败场景（如 TypeScript 编译错误、打包问题、ESM/CJS 兼容）及解决方案
-- "运行时问题"章节：详细列出可能的运行时问题（如模块解析、路径问题、权限问题、外部依赖缺失如 codebase-memory-mcp 未安装）及解决方案
-- "调试技巧"章节：列出针对该项目的调试方法（如 watch 构建、单文件测试调试、如何查看日志）
+- "环境问题"章节：详细列出与项目技术栈相关的环境配置问题、版本冲突、依赖安装问题及解决方案（nodeVersion/envVars/packageManager 数据直接引用）
+- "构建问题"章节：详细列出可能的构建失败场景（如 TypeScript 编译错误、打包问题、ESM/CJS 兼容）及解决方案（scripts.build 等实际命令直接引用）
+- "运行时问题"章节：详细列出可能的运行时问题（如模块解析、路径问题、权限问题、外部依赖缺失如 codebase-memory-mcp 未安装）及解决方案；constants 中的限制常量（超时/上限）是排障的关键边界，必须逐个说明触界时的典型症状
+- "调试技巧"章节：列出针对该项目的调试方法（如 watch 构建、单文件测试调试、如何查看日志；入口文件 entryFiles 是排障起点）
 - 每个问题用"问题描述 → 原因分析 → 解决方案"的详细格式，解决方案要具体可操作（给出实际命令）
 - 只描述与项目技术栈相关的问题，不要编造不相关的场景
+- 数据已提供的字段（scripts/envVars/constants）严禁再标「待确认」；仅数据确实未覆盖的方面才诚实标注（R5）
 - 内容要充实，要覆盖开发者实际会遇到的问题`,
       userPrompt: JSON.stringify({
         projectType: ctx.projectType,
         techStack: ctx.techStack,
-        moduleCount: ctx.modules.length,
         moduleNames: ctx.modules.map(m => m.name).slice(0, 10),
+        scripts: ctx.scripts ?? {},
+        packageManager: ctx.packageManager ?? '',
+        nodeVersion: ctx.nodeVersion ?? '',
+        envVars: ctx.envVars ?? [],
+        constants: ctx.constants ?? [],
+        entryFiles: ctx.entryFiles ?? [],
       }, null, 2),
       maxOutputTokens: 8000,
     });

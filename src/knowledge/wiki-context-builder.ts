@@ -511,10 +511,14 @@ export class WikiContextBuilder {
       .filter(e => e.name.startsWith('register') || e.name.includes('Command'))
       .filter(e => !isTestPath(e.file))
       .slice(0, 10)
-      .map(e => ({
-        name: e.name.replace(/^register/, '').replace(/Command$/, '').toLowerCase() || e.name,
-        description: this.commandDescription(e.name).description || `CLI command in ${e.file}`,
-      }));
+      .map(e => {
+        const snippet = this.safeGetSnippet(e.name);
+        return {
+          name: e.name.replace(/^register/, '').replace(/Command$/, '').toLowerCase() || e.name,
+          description: this.commandDescription(e.name).description || `CLI command in ${e.file}`,
+          options: snippet ? this.parseCommanderOptions(snippet.source ?? '') : [],
+        };
+      });
 
     // 首次运行最小示例
     const buildCmd = env.scripts.build ?? `${packageManager} run build`;
@@ -530,16 +534,32 @@ export class WikiContextBuilder {
       nodeVersion,
       cliCommands,
       scripts: env.scripts,
+      envVars: env.envVars,
       firstRunExample,
     };
   }
 
   buildTroubleshootingContext(): TroubleshootingContext {
     const arch = this.client.getArchitecture();
+
+    // 运行态与常量数据补强：排障页最常缺的就是"实际命令、env、边界常量"
+    const env = this.detector.detectEnvironment();
+    const constants = this.detector.detectConstraints().constants;
+    const entryFiles = this.scanResult.files
+      .filter(f => !isTestPath(f.relativePath))
+      .filter(f => ENTRY_FILE_NAMES.some(e => f.relativePath.endsWith('/' + e) || f.relativePath === e))
+      .map(f => f.relativePath);
+
     return {
       projectType: this.scanResult.projectType,
       techStack: this.scanResult.techStack,
       modules: arch.packages.map(p => ({ name: p.name })),
+      scripts: env.scripts,
+      packageManager: env.packageManager,
+      nodeVersion: env.nodeVersion,
+      envVars: env.envVars,
+      constants,
+      entryFiles,
     };
   }
 
@@ -869,10 +889,12 @@ export class WikiContextBuilder {
     };
   }
 
-  /** 从 commander 源码提取 .command('name', 'description') 的描述文本 */
+  /** 从 commander 源码提取命令描述：`.command('name', 'desc')` 双参式 → 链式 `.description('desc')` */
   private parseCommanderDescription(source: string): string {
-    const m = source.match(/\.command\(\s*['"`][^'"`]+['"`]\s*,\s*['"`]([^'"`]+)['"`]/);
-    return m ? m[1] : '';
+    const pair = source.match(/\.command\(\s*['"`][^'"`]+['"`]\s*,\s*['"`]([^'"`]+)['"`]/);
+    if (pair) return pair[1];
+    const chained = source.match(/\.description\(\s*['"`]([^'"`]+)['"`]\s*\)/);
+    return chained ? chained[1] : '';
   }
 
   /** 从 commander 源码解析 .option('flag', 'description') 调用 */

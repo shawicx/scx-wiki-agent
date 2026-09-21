@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { WikiContextBuilder } from '../../src/knowledge/wiki-context-builder.js';
+import { ConfigDetector } from '../../src/knowledge/config-detector.js';
 import { createMockClient } from '../helpers/mock-mcp-client.js';
 import type { ScanResult } from '../../src/core/scanner.js';
 import type { QueryResult } from '../../src/mcp/types.js';
@@ -225,6 +226,24 @@ describe('WikiContextBuilder (MCP-backed)', () => {
       expect(ctx.commands[0].description).toBe('Generate wiki documentation from codebase knowledge graph');
       expect(ctx.commands[0].startLine).toBe(9);
     });
+
+    it('链式 .description(desc) 风格同样可提取（本仓库实际风格）', () => {
+      const client = createMockClient({
+        codeSnippet: {
+          name: 'registerBuildCommand',
+          qualified_name: 'proj.registerBuildCommand',
+          label: 'Function',
+          file_path: 'src/cli/commands/build.ts',
+          start_line: 9,
+          end_line: 21,
+          source: `export function registerBuildCommand(program: Command) {\n  program\n    .command('build')\n    .description('Generate wiki documentation from codebase knowledge graph')\n    .option('--no-llm', 'Generate wiki without LLM (pure rules)');\n}`,
+        },
+      });
+      const builder = new WikiContextBuilder(client as any, makeScanResult());
+      const ctx = builder.buildApiContext();
+
+      expect(ctx.commands[0].description).toBe('Generate wiki documentation from codebase knowledge graph');
+    });
   });
 
   describe('context 质量补齐（fixtures 过滤与包元数据）', () => {
@@ -256,13 +275,25 @@ describe('WikiContextBuilder (MCP-backed)', () => {
   });
 
   describe('buildTroubleshootingContext', () => {
-    it('modules 来自 packages', () => {
+    it('modules 来自 packages，并携带运行态/常量/入口等排障数据', () => {
       const client = createMockClient();
-      const builder = new WikiContextBuilder(client as any, makeScanResult());
+      const scan = makeScanResult({
+        files: [
+          { absolutePath: '/tmp/test-project/src/index.ts', relativePath: 'src/index.ts', language: 'typescript' as const, extension: '.ts', size: 100 },
+        ],
+      });
+      const builder = new WikiContextBuilder(client as any, scan, new ConfigDetector(scan.rootDir));
       const ctx = builder.buildTroubleshootingContext();
 
       expect(ctx.modules.length).toBe(3);
       expect(ctx.modules.map(m => m.name)).toContain('core');
+      // 运行态数据（ConfigDetector）：scripts/packageManager 必有（探测 /tmp 下无 package.json 也返回默认值）
+      expect(ctx.packageManager).toBeTruthy();
+      expect(ctx.scripts).toBeDefined();
+      expect(ctx.envVars).toBeDefined();
+      expect(ctx.constants).toBeDefined();
+      // 入口文件过滤测试路径
+      expect(ctx.entryFiles).toEqual(['src/index.ts']);
     });
   });
 

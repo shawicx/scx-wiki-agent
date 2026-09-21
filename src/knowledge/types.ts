@@ -274,8 +274,15 @@ export interface OnboardingContext {
   hasTypeScript: boolean;
   packageManager: string;
   nodeVersion: string;
-  cliCommands: Array<{ name: string; description: string }>;
+  cliCommands: Array<{
+    name: string;
+    description: string;
+    /** commander .option() 解析的参数清单（有 snippet 证据时） */
+    options?: Array<{ flag: string; description: string }>;
+  }>;
   scripts: Record<string, string>;
+  /** 源码 process.env 引用（env 清单，敏感标记） */
+  envVars?: Array<{ name: string; sensitive: boolean }>;
   firstRunExample: string;
 }
 
@@ -284,6 +291,15 @@ export interface TroubleshootingContext {
   projectType: string;
   techStack: string[];
   modules: Array<{ name: string }>;
+  /** 运行态（ConfigDetector）：脚本命令/包管理器/Node 版本/env 变量 */
+  scripts?: Record<string, string>;
+  packageManager?: string;
+  nodeVersion?: string;
+  envVars?: Array<{ name: string; sensitive: boolean }>;
+  /** 限制常量（源码 MAX/LIMIT/TIMEOUT 等，排障边界参考） */
+  constants?: Array<{ name: string; value: string; filePath: string }>;
+  /** 入口文件（排障起点） */
+  entryFiles?: string[];
 }
 
 /** Context for topic pages（仓库专属主题，图谱推导） */

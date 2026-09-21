@@ -25,16 +25,16 @@
 
 | 符号 | 文件 | 扇入 |
 | --- | --- | --- |
-| isTestPath | src/shared/utils.ts | 14 |
+| isTestPath | src/shared/utils.ts | 15 |
 | generate | src/knowledge/wiki-page-generator.ts | 12 |
 | isTopicPage | src/knowledge/page-registry.ts | 8 |
 | labelToSymbolType | src/knowledge/wiki-context-builder.ts | 6 |
 | exec | src/mcp/codebase-memory-client.ts | 5 |
+| safeGetSnippet | src/knowledge/wiki-context-builder.ts | 4 |
 | pageRelPath | src/knowledge/page-registry.ts | 4 |
 | findPageDescriptor | .wiki/07-reference/calls.md | 4 |
-| validatePageContent | src/knowledge/wiki-quality-validator.ts | 3 |
-| topicIdFromPage | src/knowledge/page-registry.ts | 3 |
 | collectEvidenceFiles | src/knowledge/wiki-evidence.ts | 3 |
+| validatePageContent | src/knowledge/wiki-quality-validator.ts | 3 |
 
 ## registerBuildCommand
 

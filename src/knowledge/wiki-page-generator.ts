@@ -5,6 +5,7 @@ import type {
   ArchitectureContext,
   DataFlowContext,
   ModulesContext,
+  ModuleSummary,
   ApiContext,
   GlossaryContext,
   OnboardingContext,
@@ -16,7 +17,7 @@ import type {
 } from './types.js';
 import { isTopicPage } from './page-registry.js';
 import { sanitizeWikiOutput } from './wiki-output-sanitizer.js';
-import { findSafeCut, isAbnormalFinish } from './wiki-continuation.js';
+import { assembleSections, findSafeCut, isAbnormalFinish } from './wiki-continuation.js';
 import { WIKI_MAX_CONTINUATIONS } from '../shared/constants.js';
 
 interface PageConfig {
@@ -32,13 +33,17 @@ interface StreamOutcome {
   finish: string;
 }
 
-/** 单页生成结束后的续写结果通知（供构建报告统计） */
-export interface PageGenNotice {
-  kind: 'continuation';
+/** 带续写统计的一节/一页生成结果 */
+interface GenerationOutcome {
+  content: string;
   rounds: number;
-  /** 最后一轮仍异常终止（length/error），内容以残缺形态交由闸门裁决 */
   truncated: boolean;
 }
+
+/** 单页生成结束后的续写/分节结果通知（供构建报告统计） */
+export type PageGenNotice =
+  | { kind: 'continuation'; rounds: number; truncated: boolean }
+  | { kind: 'sections'; sections: number; continuedSections: number; truncated: boolean };
 
 const CONTINUE_INSTRUCTION = [
   '你的上一轮输出因达到长度上限而中断。你上面那条回复是已生成的安全前缀，末尾不完整的代码块、段落或表格行已被移除。',
@@ -48,6 +53,30 @@ const CONTINUE_INSTRUCTION = [
   '- 保持既有章节编号、表格与图表规范，反幻觉规则 R1-R6 继续生效',
   '- 一次性写完剩余全部章节',
 ].join('\n');
+
+/** 均匀分块（保序） */
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+/** 从相对路径推导模块归属键（src/<module>/… → <module>，否则取首段目录） */
+function moduleKeyOf(filePath: string): string {
+  const parts = filePath.split('/');
+  const srcIdx = parts.indexOf('src');
+  if (srcIdx >= 0 && srcIdx + 1 < parts.length) return parts[srcIdx + 1];
+  return parts.length > 1 ? parts[0] : filePath;
+}
+
+/** 分节作用域约束：告知本页节清单与本节职责，防止跨节越界或重复 */
+function sectionScope(pageTitle: string, sectionTitle: string, siblings: string[]): string {
+  return [
+    `本页面（${pageTitle}）分多节生成，完整节清单：${siblings.join('、')}。`,
+    `你只负责生成「${sectionTitle}」这一节。`,
+    '禁止输出页面开头导语、其他节的内容或全页总结；正文直接以本节的二级标题（##）开头。',
+  ].join('\n');
+}
 
 export class WikiPageGenerator {
   private model: ReturnType<ReturnType<typeof createOpenAI>> | null;
@@ -137,7 +166,12 @@ export class WikiPageGenerator {
   }
 
   async generateArchitecture(ctx: ArchitectureContext, onChunk: (text: string) => void): Promise<string> {
-    const modules = ctx.modules.map(m => ({
+    return this.generateSectioned(onChunk, this.buildArchitectureSections(ctx));
+  }
+
+  /** 架构页确定性节表：整体思路+架构图 → 核心模块详解（≤6 个/批）→ 依赖分析+横切关注点 */
+  private buildArchitectureSections(ctx: ArchitectureContext): PageConfig[] {
+    const toDetail = (m: ModuleSummary) => ({
       name: m.name,
       symbolCount: m.symbols.length,
       topSymbols: m.symbols
@@ -151,33 +185,73 @@ export class WikiPageGenerator {
         })),
       dependsOn: [...new Set(m.outgoingRelations.map(r => r.target))].slice(0, 5),
       usedBy: [...new Set(m.incomingRelations.map(r => r.source))].slice(0, 5),
-    }));
+    });
     const relations = ctx.interModuleRelations
       .filter((r, i, a) => a.findIndex(t => t.source === r.source && t.target === r.target) === i)
       .slice(0, 30);
+    const detailBatches = chunk(ctx.modules.map(toDetail), 6);
+    const sectionTitles = [
+      '整体架构设计思路与架构图',
+      ...detailBatches.map((_, i) => `核心模块详解（第${i + 1}批）`),
+      '模块依赖分析与横切关注点',
+    ];
 
-    return this.generate(onChunk, {
-      systemPrompt: `你是一个资深软件架构师。请根据模块和依赖数据生成详尽、专业的架构文档页面（Markdown格式）。
+    const sections: PageConfig[] = [
+      {
+        systemPrompt: `${sectionScope('架构文档', sectionTitles[0], sectionTitles)}\n\n你是一个资深软件架构师。请生成架构文档的「整体架构设计思路与架构图」节（Markdown格式）。
+
+要求：
+- 用中文撰写
+- 用3-4段自然语言深入分析系统的分层方式、各层职责、层间协作机制、架构风格。结合 layers 数据说明每个包属于哪一层及原因
+- "架构图"：用 Mermaid graph TD 展示完整的模块依赖关系图（节点用模块名，边表示依赖方向），Mermaid 图中的节点名必须与数据中的实际模块名一致
+- 不要展开单个模块的符号细节（详解由其他节负责）`,
+        userPrompt: JSON.stringify({
+          modules: ctx.modules.map(m => ({ name: m.name, symbolCount: m.symbols.length })),
+          relations,
+          layers: ctx.layers,
+          clusters: ctx.clusters,
+        }, null, 2),
+        maxOutputTokens: 8000,
+      },
+    ];
+
+    detailBatches.forEach((batch, i) => {
+      sections.push({
+        systemPrompt: `${sectionScope('架构文档', sectionTitles[i + 1], sectionTitles)}\n\n你是一个资深软件架构师。请生成架构文档的「核心模块详解」节（第${i + 1}/${detailBatches.length}批，Markdown格式）。
 
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- "整体架构设计思路"：用3-4段自然语言深入分析系统的分层方式、各层职责、层间协作机制、架构风格。结合 layers 数据说明每个包属于哪一层及原因
-- "架构图"章节：用 Mermaid graph TD 展示完整的模块依赖关系图（节点用模块名，边表示依赖方向）
-- "核心模块详解"章节：对每个模块，用1-2段详细描述其职责、核心符号的作用（引用 docstring 和 signature）、设计意图。如果模块有 topSymbols，必须逐一说明其用途
-- "模块依赖分析"章节：基于 boundaries 数据，用表格列出每个依赖边及其调用次数，并用文字分析关键依赖路径
-- "横切关注点"章节：分析错误处理、日志、配置管理等横切机制
-- Mermaid图中的节点名必须与实际模块名一致
-- 内容要充实，每个模块都要有实质性的描述，不要只写套话`,
+- 对本批每个模块，用1-2段详细描述其职责、核心符号的作用（引用 docstring 和 signature）、设计意图
+- 如果模块有 topSymbols，必须逐一说明其用途
+- 只描述本批数据中的模块，禁止描述其他批次的模块`,
+        userPrompt: JSON.stringify({
+          modules: batch,
+          supplementalSymbols: ctx.supplementalSymbols ?? [],
+        }, null, 2),
+        maxOutputTokens: 8000,
+      });
+    });
+
+    sections.push({
+      systemPrompt: `${sectionScope('架构文档', sectionTitles[sectionTitles.length - 1], sectionTitles)}\n\n你是一个资深软件架构师。请生成架构文档的「模块依赖分析与横切关注点」节（Markdown格式）。
+
+要求：
+- 用中文撰写
+- "模块依赖分析"：基于 boundaries 数据，用表格列出每个依赖边及其调用次数，并用文字分析关键依赖路径
+- "横切关注点"：分析错误处理、日志、配置管理等横切机制`,
       userPrompt: JSON.stringify({
-        modules,
         relations,
-        layers: ctx.layers,
         boundaries: ctx.boundaries,
-        clusters: ctx.clusters,
-        supplementalSymbols: ctx.supplementalSymbols ?? [],
+        modules: ctx.modules.map(m => ({
+          name: m.name,
+          dependsOn: [...new Set(m.outgoingRelations.map(r => r.target))].slice(0, 5),
+          usedBy: [...new Set(m.incomingRelations.map(r => r.source))].slice(0, 5),
+        })),
       }, null, 2),
       maxOutputTokens: 8000,
     });
+
+    return sections;
   }
 
   async generateDataFlow(ctx: DataFlowContext, onChunk: (text: string) => void): Promise<string> {
@@ -215,7 +289,12 @@ export class WikiPageGenerator {
   }
 
   async generateModules(ctx: ModulesContext, onChunk: (text: string) => void): Promise<string> {
-    const modules = ctx.modules.map(m => ({
+    return this.generateSectioned(onChunk, this.buildModulesSections(ctx));
+  }
+
+  /** 模块页确定性节表：组织方式概述 → 模块详解（≤4 个/批）→ 其他模块汇总 */
+  private buildModulesSections(ctx: ModulesContext): PageConfig[] {
+    const toDetail = (m: ModuleSummary) => ({
       name: m.name,
       files: m.files.slice(0, 10),
       topSymbols: m.symbols
@@ -233,31 +312,72 @@ export class WikiPageGenerator {
       })),
       dependsOn: [...new Set(m.outgoingRelations.map(r => r.target))].slice(0, 5),
       usedBy: [...new Set(m.incomingRelations.map(r => r.source))].slice(0, 5),
-    }));
+    });
 
-    return this.generate(onChunk, {
-      systemPrompt: `你是一个资深代码文档专家。请根据模块数据生成详尽、专业的模块文档页面（Markdown格式）。
+    const hasOther = (ctx.otherModules ?? []).length > 0;
+    const detailBatches = chunk(ctx.modules, 4).map(batch => batch.map(toDetail));
+    const sectionTitles = [
+      '组织方式概述',
+      ...detailBatches.map((_, i) => `模块详解（第${i + 1}批）`),
+      ...(hasOther ? ['其他模块汇总'] : []),
+    ];
+
+    const sections: PageConfig[] = [
+      {
+        systemPrompt: `${sectionScope('模块文档', sectionTitles[0], sectionTitles)}\n\n你是一个资深代码文档专家。请生成模块文档的「组织方式概述」节（Markdown格式）。
+
+要求：
+- 用中文撰写，用1-2段概述项目的模块组织方式和设计原则（模块清单与规模见数据）
+- 不要展开任何单个模块的内部细节（详解由其他节负责）
+- 只基于提供的模块清单描述，严禁编造模块`,
+        userPrompt: JSON.stringify({
+          modules: ctx.modules.map(m => ({
+            name: m.name,
+            fileCount: m.files.length,
+            symbolCount: m.symbols.length,
+          })),
+        }, null, 2),
+        maxOutputTokens: 8000,
+      },
+    ];
+
+    detailBatches.forEach((batch, i) => {
+      sections.push({
+        systemPrompt: `${sectionScope('模块文档', sectionTitles[i + 1], sectionTitles)}\n\n你是一个资深代码文档专家。请生成模块文档的「模块详解」节（第${i + 1}/${detailBatches.length}批，Markdown格式）。
 
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- 开头用一段话概述项目的模块组织方式和设计原则
-- 对每个模块，包含：
+- 对本批的每个模块，包含：
   - "职责"：该模块承担的职责（基于符号的 docstring 和 signature 详细说明）
   - "设计意图"：设计这个模块的原因，它在整体架构中的角色
   - "交互方式"：与其他模块的协作方式（基于 dependsOn 和 usedBy）
   - "文件结构"：用表格列出该模块的文件及其关键符号和职责（文件名 | 关键符号 | 职责）
   - "核心符号"：对每个 topSymbol，用1-2句说明其用途（基于 docstring/signature）
-- 如果提供 otherModules（模块过多时的概要聚合），在文末用一张表汇总其名称与规模，严禁虚构聚合模块的内部细节
-- 不要输出原始代码片段，但要引用关键函数的签名
-- 按模块重要性排序
-- 内容要充实，每个模块都要有实质性的深入描述`,
-      userPrompt: JSON.stringify({
-        modules,
-        otherModules: ctx.otherModules ?? [],
-        supplementalSymbols: ctx.supplementalSymbols ?? [],
-      }, null, 2),
-      maxOutputTokens: 8000,
+- 按模块重要性排序（保持数据顺序）
+- 只描述本批数据中的模块，禁止描述其他批次的模块
+- 不要输出原始代码片段，但要引用关键函数的签名`,
+        userPrompt: JSON.stringify({
+          modules: batch,
+          supplementalSymbols: ctx.supplementalSymbols ?? [],
+        }, null, 2),
+        maxOutputTokens: 8000,
+      });
     });
+
+    if (hasOther) {
+      sections.push({
+        systemPrompt: `${sectionScope('模块文档', '其他模块汇总', sectionTitles)}\n\n你是一个资深代码文档专家。请生成模块文档的「其他模块汇总」节（Markdown格式）。
+
+要求：
+- 用中文撰写
+- 用一张表汇总 otherModules 的名称与规模（模块 | 文件数 | 符号数）
+- 严禁虚构这些聚合模块的内部细节（未提供其符号数据）`,
+        userPrompt: JSON.stringify({ otherModules: ctx.otherModules }, null, 2),
+        maxOutputTokens: 8000,
+      });
+    }
+
+    return sections;
   }
 
   async generateApi(ctx: ApiContext, onChunk: (text: string) => void): Promise<string> {
@@ -359,33 +479,78 @@ export class WikiPageGenerator {
   }
 
   async generateGlossary(ctx: GlossaryContext, onChunk: (text: string) => void): Promise<string> {
-    const symbols = ctx.symbols.slice(0, 40);
+    return this.generateSectioned(onChunk, this.buildGlossarySections(ctx));
+  }
 
-    return this.generate(onChunk, {
-      systemPrompt: `你是一个资深代码文档专家。请根据符号数据生成详尽、专业的"关键概念"参考页面（Markdown格式）。
+  /**
+   * 关键概念页确定性节表：符号按所属模块分组（整组进同一节，避免同模块符号跨节碎片化），
+   * 贪心分桶为 1-3 节（每节约 20 个符号）；补强符号按模块归入对应节。
+   */
+  private buildGlossarySections(ctx: GlossaryContext): PageConfig[] {
+    const symbols = ctx.symbols.slice(0, 40);
+    const supplemental = ctx.supplementalSymbols ?? [];
+
+    const groupOrder: string[] = [];
+    const groups = new Map<string, GlossaryContext['symbols']>();
+    for (const s of symbols) {
+      const key = moduleKeyOf(s.filePath);
+      if (!groups.has(key)) {
+        groups.set(key, []);
+        groupOrder.push(key);
+      }
+      groups.get(key)!.push(s);
+    }
+
+    const sectionCount = Math.min(3, Math.max(1, Math.ceil(symbols.length / 20)));
+    const target = Math.max(1, Math.ceil(symbols.length / sectionCount));
+    const buckets: Array<{ keys: string[]; symbols: GlossaryContext['symbols'] }> = [];
+    let current = { keys: [] as string[], symbols: [] as GlossaryContext['symbols'] };
+    for (const key of groupOrder) {
+      const group = groups.get(key)!;
+      if (current.symbols.length > 0 && current.symbols.length + group.length > target && buckets.length < sectionCount - 1) {
+        buckets.push(current);
+        current = { keys: [], symbols: [] };
+      }
+      current.keys.push(key);
+      current.symbols.push(...group);
+    }
+    if (current.symbols.length > 0 || buckets.length === 0) buckets.push(current);
+
+    const supplementalBySection = buckets.map(() => [] as NonNullable<GlossaryContext['supplementalSymbols']>);
+    for (const s of supplemental) {
+      const idx = buckets.findIndex(b => b.keys.includes(moduleKeyOf(s.file)));
+      supplementalBySection[idx >= 0 ? idx : buckets.length - 1].push(s);
+    }
+
+    const toEntry = (s: GlossaryContext['symbols'][number]) => ({
+      name: s.name,
+      type: s.type,
+      file: s.startLine && s.startLine > 0 ? `${s.filePath}:${s.startLine}` : s.filePath,
+      docstring: s.docstring,
+      signature: s.signature,
+      complexity: s.complexity,
+    });
+
+    const sectionTitles = buckets.map((b, i) => `关键概念（第${i + 1}批·${b.keys.join('/') || '补强符号'}）`);
+
+    return buckets.map((b, i) => ({
+      systemPrompt: `${sectionScope('关键概念参考', sectionTitles[i], sectionTitles)}\n\n你是一个资深代码文档专家。请生成"关键概念"参考页的这一批符号内容（Markdown格式）。
 
 要求：
-- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- 开头用1-2段说明这个页面列出了项目的关键类型和函数，及其文档价值
-- 按功能分组（如：核心服务、数据模型、工具函数、CLI命令、MCP客户端等），不要按字母排序。分组要基于符号的实际所属模块
-- 每组用表格列出（名称 | 类型 | 签名 | 说明 | 所属文件）
+- 用中文撰写${i === 0 ? `
+- 开头用1段说明这个页面列出了项目的关键类型和函数，及其文档价值` : ''}
+- 基于符号的实际所属模块分组（不要按字母排序），每组用表格列出（名称 | 类型 | 签名 | 说明 | 所属文件）
 - "说明"列：基于提供的 docstring（如果有）写出准确的说明；docstring 为空时根据符号名和类型推断，但要标注是推断
 - "签名"列：填入提供的 signature（如有）
 - 对每个分组，用一段话说明该组符号的整体职责
-- 内容要充实，要让读者能通过此页面快速理解项目的核心概念`,
+- 只描述本批数据中的符号，禁止描述其他批次的符号`,
       userPrompt: JSON.stringify({
-        symbols: symbols.map(s => ({
-          name: s.name,
-          type: s.type,
-          file: s.startLine && s.startLine > 0 ? `${s.filePath}:${s.startLine}` : s.filePath,
-          docstring: s.docstring,
-          signature: s.signature,
-          complexity: s.complexity,
-        })),
-        supplementalSymbols: ctx.supplementalSymbols ?? [],
+        modules: b.keys,
+        symbols: b.symbols.map(toEntry),
+        supplementalSymbols: supplementalBySection[i],
       }, null, 2),
       maxOutputTokens: 8000,
-    });
+    }));
   }
 
   async generateTopic(ctx: TopicContext, onChunk: (text: string) => void): Promise<string> {
@@ -503,12 +668,47 @@ export class WikiPageGenerator {
 
   private async generate(onChunk: (text: string) => void, config: PageConfig): Promise<string> {
     if (!this.model) return '';
+    const r = await this.generateWithContinuation(onChunk, config);
+    if (r.rounds > 0) {
+      this.onNotice?.({ kind: 'continuation', rounds: r.rounds, truncated: r.truncated });
+    }
+    return r.content;
+  }
 
+  /**
+   * 分节生成：按确定性节表逐节生成（串行），每节独立获得输出预算与数据切片，
+   * 并自动继承断流续写能力。任一节为空则整页判失败（返回 ''，交由降级路径）。
+   */
+  private async generateSectioned(onChunk: (text: string) => void, sections: PageConfig[]): Promise<string> {
+    if (!this.model || sections.length === 0) return '';
+
+    const parts: string[] = [];
+    let continuedSections = 0;
+    let truncated = false;
+    for (let i = 0; i < sections.length; i++) {
+      if (i > 0) onChunk('\n\n');
+      const r = await this.generateWithContinuation(onChunk, sections[i]);
+      if (r.content.trim().length === 0) return '';
+      parts.push(r.content);
+      if (r.rounds > 0) continuedSections++;
+      if (r.truncated) truncated = true;
+    }
+    if (sections.length > 1) {
+      this.onNotice?.({ kind: 'sections', sections: sections.length, continuedSections, truncated });
+    }
+    return assembleSections(parts);
+  }
+
+  /** 单次生成 + 断流续写循环；返回内容与续写统计 */
+  private async generateWithContinuation(
+    onChunk: (text: string) => void,
+    config: PageConfig,
+  ): Promise<GenerationOutcome> {
     const outcome = await this.streamOnce(onChunk, config);
 
     // content 为空时回退用 reasoning（思考模型未关闭思考的情况）：无法安全续写，直接返回
     if (outcome.text.trim().length === 0 && outcome.reasoning.trim().length > 0) {
-      return outcome.reasoning;
+      return { content: outcome.reasoning, rounds: 0, truncated: false };
     }
 
     let text = outcome.text;
@@ -532,10 +732,7 @@ export class WikiPageGenerator {
       rounds++;
     }
 
-    if (rounds > 0) {
-      this.onNotice?.({ kind: 'continuation', rounds, truncated: isAbnormalFinish(finish) });
-    }
-    return text;
+    return { content: text, rounds, truncated: isAbnormalFinish(finish) };
   }
 
   /**

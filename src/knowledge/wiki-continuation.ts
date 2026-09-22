@@ -1,8 +1,10 @@
 /**
- * 断流检测与自动续写的纯函数部分（不依赖 AI SDK，可独立单测）。
+ * 断流检测、自动续写与分节组装的纯函数部分（不依赖 AI SDK，可独立单测）。
  *
  * 续写策略：截断产物先在「安全切点」截齐（丢弃残缺的代码块/段落/表格行），
  * 再携带安全前缀发起续写，拼接后仍走质量闸门兜底。
+ *
+ * 分节组装：两阶段生成的各节产物以空行连接，跨节重复的标题行去重（围栏感知）。
  */
 
 /** 判定一轮流式输出是否异常终止（输出预算耗尽或流中途出错） */
@@ -76,4 +78,33 @@ function lastCompleteTableRow(lines: string[]): number {
     if (lines[i].trimEnd().endsWith('|')) return i;
   }
   return -1;
+}
+
+/**
+ * 分节组装：各节 trim 后以空行连接；跨节重复的标题行（大小写不敏感）只保留首个。
+ * 围栏内的 `#` 行（如 shell 注释）不视为标题。
+ */
+export function assembleSections(parts: string[]): string {
+  const seenHeadings = new Set<string>();
+  const assembled: string[] = [];
+  for (const part of parts) {
+    const trimmed = part.trim();
+    if (trimmed.length === 0) continue;
+    let inFence = false;
+    const lines = trimmed.split('\n').filter(line => {
+      if (/^\s*```/.test(line)) {
+        inFence = !inFence;
+        return true;
+      }
+      if (inFence) return true;
+      const heading = line.match(/^(#{1,6}\s+.+)$/);
+      if (!heading) return true;
+      const key = heading[1].trim().toLowerCase();
+      if (seenHeadings.has(key)) return false;
+      seenHeadings.add(key);
+      return true;
+    });
+    assembled.push(lines.join('\n'));
+  }
+  return assembled.join('\n\n');
 }

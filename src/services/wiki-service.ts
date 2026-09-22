@@ -79,13 +79,23 @@ export class WikiService {
     const skippedPages: Array<{ page: string; reason: string }> = [];
     const qualityReports: PageQualityReport[] = [];
     const continuations: Array<{ page: string; rounds: number; truncated: boolean }> = [];
+    const sectionedPages: Array<{ page: string; sections: number; continuedSections: number; truncated: boolean }> = [];
     const llmDropped: Array<{ page: string; reason: string }> = [];
     const mode = options?.mode ?? 'full';
 
     let currentPage = '';
     const pageGenerator = new WikiPageGenerator(
       options?.model, options?.baseURL, options?.apiKey,
-      n => continuations.push({ page: currentPage, rounds: n.rounds, truncated: n.truncated }),
+      n => {
+        if (n.kind === 'continuation') {
+          continuations.push({ page: currentPage, rounds: n.rounds, truncated: n.truncated });
+        } else {
+          sectionedPages.push({
+            page: currentPage, sections: n.sections,
+            continuedSections: n.continuedSections, truncated: n.truncated,
+          });
+        }
+      },
     );
 
     for (const page of pages) {
@@ -148,7 +158,7 @@ export class WikiService {
       writtenPages.push({ page, relPath, source: produced.source, status: existed ? 'updated' : 'created' });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, llmDropped);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped);
     return filenames;
   }
 
@@ -277,6 +287,7 @@ export class WikiService {
     reports: PageQualityReport[],
     legacyRemoved: string[],
     continuations: Array<{ page: string; rounds: number; truncated: boolean }>,
+    sectionedPages: Array<{ page: string; sections: number; continuedSections: number; truncated: boolean }>,
     llmDropped: Array<{ page: string; reason: string }>,
   ): void {
     const lines: string[] = ['[wiki] 构建报告：'];
@@ -302,6 +313,13 @@ export class WikiService {
         .map(c => `${c.page}（续 ${c.rounds} 轮${c.truncated ? '，末轮仍截断' : ''}）`)
         .join('、');
       lines.push(`  断流续写 ${continuations.length} 页：${detail}`);
+    }
+
+    if (sectionedPages.length > 0) {
+      const detail = sectionedPages
+        .map(s => `${s.page}（${s.sections} 节${s.continuedSections > 0 ? `·${s.continuedSections} 节续写` : ''}${s.truncated ? '·有节仍截断' : ''}）`)
+        .join('、');
+      lines.push(`  分节生成 ${sectionedPages.length} 页：${detail}`);
     }
 
     if (llmDropped.length > 0) {

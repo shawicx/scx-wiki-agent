@@ -49,12 +49,11 @@ describe('WikiPageGenerator', () => {
   });
 
   it('should construct prompt with architecture context', async () => {
-    const mockStream = {
+    mockStreamText.mockImplementation((() => ({
       fullStream: (async function* () {
         yield { type: 'text-delta', text: 'The project uses a layered architecture.' };
       })(),
-    };
-    mockStreamText.mockReturnValue(mockStream as any);
+    })) as any);
 
     const generator = new WikiPageGenerator('gpt-4o-mini');
     const ctx: ArchitectureContext = {
@@ -71,9 +70,11 @@ describe('WikiPageGenerator', () => {
 
     await generator.generateArchitecture(ctx, vi.fn());
 
-    const callArgs = mockStreamText.mock.calls[0][0] as any;
-    expect(callArgs.prompt).toContain('services');
-    expect(callArgs.prompt).toContain('IndexService');
+    // 分节生成：首节为整体思路+架构图（模块轻量清单），符号进详解节
+    const prompts = mockStreamText.mock.calls.map(c => (c[0] as any).prompt as string);
+    expect(prompts.length).toBe(3);
+    expect(prompts[0]).toContain('services');
+    expect(prompts.join('\n')).toContain('IndexService');
   });
 
   it('should return empty string when model is not configured', async () => {

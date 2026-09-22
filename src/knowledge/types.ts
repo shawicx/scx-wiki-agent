@@ -349,5 +349,7 @@ export interface WikiBuildOptions {
   mode?: 'full' | 'update';
   /** 重新探测主题页并覆盖 topics.json */
   refreshTopics?: boolean;
+  /** 重新规划章节树并覆盖 outline.json（无 LLM 时回退现有锁定文件） */
+  refreshOutline?: boolean;
   onChunk?: (filename: string, text: string) => void;
 }

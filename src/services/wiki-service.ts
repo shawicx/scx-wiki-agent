@@ -11,8 +11,10 @@ import type { PageQualityReport } from '../knowledge/wiki-quality-validator.js';
 import { collectEvidenceFiles, buildEvidenceBlock, injectEvidenceBlock } from '../knowledge/wiki-evidence.js';
 import { ConfigDetector } from '../knowledge/config-detector.js';
 import { TopicDiscovery, loadTopics, saveTopics } from '../knowledge/topic-discovery.js';
-import { loadOutline, validateOutline } from '../knowledge/outline.js';
-import type { OutlineKnown, OutlineReport } from '../knowledge/outline.js';
+import type { TopicDefinition } from '../knowledge/topic-discovery.js';
+import { loadOutline, saveOutline, validateOutline } from '../knowledge/outline.js';
+import type { OutlineFileData, OutlineKnown, OutlineReport } from '../knowledge/outline.js';
+import { OutlinePlanner } from '../knowledge/outline-planner.js';
 import {
   PAGE_REGISTRY, ALL_PAGE_NAMES, tier2PagesFor,
   findPageDescriptor, pageRelPath, buildRelatedSection, RETIRED_WIKI_PATHS,
@@ -52,9 +54,41 @@ export class WikiService {
     }
     const topicPages = topics.map(t => topicPageName(t.id));
 
-    // 章节树：outline.json 锁定（缺失则无章节页）；坏配置经校验器降级，绝不失败构建
+    // 页生成器（章树 planner 复用其模型能力）与通知统计，声明在前供 planner 触发
+    const noLlm = options?.noLlm ?? false;
+    const continuations: Array<{ page: string; rounds: number; truncated: boolean }> = [];
+    const sectionedPages: Array<{ page: string; sections: number; continuedSections: number; truncated: boolean }> = [];
+    const llmDropped: Array<{ page: string; reason: string }> = [];
+    let currentPage = '';
+    const pageGenerator = new WikiPageGenerator(
+      options?.model, options?.baseURL, options?.apiKey,
+      n => {
+        if (n.kind === 'continuation') {
+          continuations.push({ page: currentPage, rounds: n.rounds, truncated: n.truncated });
+        } else {
+          sectionedPages.push({
+            page: currentPage, sections: n.sections,
+            continuedSections: n.continuedSections, truncated: n.truncated,
+          });
+        }
+      },
+    );
+
+    // 章节树：outline.json 锁定；缺失且 LLM 可用时 planner 首次自动提议（--refresh-outline 重建）；
+    // 规划不可用/失败时回退现有锁定文件。坏配置经校验器降级，绝不失败构建。
     const knownFiles = new Set(this.scanResult.files.map(f => f.relativePath));
-    const outlineRaw = loadOutline(agentDir);
+    let outlineRaw: unknown | null = options?.refreshOutline ? null : loadOutline(agentDir);
+    if (outlineRaw === null && !noLlm && pageGenerator.hasModel()) {
+      const proposed = await this.planOutline(pageGenerator, topics, knownFiles);
+      if (proposed !== null) {
+        saveOutline(agentDir, proposed);
+        outlineRaw = proposed;
+      }
+    }
+    if (outlineRaw === null && options?.refreshOutline) {
+      outlineRaw = loadOutline(agentDir);
+    }
+
     let outlineReport: OutlineReport | null = null;
     let chapterPages: string[] = [];
     if (outlineRaw !== null) {
@@ -74,7 +108,6 @@ export class WikiService {
     contextBuilder.setTopics(topics);
     if (outlineReport) contextBuilder.setOutlineChapters(outlineReport.chapters);
     const fallbackBuilder = new WikiFallbackBuilder();
-    const noLlm = options?.noLlm ?? false;
     const onChunk = options?.onChunk ?? (() => {});
 
     // 接管式重建：清理旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页/章节页残留
@@ -92,25 +125,7 @@ export class WikiService {
     const writtenPages: Array<{ page: string; relPath: string; source: string; status: PageStatus }> = [];
     const skippedPages: Array<{ page: string; reason: string }> = [];
     const qualityReports: PageQualityReport[] = [];
-    const continuations: Array<{ page: string; rounds: number; truncated: boolean }> = [];
-    const sectionedPages: Array<{ page: string; sections: number; continuedSections: number; truncated: boolean }> = [];
-    const llmDropped: Array<{ page: string; reason: string }> = [];
     const mode = options?.mode ?? 'full';
-
-    let currentPage = '';
-    const pageGenerator = new WikiPageGenerator(
-      options?.model, options?.baseURL, options?.apiKey,
-      n => {
-        if (n.kind === 'continuation') {
-          continuations.push({ page: currentPage, rounds: n.rounds, truncated: n.truncated });
-        } else {
-          sectionedPages.push({
-            page: currentPage, sections: n.sections,
-            continuedSections: n.continuedSections, truncated: n.truncated,
-          });
-        }
-      },
-    );
 
     for (const page of pages) {
       const relPath = pageRelPath(page);
@@ -208,9 +223,39 @@ export class WikiService {
     return valid.length > 0 ? valid : allPages;
   }
 
+  /**
+   * 章节树规划：LLM 提议 → 校验器裁决；净树为空且存在剔除时，
+   * 携剔除原因反馈重试一次（仍空则返回首轮产物，交由正常校验路径降级）。
+   * 输出不可解析返回 null。
+   */
+  private async planOutline(
+    generator: WikiPageGenerator,
+    topics: TopicDefinition[],
+    knownFiles: Set<string>,
+  ): Promise<OutlineFileData | null> {
+    const planner = new OutlinePlanner(this.client, this.scanResult);
+    const proposed = await planner.plan(generator, topics);
+    if (proposed === null) {
+      console.warn('[wiki] 章节树规划失败（LLM 输出不可解析），本次跳过章节页；可用 --refresh-outline 重试');
+      return null;
+    }
+
+    const preCheck = validateOutline(proposed, this.outlineKnown(knownFiles, proposed));
+    if (preCheck.chapters.length === 0 && preCheck.drops.length > 0) {
+      const feedback = preCheck.drops
+        .map(d => `${d.page ? `${d.chapter}/${d.page}` : d.chapter}：${d.reasons.join('；')}`)
+        .join('；');
+      const retried = await planner.plan(generator, topics, feedback);
+      if (retried !== null) {
+        const recheck = validateOutline(retried, this.outlineKnown(knownFiles, retried));
+        if (recheck.chapters.length > 0) return retried;
+      }
+    }
+    return proposed;
+  }
+
   /** 组装章节树校验参考集：模块来自架构包，符号来自 outline 引用文件（有界查询） */
-  private outlineKnown(knownFiles: Set<string>, outlineRaw: unknown): OutlineKnown {
-    const arch = this.client.getArchitecture();
+  private outlineKnown(knownFiles: Set<string>, outlineRaw: unknown): OutlineKnown {    const arch = this.client.getArchitecture();
     const rawChapters = (outlineRaw as { chapters?: unknown })?.chapters;
     const refFiles = [...new Set(
       (Array.isArray(rawChapters) ? rawChapters : [])

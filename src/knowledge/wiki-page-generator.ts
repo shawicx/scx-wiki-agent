@@ -109,6 +109,13 @@ export class WikiPageGenerator {
     return this.model !== null;
   }
 
+  /** 规划类调用的原始文本（章节树 planner 复用模型与续写能力；不做 sanitize） */
+  async plan(systemPrompt: string, userPrompt: string): Promise<string> {
+    if (!this.model) return '';
+    const r = await this.generateWithContinuation(() => {}, { systemPrompt, userPrompt, maxOutputTokens: 8000 });
+    return r.content;
+  }
+
   /** 按页面名派发 LLM 生成（供 PageRegistry 调用） */
   async generateByName(page: string, ctx: any, onChunk: (text: string) => void): Promise<string> {
     if (isChapterPage(page)) return this.generateChapterPage(ctx, onChunk);

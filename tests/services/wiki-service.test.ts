@@ -1,9 +1,16 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WikiService } from '../../src/services/wiki-service.js';
 import type { ScanResult } from '../../src/core/scanner.js';
 import { createMockClient } from '../helpers/mock-mcp-client.js';
 import { join } from 'path';
 import { mkdirSync, rmSync, existsSync, readFileSync, statSync, writeFileSync } from 'fs';
+
+vi.mock('ai', () => ({
+  streamText: vi.fn(),
+}));
+
+import { streamText } from 'ai';
+const mockStreamText = vi.mocked(streamText);
 
 const tmpDir = join(process.cwd(), '.test-wiki-tmp');
 
@@ -400,5 +407,38 @@ describe('WikiService', () => {
     const generated = await service.buildWiki(wikiDir, { noLlm: true, pages: ['chapter:terminal/xterm'] });
 
     expect(generated).toEqual(['09-chapters/terminal/xterm.md']);
+  });
+
+  it('should auto-plan outline on first build when LLM available and lock outline.json', async () => {
+    // 首次自动提议：outline.json 缺失 + 模型可用 → planner 产出并锁定
+    mockStreamText.mockImplementation((() => ({
+      fullStream: (async function* () {
+        yield {
+          type: 'text-delta',
+          text: JSON.stringify({
+            chapters: [{
+              id: 'terminal', title: '终端渲染', summary: '渲染子系统',
+              pages: [{ id: 'xterm', title: 'xterm 集成', brief: '说明 xterm 集成方式与 resize 适配。', files: ['src/index.ts', 'src/a.ts', 'src/b.ts'] }],
+            }],
+          }),
+        };
+      })(),
+      finishReason: Promise.resolve('stop'),
+    })) as any);
+
+    const client = createMockClient();
+    const wikiDir = join(tmpDir, 'wiki-planner');
+    const agentDir = join(tmpDir, '.scx-wiki-agent');
+    rmSync(join(agentDir, 'outline.json'), { force: true });
+
+    const service = new WikiService(client as any, makeOutlineScanResult());
+    const generated = await service.buildWiki(wikiDir, { model: 'test-model' });
+
+    // 锁定文件写入（generator=outline-planner），章页进入产出清单
+    const locked = JSON.parse(readFileSync(join(agentDir, 'outline.json'), 'utf-8'));
+    expect(locked.generator).toBe('outline-planner');
+    expect(locked.chapters[0].id).toBe('terminal');
+    expect(generated).toContain('09-chapters/terminal/xterm.md');
+    expect(existsSync(join(wikiDir, '09-chapters', 'terminal', 'xterm.md'))).toBe(true);
   });
 });

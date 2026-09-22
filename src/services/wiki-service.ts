@@ -18,10 +18,11 @@ import {
 } from '../knowledge/page-registry.js';
 import type { WikiBuildOptions } from '../knowledge/types.js';
 
-/** 单页产出结果：最终内容 + 走的生成路径 */
+/** 单页产出结果：最终内容 + 走的生成路径 + LLM 路径放弃原因（仅降级时） */
 interface PageProduced {
   content: string;
   source: 'llm' | 'fallback';
+  llmDrop?: string;
 }
 
 /** 页面写盘结果状态 */
@@ -59,7 +60,6 @@ export class WikiService {
     const contextBuilder = new WikiContextBuilder(this.client, this.scanResult, detector);
     contextBuilder.setTopics(topics);
     const fallbackBuilder = new WikiFallbackBuilder();
-    const pageGenerator = new WikiPageGenerator(options?.model, options?.baseURL, options?.apiKey);
     const noLlm = options?.noLlm ?? false;
     const onChunk = options?.onChunk ?? (() => {});
 
@@ -78,10 +78,19 @@ export class WikiService {
     const writtenPages: Array<{ page: string; relPath: string; source: string; status: PageStatus }> = [];
     const skippedPages: Array<{ page: string; reason: string }> = [];
     const qualityReports: PageQualityReport[] = [];
+    const continuations: Array<{ page: string; rounds: number; truncated: boolean }> = [];
+    const llmDropped: Array<{ page: string; reason: string }> = [];
     const mode = options?.mode ?? 'full';
+
+    let currentPage = '';
+    const pageGenerator = new WikiPageGenerator(
+      options?.model, options?.baseURL, options?.apiKey,
+      n => continuations.push({ page: currentPage, rounds: n.rounds, truncated: n.truncated }),
+    );
 
     for (const page of pages) {
       const relPath = pageRelPath(page);
+      currentPage = page;
 
       const pageContext = contextBuilder.buildByName(page, pages);
       if (pageContext === null || pageContext === undefined) {
@@ -96,6 +105,9 @@ export class WikiService {
       const produced = await this.generatePage(
         page, pageContext, fallbackBuilder, pageGenerator, noLlm, onChunk, gate,
       );
+      if (produced.llmDrop) {
+        llmDropped.push({ page, reason: produced.llmDrop });
+      }
 
       // 页首证据锚定块（确定性注入，LLM 无法伪造）+ 页底 Related 区块
       const evidenceFiles = collectEvidenceFiles(pageContext, knownFiles, this.scanResult.rootDir);
@@ -136,7 +148,7 @@ export class WikiService {
       writtenPages.push({ page, relPath, source: produced.source, status: existed ? 'updated' : 'created' });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, llmDropped);
     return filenames;
   }
 
@@ -232,6 +244,7 @@ export class WikiService {
     onChunk: (filename: string, text: string) => void,
     gate?: (content: string) => boolean,
   ): Promise<PageProduced> {
+    let llmDrop: string | undefined;
     if (!noLlm && generator.hasModel()) {
       try {
         const content = await generator.generateByName(page, pageContext, (text) => onChunk(page, text));
@@ -242,12 +255,15 @@ export class WikiService {
             return { content: cleaned, source: 'llm' };
           }
           // LLM 输出未过质量闸门 → 降级规则路径
+          llmDrop = '质量闸门未过';
+        } else {
+          llmDrop = 'LLM 输出为空';
         }
       } catch {
-        // Fall through to fallback
+        llmDrop = 'LLM 生成异常';
       }
     }
-    return { content: fallback.buildByName(page, pageContext), source: 'fallback' };
+    return { content: fallback.buildByName(page, pageContext), source: 'fallback', llmDrop };
   }
 
   /**
@@ -260,6 +276,8 @@ export class WikiService {
     skipped: Array<{ page: string; reason: string }>,
     reports: PageQualityReport[],
     legacyRemoved: string[],
+    continuations: Array<{ page: string; rounds: number; truncated: boolean }>,
+    llmDropped: Array<{ page: string; reason: string }>,
   ): void {
     const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -277,6 +295,18 @@ export class WikiService {
     }
     if (unchanged.length > 0 && writtenCount > 0) {
       lines.push(`  本次变更文件：${[...created, ...updated].map(w => w.relPath).join('、')}`);
+    }
+
+    if (continuations.length > 0) {
+      const detail = continuations
+        .map(c => `${c.page}（续 ${c.rounds} 轮${c.truncated ? '，末轮仍截断' : ''}）`)
+        .join('、');
+      lines.push(`  断流续写 ${continuations.length} 页：${detail}`);
+    }
+
+    if (llmDropped.length > 0) {
+      const detail = llmDropped.map(d => `${d.page}（${d.reason}）`).join('、');
+      lines.push(`  LLM 降级规则 ${llmDropped.length} 页：${detail}`);
     }
 
     if (legacyRemoved.length > 0) {

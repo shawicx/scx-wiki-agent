@@ -15,6 +15,9 @@ import type {
   TopicContext,
 } from './types.js';
 import { isTopicPage } from './page-registry.js';
+import { sanitizeWikiOutput } from './wiki-output-sanitizer.js';
+import { findSafeCut, isAbnormalFinish } from './wiki-continuation.js';
+import { WIKI_MAX_CONTINUATIONS } from '../shared/constants.js';
 
 interface PageConfig {
   systemPrompt: string;
@@ -22,10 +25,39 @@ interface PageConfig {
   maxOutputTokens?: number;
 }
 
+/** 单轮流式生成的产出与终止原因 */
+interface StreamOutcome {
+  text: string;
+  reasoning: string;
+  finish: string;
+}
+
+/** 单页生成结束后的续写结果通知（供构建报告统计） */
+export interface PageGenNotice {
+  kind: 'continuation';
+  rounds: number;
+  /** 最后一轮仍异常终止（length/error），内容以残缺形态交由闸门裁决 */
+  truncated: boolean;
+}
+
+const CONTINUE_INSTRUCTION = [
+  '你的上一轮输出因达到长度上限而中断。你上面那条回复是已生成的安全前缀，末尾不完整的代码块、段落或表格行已被移除。',
+  '请从中断处直接继续，严格遵守：',
+  '- 禁止重复或改写已输出的内容，禁止重新开始',
+  '- 禁止任何开场白、说明或寒暄，直接续写 Markdown 正文',
+  '- 保持既有章节编号、表格与图表规范，反幻觉规则 R1-R6 继续生效',
+  '- 一次性写完剩余全部章节',
+].join('\n');
+
 export class WikiPageGenerator {
   private model: ReturnType<ReturnType<typeof createOpenAI>> | null;
 
-  constructor(modelName?: string, baseURL?: string, apiKey?: string) {
+  constructor(
+    modelName?: string,
+    baseURL?: string,
+    apiKey?: string,
+    private onNotice?: (notice: PageGenNotice) => void,
+  ) {
     if (modelName) {
       const options: Parameters<typeof createOpenAI>[0] = {};
       if (baseURL) {
@@ -449,7 +481,6 @@ export class WikiPageGenerator {
   }
 
   // --- Core generation ---
-
   private static readonly ANTI_HALLUCINATION = [
     '绝对规则：只能基于提供的JSON数据描述项目，严禁编造不存在的模块、服务、功能或业务场景。',
     '如果数据不足以描述某个方面，直接省略或注明"信息不足"，不要猜测或补充。',
@@ -473,18 +504,78 @@ export class WikiPageGenerator {
   private async generate(onChunk: (text: string) => void, config: PageConfig): Promise<string> {
     if (!this.model) return '';
 
-    const result = streamText({
-      model: this.model,
-      system: WikiPageGenerator.ANTI_HALLUCINATION + '\n\n' + config.systemPrompt,
-      prompt: config.userPrompt,
-      maxOutputTokens: config.maxOutputTokens,
-      // 思考模型（如 Qwen3/DeepSeek-v4）默认把内容输出到 reasoning 字段，content 为空。
-      // 尝试关闭思考；若 provider 不支持则透传忽略。
-      providerOptions: {
-        openai: { thinking: { type: 'disabled' } },
-        ollama: { think: false },
-      },
-    });
+    const outcome = await this.streamOnce(onChunk, config);
+
+    // content 为空时回退用 reasoning（思考模型未关闭思考的情况）：无法安全续写，直接返回
+    if (outcome.text.trim().length === 0 && outcome.reasoning.trim().length > 0) {
+      return outcome.reasoning;
+    }
+
+    let text = outcome.text;
+    let finish = outcome.finish;
+    let rounds = 0;
+    while (isAbnormalFinish(finish) && text.trim().length > 0 && rounds < WIKI_MAX_CONTINUATIONS) {
+      const cut = findSafeCut(text);
+      if (cut === null) break;
+
+      onChunk('\n\n[wiki] 输出中断，自动续写…\n\n');
+      let more: StreamOutcome;
+      try {
+        more = await this.streamOnce(onChunk, config, cut.kept);
+      } catch {
+        break; // 续写调用失败：保留已生成的安全前缀，交由闸门裁决
+      }
+      finish = more.finish;
+      const segment = sanitizeWikiOutput(more.text);
+      if (segment.length === 0) break;
+      text = cut.kept.trimEnd() + '\n\n' + segment;
+      rounds++;
+    }
+
+    if (rounds > 0) {
+      this.onNotice?.({ kind: 'continuation', rounds, truncated: isAbnormalFinish(finish) });
+    }
+    return text;
+  }
+
+  /**
+   * 单轮流式生成。携带 prefix 时以 messages 形式发起续写：
+   * 原始页面数据 + 已生成的安全前缀 + 续写指令。
+   */
+  private async streamOnce(
+    onChunk: (text: string) => void,
+    config: PageConfig,
+    prefix?: string,
+  ): Promise<StreamOutcome> {
+    if (!this.model) return { text: '', reasoning: '', finish: 'error' };
+
+    const system = WikiPageGenerator.ANTI_HALLUCINATION + '\n\n' + config.systemPrompt;
+    // 思考模型（如 Qwen3/DeepSeek-v4）默认把内容输出到 reasoning 字段，content 为空。
+    // 尝试关闭思考；若 provider 不支持则透传忽略。
+    const providerOptions = {
+      openai: { thinking: { type: 'disabled' } },
+      ollama: { think: false },
+    };
+
+    const result = prefix
+      ? streamText({
+          model: this.model,
+          system,
+          messages: [
+            { role: 'user', content: config.userPrompt },
+            { role: 'assistant', content: prefix },
+            { role: 'user', content: CONTINUE_INSTRUCTION },
+          ],
+          maxOutputTokens: config.maxOutputTokens,
+          providerOptions,
+        })
+      : streamText({
+          model: this.model,
+          system,
+          prompt: config.userPrompt,
+          maxOutputTokens: config.maxOutputTokens,
+          providerOptions,
+        });
 
     // 用 fullStream 收集 text 与 reasoning 两类 delta。
     // 思考模型在关闭思考失败时，实际内容会出现在 reasoning 里。
@@ -499,11 +590,6 @@ export class WikiPageGenerator {
       }
     }
 
-    // content 为空时回退用 reasoning（思考模型未关闭思考的情况）
-    if (text.trim().length === 0 && reasoning.trim().length > 0) {
-      return reasoning;
-    }
-
-    return text;
+    return { text, reasoning, finish: await result.finishReason };
   }
 }

@@ -332,4 +332,73 @@ describe('WikiService', () => {
 
     expect(generated).toEqual(['08-topics/t1.md']);
   });
+
+  /** 章节页测试共用：3 文件扫描清单 + 锁定的 outline.json */
+  function setupOutlineFixture(wikiDir: string, agentDir: string): void {
+    mkdirSync(join(wikiDir, '09-chapters', 'terminal'), { recursive: true });
+    writeFileSync(join(wikiDir, '09-chapters', 'terminal', 'stale.md'), '# stale', 'utf-8');
+    mkdirSync(join(wikiDir, '09-chapters', 'ghost'), { recursive: true });
+    writeFileSync(join(wikiDir, '09-chapters', 'ghost', 'orphan.md'), '# orphan', 'utf-8');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'outline.json'), JSON.stringify({
+      version: 1,
+      generator: 'manual',
+      generatedAt: '2026-09-22T00:00:00Z',
+      chapters: [{
+        id: 'terminal',
+        title: '终端渲染',
+        summary: '终端渲染子系统',
+        pages: [
+          { id: 'xterm', title: 'xterm 集成', brief: '说明 xterm 集成方式与 resize 适配。', files: ['src/index.ts', 'src/a.ts', 'src/b.ts'] },
+        ],
+      }],
+    }), 'utf-8');
+  }
+
+  function makeOutlineScanResult(): ScanResult {
+    const scan = makeBackendScanResult();
+    scan.files = [
+      'src/index.ts', 'src/a.ts', 'src/b.ts',
+    ].map(f => ({
+      absolutePath: `/tmp/test-project/${f}`, relativePath: f,
+      language: 'typescript' as const, extension: '.ts', size: 100,
+    }));
+    return scan;
+  }
+
+  it('should generate locked chapter pages, index them in README, and clean stale chapter files', async () => {
+    const client = createMockClient();
+    const wikiDir = join(tmpDir, 'wiki-chapters');
+    const agentDir = join(tmpDir, '.scx-wiki-agent');
+    setupOutlineFixture(wikiDir, agentDir);
+
+    const service = new WikiService(client as any, makeOutlineScanResult());
+    const generated = await service.buildWiki(wikiDir, { noLlm: true });
+
+    expect(generated).toContain('09-chapters/terminal/xterm.md');
+    // 计划外章节文件被清理；整章失效时空章目录一并移除
+    expect(existsSync(join(wikiDir, '09-chapters', 'terminal', 'stale.md'))).toBe(false);
+    expect(existsSync(join(wikiDir, '09-chapters', 'ghost'))).toBe(false);
+    const page = readFileSync(join(wikiDir, '09-chapters', 'terminal', 'xterm.md'), 'utf-8');
+    expect(page).toContain('# xterm 集成');
+    expect(page).toContain('终端渲染');
+    expect(page).toContain('src/a.ts');
+    // 章节页证据锚定（3 个真实文件）
+    expect(page).toContain('<summary>Relevant source files</summary>');
+    // README 索引纳入章节组
+    const readme = readFileSync(join(wikiDir, 'README.md'), 'utf-8');
+    expect(readme).toContain('[09-chapters/terminal/xterm.md](09-chapters/terminal/xterm.md)');
+  });
+
+  it('should support generating a single chapter page via --pages chapter:<c>/<p>', async () => {
+    const client = createMockClient();
+    const wikiDir = join(tmpDir, 'wiki-chapters-single');
+    const agentDir = join(tmpDir, '.scx-wiki-agent');
+    setupOutlineFixture(wikiDir, agentDir);
+
+    const service = new WikiService(client as any, makeOutlineScanResult());
+    const generated = await service.buildWiki(wikiDir, { noLlm: true, pages: ['chapter:terminal/xterm'] });
+
+    expect(generated).toEqual(['09-chapters/terminal/xterm.md']);
+  });
 });

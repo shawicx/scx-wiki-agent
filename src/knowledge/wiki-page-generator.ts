@@ -14,8 +14,9 @@ import type {
   TestingContext,
   ConstraintsContext,
   TopicContext,
+  ChapterPageContext,
 } from './types.js';
-import { isTopicPage } from './page-registry.js';
+import { isTopicPage, isChapterPage } from './page-registry.js';
 import { sanitizeWikiOutput } from './wiki-output-sanitizer.js';
 import { assembleSections, findSafeCut, isAbnormalFinish } from './wiki-continuation.js';
 import { WIKI_MAX_CONTINUATIONS } from '../shared/constants.js';
@@ -110,6 +111,7 @@ export class WikiPageGenerator {
 
   /** 按页面名派发 LLM 生成（供 PageRegistry 调用） */
   async generateByName(page: string, ctx: any, onChunk: (text: string) => void): Promise<string> {
+    if (isChapterPage(page)) return this.generateChapterPage(ctx, onChunk);
     if (isTopicPage(page)) return this.generateTopic(ctx, onChunk);
     switch (page) {
       case 'overview': return this.generateOverview(ctx, onChunk);
@@ -570,6 +572,45 @@ export class WikiPageGenerator {
 - 严禁编造数据外的方法、参数或行为（R1/R3）`,
       userPrompt: JSON.stringify({
         id: ctx.id,
+        title: ctx.title,
+        files: ctx.files,
+        symbols: ctx.symbols.map(s => ({
+          name: s.name,
+          type: s.type,
+          file: s.startLine && s.startLine > 0 ? `${s.file}:${s.startLine}` : s.file,
+          docstring: s.docstring,
+          signature: s.signature,
+          complexity: s.complexity,
+        })),
+        edges: ctx.edges.map(e => ({
+          caller: e.caller,
+          callee: e.callee,
+          location: e.line > 0 ? `${e.file}:${e.line}` : e.file,
+        })),
+        boundaries: ctx.boundaries,
+      }, null, 2),
+      maxOutputTokens: 8000,
+    });
+  }
+
+  async generateChapterPage(ctx: ChapterPageContext, onChunk: (text: string) => void): Promise<string> {
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个资深软件架构师。请生成章节页「${ctx.title}」的详尽文档（Markdown格式）。
+
+本页属于章节「${ctx.chapterTitle}」${ctx.chapterSummary ? `（${ctx.chapterSummary}）` : ''}，是仓库专属的深度主题页。
+
+写作简报（规划期锁定，必须遵循其要点与结构）：
+${ctx.brief}
+
+要求：
+- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
+- 开头用一两句话说明本页职责与所属章节
+- 按写作简报的要点组织小节；简报未覆盖但数据支持的内容可补充
+- 每条事实声明必须带 file:line 或函数名锚点（R1）
+- 调用关系用表格（调用方→被调用方→file:line），严禁时序图（R2）
+- 严禁编造数据外的方法、参数或行为（R3）`,
+      userPrompt: JSON.stringify({
+        chapter: ctx.chapterTitle,
         title: ctx.title,
         files: ctx.files,
         symbols: ctx.symbols.map(s => ({

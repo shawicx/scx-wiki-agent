@@ -323,6 +323,21 @@ export interface TopicContext {
   boundaries: Array<{ from: string; to: string; callCount: number }>;
 }
 
+/** Context for outline chapter pages（章节页：outline.json 锁定，brief 驱动） */
+export interface ChapterPageContext {
+  chapterId: string;
+  chapterTitle: string;
+  chapterSummary: string;
+  pageId: string;
+  title: string;
+  /** 规划期锁定的写作简报（要点、真实符号、建议小节） */
+  brief: string;
+  files: string[];
+  symbols: TopicContext['symbols'];
+  edges: TopicContext['edges'];
+  boundaries: TopicContext['boundaries'];
+}
+
 /** Build options for wiki generation */
 export interface WikiBuildOptions {
   model?: string;

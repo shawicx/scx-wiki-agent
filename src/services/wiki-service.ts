@@ -11,10 +11,13 @@ import type { PageQualityReport } from '../knowledge/wiki-quality-validator.js';
 import { collectEvidenceFiles, buildEvidenceBlock, injectEvidenceBlock } from '../knowledge/wiki-evidence.js';
 import { ConfigDetector } from '../knowledge/config-detector.js';
 import { TopicDiscovery, loadTopics, saveTopics } from '../knowledge/topic-discovery.js';
+import { loadOutline, validateOutline } from '../knowledge/outline.js';
+import type { OutlineKnown, OutlineReport } from '../knowledge/outline.js';
 import {
   PAGE_REGISTRY, ALL_PAGE_NAMES, tier2PagesFor,
   findPageDescriptor, pageRelPath, buildRelatedSection, RETIRED_WIKI_PATHS,
   isTopicPage, topicPageName, TOPIC_DIR,
+  isChapterPage, chapterPageName, CHAPTER_DIR,
 } from '../knowledge/page-registry.js';
 import type { WikiBuildOptions } from '../knowledge/types.js';
 
@@ -49,8 +52,18 @@ export class WikiService {
     }
     const topicPages = topics.map(t => topicPageName(t.id));
 
+    // 章节树：outline.json 锁定（缺失则无章节页）；坏配置经校验器降级，绝不失败构建
+    const knownFiles = new Set(this.scanResult.files.map(f => f.relativePath));
+    const outlineRaw = loadOutline(agentDir);
+    let outlineReport: OutlineReport | null = null;
+    let chapterPages: string[] = [];
+    if (outlineRaw !== null) {
+      outlineReport = validateOutline(outlineRaw, this.outlineKnown(knownFiles, outlineRaw));
+      chapterPages = outlineReport.chapters.flatMap(c => c.pages.map(p => chapterPageName(c.id, p.id)));
+    }
+
     // 决定生成哪些页面（校验页名合法性）
-    const pages = this.resolvePages(options?.pages, topicPages);
+    const pages = this.resolvePages(options?.pages, topicPages, chapterPages);
 
     // 检测式配置探测器：探测项目实际配置（package.json/lockfile/eslint/...），
     // 复用 scanResult 的源文件列表避免重复扫描
@@ -59,20 +72,21 @@ export class WikiService {
 
     const contextBuilder = new WikiContextBuilder(this.client, this.scanResult, detector);
     contextBuilder.setTopics(topics);
+    if (outlineReport) contextBuilder.setOutlineChapters(outlineReport.chapters);
     const fallbackBuilder = new WikiFallbackBuilder();
     const noLlm = options?.noLlm ?? false;
     const onChunk = options?.onChunk ?? (() => {});
 
-    // 接管式重建：清理旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页残留
+    // 接管式重建：清理旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页/章节页残留
     const legacyRemoved = [
       ...this.cleanupLegacyFlatFiles(wikiDir, pages),
       ...this.cleanupRetiredPages(wikiDir),
       ...this.cleanupStaleTopicPages(wikiDir, pages),
+      ...this.cleanupStaleChapterPages(wikiDir, pages),
     ];
 
     // 质量闸门输入：本次计划写入的页面路径 + 仓库真实文件清单
     const plannedPaths = new Set(pages.map(p => pageRelPath(p)));
-    const knownFiles = new Set(this.scanResult.files.map(f => f.relativePath));
 
     const filenames: string[] = [];
     const writtenPages: Array<{ page: string; relPath: string; source: string; status: PageStatus }> = [];
@@ -158,7 +172,7 @@ export class WikiService {
       writtenPages.push({ page, relPath, source: produced.source, status: existed ? 'updated' : 'created' });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport);
     return filenames;
   }
 
@@ -169,26 +183,51 @@ export class WikiService {
    *   + 按 projectType 激活的 surface 层（Tier2）。
    * surface 页面（cli/routes/components/...）只在对应项目类型下默认生成。
    */
-  private resolvePages(requested: string[] | undefined, topicPages: string[]): string[] {
+  private resolvePages(requested: string[] | undefined, topicPages: string[], chapterPages: string[]): string[] {
     const basePages = PAGE_REGISTRY
       .filter(p => p.tier !== 'surface')
       .map(p => p.name);
     const tier2 = tier2PagesFor(this.scanResult.projectType);
-    const allPages = [...basePages, ...tier2, ...topicPages];
+    const allPages = [...basePages, ...tier2, ...topicPages, ...chapterPages];
 
     if (!requested || requested.length === 0) {
       return allPages;
     }
-    // 校验：过滤非法页名并告警（注册表页名与已锁定的 topic:<id> 均合法）
+    // 校验：过滤非法页名并告警（注册表页名与已锁定的 topic:<id> / chapter:<c>/<p> 均合法）
     const valid: string[] = [];
     for (const name of requested) {
-      if (ALL_PAGE_NAMES.includes(name) || (isTopicPage(name) && topicPages.includes(name))) {
+      const legal = ALL_PAGE_NAMES.includes(name)
+        || (isTopicPage(name) && topicPages.includes(name))
+        || (isChapterPage(name) && chapterPages.includes(name));
+      if (legal) {
         valid.push(name);
       } else {
-        console.warn(`[wiki] 未知页面 "${name}"，已跳过。可用页面: ${ALL_PAGE_NAMES.join(', ')}${topicPages.length > 0 ? `，${topicPages.join(', ')}` : ''}`);
+        console.warn(`[wiki] 未知页面 "${name}"，已跳过。可用页面: ${ALL_PAGE_NAMES.join(', ')}${topicPages.length > 0 ? `，${topicPages.join(', ')}` : ''}${chapterPages.length > 0 ? `，${chapterPages.join(', ')}` : ''}`);
       }
     }
     return valid.length > 0 ? valid : allPages;
+  }
+
+  /** 组装章节树校验参考集：模块来自架构包，符号来自 outline 引用文件（有界查询） */
+  private outlineKnown(knownFiles: Set<string>, outlineRaw: unknown): OutlineKnown {
+    const arch = this.client.getArchitecture();
+    const rawChapters = (outlineRaw as { chapters?: unknown })?.chapters;
+    const refFiles = [...new Set(
+      (Array.isArray(rawChapters) ? rawChapters : [])
+        .flatMap((c: { pages?: unknown }) => (Array.isArray(c?.pages) ? c.pages : []))
+        .flatMap((p: { files?: unknown }) => (Array.isArray(p?.files) ? p.files : []) as string[]),
+    )].filter(f => knownFiles.has(f));
+
+    const symbols = new Set<string>();
+    if (refFiles.length > 0) {
+      const fileList = refFiles.map(f => `"${f.replace(/"/g, '\\"')}"`).join(',');
+      const q = this.client.queryGraph(
+        `MATCH (n) WHERE n.file_path IN [${fileList}] AND n.is_test = false
+         RETURN DISTINCT n.name AS name LIMIT 2000`,
+      );
+      for (const row of q.rows) symbols.add(row[0] as string);
+    }
+    return { files: knownFiles, modules: new Set(arch.packages.map(p => p.name)), symbols };
   }
 
   /**
@@ -245,6 +284,35 @@ export class WikiService {
     return removed;
   }
 
+  /** 清理 09-chapters 下未列入本次计划的章节页残留；清空的章目录一并移除（目录为工具所有） */
+  private cleanupStaleChapterPages(wikiDir: string, pages: string[]): string[] {
+    const chapterRoot = join(wikiDir, CHAPTER_DIR);
+    if (!existsSync(chapterRoot)) return [];
+    const planned = new Set(pages.filter(isChapterPage).map(pageRelPath));
+    const removed: string[] = [];
+    for (const chapterEntry of readdirSync(chapterRoot)) {
+      const chapterDir = join(chapterRoot, chapterEntry);
+      let entries: string[];
+      try {
+        entries = readdirSync(chapterDir);
+      } catch {
+        continue; // 非目录（用户文件）不动
+      }
+      let kept = 0;
+      for (const file of entries) {
+        const rel = `${CHAPTER_DIR}/${chapterEntry}/${file}`;
+        if (file.endsWith('.md') && !planned.has(rel)) {
+          rmSync(join(chapterDir, file));
+          removed.push(rel);
+        } else {
+          kept++;
+        }
+      }
+      if (kept === 0) rmSync(chapterDir, { recursive: true });
+    }
+    return removed;
+  }
+
   private async generatePage(
     page: string,
     pageContext: unknown,
@@ -289,6 +357,7 @@ export class WikiService {
     continuations: Array<{ page: string; rounds: number; truncated: boolean }>,
     sectionedPages: Array<{ page: string; sections: number; continuedSections: number; truncated: boolean }>,
     llmDropped: Array<{ page: string; reason: string }>,
+    outline: OutlineReport | null,
   ): void {
     const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -306,6 +375,22 @@ export class WikiService {
     }
     if (unchanged.length > 0 && writtenCount > 0) {
       lines.push(`  本次变更文件：${[...created, ...updated].map(w => w.relPath).join('、')}`);
+    }
+
+    if (outline) {
+      if (outline.unparsable) {
+        lines.push('  章节树：outline.json 结构不合规，已忽略（固定页面照常构建）');
+      } else {
+        const pageTotal = outline.chapters.reduce((n, c) => n + c.pages.length, 0);
+        lines.push(`  章节树：${outline.chapters.length} 章 ${pageTotal} 页生效`);
+        for (const d of outline.drops) {
+          const at = d.page ? `${d.chapter}/${d.page}` : d.chapter;
+          lines.push(`    - 剔除 ${at}（${d.title}）：${d.reasons.join('；')}`);
+        }
+        for (const w of outline.warnings) {
+          lines.push(`    - [${w.code}] ${w.target}：${w.message}`);
+        }
+      }
     }
 
     if (continuations.length > 0) {

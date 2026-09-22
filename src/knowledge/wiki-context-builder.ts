@@ -5,10 +5,11 @@ import type { SnippetData } from '../mcp/types.js';
 import type { ScanResult } from '../core/scanner.js';
 import type { SymbolType, RelationType } from '../core/types.js';
 import { isTestPath } from '../shared/utils.js';
-import { PAGE_REGISTRY, pageRelPath, isTopicPage, topicIdFromPage, TOPIC_DIR, TOPIC_ANSWER } from './page-registry.js';
+import { PAGE_REGISTRY, pageRelPath, isTopicPage, topicIdFromPage, TOPIC_DIR, TOPIC_ANSWER, isChapterPage, parseChapterPage, CHAPTER_DIR, CHAPTER_ANSWER } from './page-registry.js';
 import { ConfigDetector } from './config-detector.js';
 import { collectEvidenceFiles, toKnownRelativePath, EVIDENCE_MIN_FILES } from './wiki-evidence.js';
 import type { TopicDefinition } from './topic-discovery.js';
+import type { OutlineChapter } from './outline.js';
 import type {
   OverviewContext,
   ArchitectureContext,
@@ -31,6 +32,7 @@ import type {
   TechStackContext,
   DecisionsContext,
   TopicContext,
+  ChapterPageContext,
 } from './types.js';
 
 const ENTRY_FILE_NAMES = ['index.ts', 'index.js', 'main.ts', 'main.js', 'cli.ts', 'cli.js'];
@@ -59,9 +61,15 @@ export class WikiContextBuilder {
   private knownFiles: Set<string> | null = null;
   /** 主题页定义（由 WikiService 从 topics.json 装配注入） */
   private topics: TopicDefinition[] = [];
+  /** 章节树净页（由 WikiService 从 outline.json 校验后注入） */
+  private outlineChapters: OutlineChapter[] = [];
 
   setTopics(topics: TopicDefinition[]): void {
     this.topics = topics;
+  }
+
+  setOutlineChapters(chapters: OutlineChapter[]): void {
+    this.outlineChapters = chapters;
   }
 
   /** 按页面名派发上下文构建（供 PageRegistry 调用）。plannedPages 用于 readme 索引只列本次产出的页面 */
@@ -73,6 +81,7 @@ export class WikiContextBuilder {
 
   private dispatchContext(page: string, plannedPages?: string[]): unknown {
     if (isTopicPage(page)) return this.buildTopicContext(topicIdFromPage(page));
+    if (isChapterPage(page)) return this.buildChapterPageContext(page);
     switch (page) {
       case 'overview': return this.buildOverviewContext();
       case 'architecture': return this.buildArchitectureContext();
@@ -696,7 +705,38 @@ export class WikiContextBuilder {
     const def = this.topics.find(t => t.id === topicId);
     if (!def) return null;
 
-    const fileList = def.files.map(f => `"${f.replace(/"/g, '\\"')}"`).join(',');
+    const { symbols, edges, boundaries } = this.fileEvidence(def.files);
+    return { id: def.id, title: def.title, files: def.files, symbols, edges, boundaries };
+  }
+
+  /**
+   * 章节页数据源：与主题页同一套图谱查询（符号/边/边界），
+   * 叠加 outline.json 锁定的章信息与写作简报（brief 驱动生成）。
+   */
+  buildChapterPageContext(page: string): ChapterPageContext | null {
+    const ref = parseChapterPage(page);
+    if (!ref) return null;
+    const chapter = this.outlineChapters.find(c => c.id === ref.chapter);
+    if (!chapter) return null;
+    const pg = chapter.pages.find(p => p.id === ref.page);
+    if (!pg) return null;
+
+    const { symbols, edges, boundaries } = this.fileEvidence(pg.files);
+    return {
+      chapterId: chapter.id,
+      chapterTitle: chapter.title,
+      chapterSummary: chapter.summary,
+      pageId: pg.id,
+      title: pg.title,
+      brief: pg.brief,
+      files: pg.files,
+      symbols, edges, boundaries,
+    };
+  }
+
+  /** 文件集的图谱证据：符号 + 文件间 CALLS 边 + 相关跨包边界（主题页/章节页共用） */
+  private fileEvidence(files: string[]): Pick<TopicContext, 'symbols' | 'edges' | 'boundaries'> {
+    const fileList = files.map(f => `"${f.replace(/"/g, '\\"')}"`).join(',');
     const symQ = this.client.queryGraph(
       `MATCH (n) WHERE n.file_path IN [${fileList}] AND n.is_test = false
          AND n.docstring IS NOT NULL AND n.label IN ['Class', 'Method', 'Function']
@@ -732,20 +772,23 @@ export class WikiContextBuilder {
         line: (row[3] as number) ?? 0,
       }));
 
-    // 主题涉及的跨包边界（文件所属 package 与边界端点匹配）
+    // 文件涉及的跨包边界（文件所属 package 与边界端点匹配）
     const arch = this.client.getArchitecture();
-    const topicPkgs = new Set<string>();
-    for (const file of def.files) {
+    const pkgs = new Set<string>();
+    for (const file of files) {
       for (const pkg of arch.packages) {
-        if (file.includes(`/${pkg.name}/`)) topicPkgs.add(pkg.name);
+        if (file.includes(`/${pkg.name}/`)) {
+          pkgs.add(pkg.name);
+          break;
+        }
       }
     }
     const boundaries = arch.boundaries
-      .filter(b => topicPkgs.has(b.from) || topicPkgs.has(b.to))
+      .filter(b => pkgs.has(b.from) || pkgs.has(b.to))
       .slice(0, 5)
       .map(b => ({ from: b.from, to: b.to, callCount: b.call_count }));
 
-    return { id: def.id, title: def.title, files: def.files, symbols, edges, boundaries };
+    return { symbols, edges, boundaries };
   }
 
   /**
@@ -785,6 +828,20 @@ export class WikiContextBuilder {
     for (const name of planned) {
       if (!isTopicPage(name)) continue;
       docIndex.push({ file: pageRelPath(name), dir: TOPIC_DIR, tier: 'structure', answer: TOPIC_ANSWER });
+    }
+
+    // 章节页动态纳入索引（09-chapters/<章> 组，answer 用页标题）
+    for (const name of planned) {
+      const ref = parseChapterPage(name);
+      if (!ref) continue;
+      const chapter = this.outlineChapters.find(c => c.id === ref.chapter);
+      const pg = chapter?.pages.find(p => p.id === ref.page);
+      docIndex.push({
+        file: pageRelPath(name),
+        dir: `${CHAPTER_DIR}/${ref.chapter}`,
+        tier: 'structure',
+        answer: pg?.title ?? CHAPTER_ANSWER,
+      });
     }
 
     return { projectName, version, license, description, runtime, docIndex };

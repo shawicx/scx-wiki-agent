@@ -84,20 +84,29 @@ export function tier2PagesFor(projectType: string): string[] {
   return TIER2_BY_TYPE[projectType] ?? [];
 }
 
-/** 查找页面描述符（主题页动态合成） */
+/** 查找页面描述符（主题页/章节页动态合成） */
 export function findPageDescriptor(name: string): PageDescriptor | undefined {
   if (isTopicPage(name)) {
     return { name, dir: TOPIC_DIR, tier: 'structure', answer: TOPIC_ANSWER };
+  }
+  if (isChapterPage(name)) {
+    const ref = parseChapterPage(name);
+    return { name, dir: `${CHAPTER_DIR}/${ref?.chapter ?? ''}`, tier: 'structure', answer: CHAPTER_ANSWER };
   }
   return PAGE_REGISTRY.find(p => p.name === name);
 }
 
 /**
  * 页面在 wiki 内的输出相对路径（编号目录 + 文件名）。
- * readme 特例输出为 README.md（wiki 总入口约定）；主题页输出到 08-topics/<id>.md。
+ * readme 特例输出为 README.md（wiki 总入口约定）；主题页输出到 08-topics/<id>.md；
+ * 章节页输出到 09-chapters/<chapterId>/<pageId>.md。
  */
 export function pageRelPath(name: string): string {
   if (isTopicPage(name)) return `${TOPIC_DIR}/${topicIdFromPage(name)}.md`;
+  if (isChapterPage(name)) {
+    const ref = parseChapterPage(name);
+    return ref ? `${CHAPTER_DIR}/${ref.chapter}/${ref.page}.md` : `${name}.md`;
+  }
   const desc = findPageDescriptor(name);
   const filename = name === 'readme' ? 'README.md' : `${name}.md`;
   if (!desc || !desc.dir) return filename;
@@ -134,6 +143,35 @@ export function topicPageName(id: string): string {
   return `${TOPIC_PAGE_PREFIX}${id}`;
 }
 
+/** 章节页名前缀（动态页：`chapter:<chapterId>/<pageId>`，outline.json 锁定） */
+export const CHAPTER_PAGE_PREFIX = 'chapter:';
+/** 章节页输出目录（工具所有，未列入计划的章节文件会被清理） */
+export const CHAPTER_DIR = '09-chapters';
+/** 章节页描述（README 索引用） */
+export const CHAPTER_ANSWER = '仓库专属章节页（outline.json 锁定）';
+
+/** `chapter:<c>/<p>` 的解析结果 */
+export interface ChapterPageRef {
+  chapter: string;
+  page: string;
+}
+
+export function isChapterPage(name: string): boolean {
+  return name.startsWith(CHAPTER_PAGE_PREFIX);
+}
+
+export function parseChapterPage(name: string): ChapterPageRef | null {
+  if (!isChapterPage(name)) return null;
+  const rest = name.slice(CHAPTER_PAGE_PREFIX.length);
+  const sep = rest.indexOf('/');
+  if (sep <= 0 || sep === rest.length - 1) return null;
+  return { chapter: rest.slice(0, sep), page: rest.slice(sep + 1) };
+}
+
+export function chapterPageName(chapter: string, page: string): string {
+  return `${CHAPTER_PAGE_PREFIX}${chapter}/${page}`;
+}
+
 /**
  * 页底 Related 区块（project-wiki「页底 Related 链接」要求）。
  * 只链接本次构建计划内的页面，保证零死链；数据全部来自 PAGE_REGISTRY。
@@ -143,19 +181,30 @@ export function buildRelatedSection(page: string, plannedPages: readonly string[
   if (!desc || page === 'readme') return '';
 
   let siblings: string[];
-  if (isTopicPage(page)) {
+  if (isChapterPage(page)) {
+    const mine = parseChapterPage(page);
+    siblings = plannedPages.filter(p => {
+      if (p === page) return false;
+      const other = parseChapterPage(p);
+      return other !== null && mine !== null && other.chapter === mine.chapter;
+    });
+  } else if (isTopicPage(page)) {
     siblings = plannedPages.filter(p => p !== page && isTopicPage(p));
   } else {
     siblings = PAGE_REGISTRY
       .filter(p => p.name !== page && p.dir === desc.dir && plannedPages.includes(p.name))
-      .filter(p => !isTopicPage(p.name))
+      .filter(p => !isTopicPage(p.name) && !isChapterPage(p.name))
       .map(p => p.name);
   }
 
   const items: string[] = [];
   if (siblings.length > 0) {
     const links = siblings.map(p => {
-      const label = isTopicPage(p) ? `${topicIdFromPage(p)}.md` : `${p}.md`;
+      const label = isTopicPage(p)
+        ? `${topicIdFromPage(p)}.md`
+        : isChapterPage(p)
+          ? `${parseChapterPage(p)?.page ?? p}.md`
+          : `${p}.md`;
       return `[${label}](${label})`;
     });
     items.push(`- 同目录：${links.join(' · ')}`);

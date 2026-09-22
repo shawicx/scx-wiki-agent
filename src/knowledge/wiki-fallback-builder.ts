@@ -1,6 +1,6 @@
 import { WikiBuilder } from './wiki-builder.js';
 import { UNCONFIRMED_CELL, unconfirmedNote } from './wiki-markers.js';
-import { isTopicPage } from './page-registry.js';
+import { isTopicPage, isChapterPage } from './page-registry.js';
 import type {
   OverviewContext,
   ArchitectureContext,
@@ -21,6 +21,7 @@ import type {
   TechStackContext,
   DecisionsContext,
   TopicContext,
+  ChapterPageContext,
 } from './types.js';
 
 function sanitizeMermaid(name: string): string {
@@ -31,6 +32,7 @@ export class WikiFallbackBuilder {
   /** 按页面名派发规则生成（供 PageRegistry 调用） */
   buildByName(page: string, ctx: any): string {
     if (isTopicPage(page)) return this.buildTopic(ctx);
+    if (isChapterPage(page)) return this.buildChapterPage(ctx);
     switch (page) {
       case 'overview': return this.buildOverview(ctx);
       case 'architecture': return this.buildArchitecture(ctx);
@@ -740,6 +742,48 @@ export class WikiFallbackBuilder {
     const builder = new WikiBuilder()
       .addTitle(ctx.title)
       .addParagraph('仓库专属主题（知识图谱聚类推导，横跨多个模块的协作面）。');
+
+    builder.addSection('覆盖文件', '');
+    builder.addBulletList(ctx.files.map(f => `\`${f}\``));
+
+    if (ctx.symbols.length > 0) {
+      builder.addSection('关键符号', '');
+      builder.addTable(
+        ['符号', '类型', '签名', '说明', '源文件:行号'],
+        ctx.symbols.map(s => [
+          `\`${s.name}\``,
+          s.type,
+          s.signature ? `\`${s.signature}\`` : '-',
+          s.docstring ?? UNCONFIRMED_CELL,
+          s.startLine && s.startLine > 0 ? `${s.file}:${s.startLine}` : s.file,
+        ]),
+      );
+    }
+
+    if (ctx.edges.length > 0) {
+      builder.addSection('协作边表（文件间调用）', '');
+      builder.addTable(
+        ['调用方', '被调用方', '源文件:行号'],
+        ctx.edges.map(e => [e.caller, e.callee, e.line > 0 ? `${e.file}:${e.line}` : e.file]),
+      );
+    }
+
+    if (ctx.boundaries.length > 0) {
+      builder.addSection('跨模块边界', '');
+      builder.addTable(
+        ['From', 'To', '调用次数'],
+        ctx.boundaries.map(b => [b.from, b.to, String(b.callCount)]),
+      );
+    }
+
+    return builder.build();
+  }
+
+  /** 章节页规则模板：简报 + 覆盖文件 + 关键符号 + 协作边表 + 跨模块边界 */
+  buildChapterPage(ctx: ChapterPageContext): string {
+    const builder = new WikiBuilder()
+      .addTitle(ctx.title)
+      .addParagraph(`章节「${ctx.chapterTitle}」下的仓库专属页面（outline.json 锁定）。${ctx.brief}`);
 
     builder.addSection('覆盖文件', '');
     builder.addBulletList(ctx.files.map(f => `\`${f}\``));

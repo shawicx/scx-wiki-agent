@@ -5,6 +5,9 @@ export const CACHE_DIR = 'cache';
 /** LLM 断流（输出达上限/流中途出错）自动续写轮数上限；每轮独立获得完整输出预算 */
 export const WIKI_MAX_CONTINUATIONS = 2;
 
+/** 正文断言校验：每页 search_code 词法探测上限（超出部分不标注、计入未核验） */
+export const WIKI_MAX_GREP_PROBES = 12;
+
 export const IGNORED_DIRS = [
   'node_modules',
   '.git',

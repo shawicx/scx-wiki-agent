@@ -409,8 +409,34 @@ describe('WikiService', () => {
     expect(generated).toEqual(['09-chapters/terminal/xterm.md']);
   });
 
-  it('should auto-plan outline on first build when LLM available and lock outline.json', async () => {
-    // 首次自动提议：outline.json 缺失 + 模型可用 → planner 产出并锁定
+  it('should annotate unverified claims on LLM pages via three-level verification', async () => {
+    mockStreamText.mockImplementation((() => ({
+      fullStream: (async function* () {
+        yield {
+          type: 'text-delta',
+          text: '# 概览\n\n核心由 `realThing` 与 `ghostThing` 构成。',
+        };
+      })(),
+      finishReason: Promise.resolve('stop'),
+    })) as any);
+
+    // realThing 有词法实据（search_code 命中），ghostThing 查无实据
+    const client = createMockClient({ searchCounts: new Map([['realThing', 3]]) });
+    const wikiDir = join(tmpDir, 'wiki-claims');
+    const agentDir = join(tmpDir, '.scx-wiki-agent');
+    rmSync(join(agentDir, 'outline.json'), { force: true });
+
+    const service = new WikiService(client as any, makeBackendScanResult());
+    await service.buildWiki(wikiDir, { model: 'test-model', pages: ['overview'] });
+
+    const overview = readFileSync(join(wikiDir, '01-overview', 'overview.md'), 'utf-8');
+    expect(overview).toContain('`ghostThing`（待确认）');
+    expect(overview).not.toContain('realThing`（待确认）');
+    expect(client.searchCode).toHaveBeenCalledWith('realThing');
+    expect(client.searchCode).toHaveBeenCalledWith('ghostThing');
+  });
+
+  it('should auto-plan outline on first build when LLM available and lock outline.json', async () => {    // 首次自动提议：outline.json 缺失 + 模型可用 → planner 产出并锁定
     mockStreamText.mockImplementation((() => ({
       fullStream: (async function* () {
         yield {

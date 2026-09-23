@@ -183,6 +183,25 @@ export class CodebaseMemoryClient {
     return result as QueryResult;
   }
 
+  /**
+   * 词法搜索存在性探测（grep + 图谱增强的 files 模式）。
+   * 默认字面量匹配（regex=false）；totalGrepMatches > 0 即字面量在仓库中存在
+   * （含 import/注释/配置中的出现），适合断言核验的兜底通道。
+   */
+  searchCode(pattern: string): { totalGrepMatches: number; files: string[] } {
+    const raw = this.exec('search_code', {
+      project: this.projectName,
+      pattern,
+      mode: 'files',
+      limit: 1,
+      format: 'json',
+    }) as { total_grep_matches?: number; files?: string[] };
+    return {
+      totalGrepMatches: raw.total_grep_matches ?? 0,
+      files: raw.files ?? [],
+    };
+  }
+
   // --- 内部方法 ---
 
   private exec(tool: string, args: Record<string, unknown>): unknown {

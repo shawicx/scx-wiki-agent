@@ -8,6 +8,8 @@ import { WikiPageGenerator } from '../knowledge/wiki-page-generator.js';
 import { sanitizeWikiOutput } from '../knowledge/wiki-output-sanitizer.js';
 import { validatePageContent } from '../knowledge/wiki-quality-validator.js';
 import type { PageQualityReport } from '../knowledge/wiki-quality-validator.js';
+import { verifyAndAnnotateClaims } from '../knowledge/claim-verifier.js';
+import type { ClaimStats } from '../knowledge/claim-verifier.js';
 import { collectEvidenceFiles, buildEvidenceBlock, injectEvidenceBlock } from '../knowledge/wiki-evidence.js';
 import { ConfigDetector } from '../knowledge/config-detector.js';
 import { TopicDiscovery, loadTopics, saveTopics } from '../knowledge/topic-discovery.js';
@@ -125,6 +127,7 @@ export class WikiService {
     const writtenPages: Array<{ page: string; relPath: string; source: string; status: PageStatus }> = [];
     const skippedPages: Array<{ page: string; reason: string }> = [];
     const qualityReports: PageQualityReport[] = [];
+    const claimStats: Array<{ page: string } & ClaimStats> = [];
     const mode = options?.mode ?? 'full';
 
     for (const page of pages) {
@@ -148,10 +151,22 @@ export class WikiService {
         llmDropped.push({ page, reason: produced.llmDrop });
       }
 
+      // 正文断言校验（仅 LLM 页）：三级核验后，查无实据的标识符标注「待确认」
+      let bodyContent = produced.content;
+      if (produced.source === 'llm') {
+        const verified = verifyAndAnnotateClaims(bodyContent, {
+          symbols: this.getSymbolUniverse(),
+          knownFiles,
+          grepCount: pattern => this.client.searchCode(pattern).totalGrepMatches,
+        });
+        bodyContent = verified.content;
+        claimStats.push({ page, ...verified.stats });
+      }
+
       // 页首证据锚定块（确定性注入，LLM 无法伪造）+ 页底 Related 区块
       const evidenceFiles = collectEvidenceFiles(pageContext, knownFiles, this.scanResult.rootDir);
       const content =
-        injectEvidenceBlock(produced.content, buildEvidenceBlock(evidenceFiles)) +
+        injectEvidenceBlock(bodyContent, buildEvidenceBlock(evidenceFiles)) +
         buildRelatedSection(page, pages);
 
       // 写盘前质量闸门（LLM 与规则路径都过闸）
@@ -187,7 +202,7 @@ export class WikiService {
       writtenPages.push({ page, relPath, source: produced.source, status: existed ? 'updated' : 'created' });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport, claimStats);
     return filenames;
   }
 
@@ -221,6 +236,18 @@ export class WikiService {
       }
     }
     return valid.length > 0 ? valid : allPages;
+  }
+
+  /** 图谱符号名全集（断言校验一级核验；构建内缓存，首次 LLM 页时查询） */
+  private symbolUniverse: Set<string> | null = null;
+  private getSymbolUniverse(): Set<string> {
+    if (this.symbolUniverse === null) {
+      const q = this.client.queryGraph(
+        'MATCH (n) WHERE n.is_test = false RETURN DISTINCT n.name AS name LIMIT 5000',
+      );
+      this.symbolUniverse = new Set(q.rows.map(r => String(r[0])));
+    }
+    return this.symbolUniverse;
   }
 
   /**
@@ -403,6 +430,7 @@ export class WikiService {
     sectionedPages: Array<{ page: string; sections: number; continuedSections: number; truncated: boolean }>,
     llmDropped: Array<{ page: string; reason: string }>,
     outline: OutlineReport | null,
+    claimStats: Array<{ page: string } & ClaimStats>,
   ): void {
     const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -450,6 +478,20 @@ export class WikiService {
         .map(s => `${s.page}（${s.sections} 节${s.continuedSections > 0 ? `·${s.continuedSections} 节续写` : ''}${s.truncated ? '·有节仍截断' : ''}）`)
         .join('、');
       lines.push(`  分节生成 ${sectionedPages.length} 页：${detail}`);
+    }
+
+    if (claimStats.length > 0) {
+      const sum = claimStats.reduce(
+        (acc, c) => ({ total: acc.total + c.total, unverified: acc.unverified + c.unverified, skipped: acc.skipped + c.skipped }),
+        { total: 0, unverified: 0, skipped: 0 },
+      );
+      const flagged = claimStats
+        .filter(c => c.unverified > 0)
+        .map(c => `${c.page} ${c.unverified}`)
+        .join('、');
+      lines.push(
+        `  断言校验 ${claimStats.length} 页：${sum.total - sum.unverified - sum.skipped}/${sum.total} 有实据，待确认 ${sum.unverified}${flagged ? `（${flagged}）` : ''}${sum.skipped > 0 ? `，未核验 ${sum.skipped}（超探测上限）` : ''}`,
+      );
     }
 
     if (llmDropped.length > 0) {

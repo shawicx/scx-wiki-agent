@@ -42,6 +42,7 @@ export function createMockClient(overrides?: Partial<{
   tracePath: TraceResult;
   codeSnippet: SnippetData;
   queryResults: Map<string, QueryResult>;
+  searchCounts: Map<string, number>;
 }>) {
   return {
     ensureIndexed: vi.fn().mockReturnValue({
@@ -77,6 +78,10 @@ export function createMockClient(overrides?: Partial<{
       if (exact) return exact;
       // 模糊匹配：若 cypher 不在 map 中但含特定关键词，返回空结果
       return { columns: [], rows: [], total: 0 } as QueryResult;
+    }),
+    searchCode: vi.fn().mockImplementation((pattern: string) => {
+      const matches = overrides?.searchCounts?.get(pattern) ?? 0;
+      return { totalGrepMatches: matches, files: matches > 0 ? ['src/mock.ts'] : [] };
     }),
   };
 }

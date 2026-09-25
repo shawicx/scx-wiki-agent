@@ -1,11 +1,15 @@
 {
   "name": "scx-wiki-agent",
   "version": "0.1.0",
-  "description": "",
+  "description": "从代码知识图谱生成结构化中文 Markdown Wiki 的 CLI 工具（LLM 增强叙述 + 纯规则回退）",
   "type": "module",
   "bin": {
     "scx-wiki-agent": "./dist/bin.js"
   },
+  "packageManager": "pnpm@11.17.0",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -13,9 +17,20 @@
     "test:watch": "vitest",
     "lint": "tsc --noEmit"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "wiki",
+    "documentation",
+    "codebase",
+    "knowledge-graph",
+    "llm",
+    "cli"
+  ],
+  "author": "shawicx",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shawicx/scx-wiki-agent.git"
+  },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.67",
     "ai": "^6.0.193",

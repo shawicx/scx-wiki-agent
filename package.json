@@ -1,5 +1,5 @@
 {
-  "name": "scx-wiki-agent",
+  "name": "@scx/wiki-agent",
   "version": "0.1.0",
   "description": "从代码知识图谱生成结构化中文 Markdown Wiki 的 CLI 工具（LLM 增强叙述 + 纯规则回退）",
   "type": "module",

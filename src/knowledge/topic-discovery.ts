@@ -102,7 +102,8 @@ export class TopicDiscovery {
    * 主题命名：label 为语义文本（非路径、不在 sourceDirs）时直接用作标题；
    * 否则主导符号取首个非通用名 top_node（constructor 等语言级符号无区分度）；
    * 再退回跨模块名联合。id 用符号/模块的 kebab slug（可读、跨构建稳定），
-   * 冲突时追加序号。
+   * 冲突时追加序号。命名符号所在的文件强制置首（不被 MAX_TOPIC_FILES 截断挤掉，
+   * 否则会出现标题讲某符号、文件清单却不含其宿主文件的跑偏主题页）。
    */
   private topicDefinition(
     cluster: ArchitectureData['clusters'][number],
@@ -122,7 +123,11 @@ export class TopicDiscovery {
     let id = baseId;
     for (let n = 2; usedIds.has(id); n++) id = `${baseId}-${n}`;
     usedIds.add(id);
-    return { id, title, files: files.slice(0, MAX_TOPIC_FILES) };
+    const leadFile = lead ? this.filesForSymbols([lead])[0] : undefined;
+    const orderedFiles = leadFile && !files.includes(leadFile)
+      ? [leadFile, ...files]
+      : files;
+    return { id, title, files: orderedFiles.slice(0, MAX_TOPIC_FILES) };
   }
 
   private fromBoundaries(arch: ArchitectureData): TopicDefinition | null {

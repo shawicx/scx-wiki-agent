@@ -8,6 +8,8 @@ import { isTestPath, languageDomainOf, matchPackageForFile, importedPackageName 
 import { PAGE_REGISTRY, pageRelPath, isTopicPage, topicIdFromPage, TOPIC_DIR, TOPIC_ANSWER, isChapterPage, parseChapterPage, CHAPTER_DIR, CHAPTER_ANSWER } from './page-registry.js';
 import { ConfigDetector } from './config-detector.js';
 import { collectEvidenceFiles, toKnownRelativePath, EVIDENCE_MIN_FILES } from './wiki-evidence.js';
+import { findSymbolDefinitions } from './source-fallback.js';
+import { isTauriProject, scanIpcSurface } from './tauri-ipc.js';
 import type { TopicDefinition } from './topic-discovery.js';
 import type { OutlineChapter } from './outline.js';
 import type {
@@ -32,6 +34,7 @@ import type {
   TechStackContext,
   TopicContext,
   ChapterPageContext,
+  SupplementalSymbol,
 } from './types.js';
 
 const ENTRY_FILE_NAMES = ['index.ts', 'index.js', 'main.ts', 'main.js', 'cli.ts', 'cli.js'];
@@ -62,6 +65,8 @@ export class WikiContextBuilder {
   private topics: TopicDefinition[] = [];
   /** 章节树净页（由 WikiService 从 outline.json 校验后注入） */
   private outlineChapters: OutlineChapter[] = [];
+  /** .wiki 内手写/存量文档清单（由 WikiService 清理后枚举注入，只索引不动文件） */
+  private legacyDocs: Array<{ file: string; title: string }> = [];
 
   setTopics(topics: TopicDefinition[]): void {
     this.topics = topics;
@@ -69,6 +74,10 @@ export class WikiContextBuilder {
 
   setOutlineChapters(chapters: OutlineChapter[]): void {
     this.outlineChapters = chapters;
+  }
+
+  setLegacyDocs(docs: Array<{ file: string; title: string }>): void {
+    this.legacyDocs = docs;
   }
 
   /** 按页面名派发上下文构建（供 PageRegistry 调用）。plannedPages 用于 readme 索引只列本次产出的页面 */
@@ -106,7 +115,8 @@ export class WikiContextBuilder {
   /**
    * 证据补强（DeepWiki「二次扩展检索」的图谱版）：
    * LLM 路径的 structure 页证据文件低于下限时，从图谱补一批高复杂度真实符号，
-   * 只保留扫描清单内的文件路径。
+   * 只保留扫描清单内的文件路径。图谱查无的热点/入口名回落源码正则探测
+   * （mcp 对 .vue/部分 Rust 索引不全，避免 LLM 把真实符号标成「待确认」）。
    */
   private enrichIfThinEvidence(page: string, ctx: unknown): unknown {
     if (!EVIDENCE_ENRICH_PAGES.includes(page)) return ctx;
@@ -121,7 +131,7 @@ export class WikiContextBuilder {
               n.complexity AS cx, n.signature AS sig
        ORDER BY n.complexity DESC LIMIT 8`,
     );
-    const supplementalSymbols = q.rows
+    const supplementalSymbols: SupplementalSymbol[] = q.rows
       .map(row => ({
         name: row[0] as string,
         type: this.labelToSymbolType(row[1] as string),
@@ -131,8 +141,29 @@ export class WikiContextBuilder {
       }))
       .map(s => ({ ...s, file: toKnownRelativePath(s.file, known, this.scanResult.rootDir) ?? '' }))
       .filter(s => s.file !== '' && !isTestPath(s.file));
+    for (const s of this.appendSourceFallback(supplementalSymbols)) {
+      supplementalSymbols.push(s);
+    }
     if (supplementalSymbols.length === 0) return ctx;
     return { ...(ctx as Record<string, unknown>), supplementalSymbols };
+  }
+
+  /**
+   * 源码回落：图谱补强未覆盖的热点/入口名，交正则探测补齐。
+   * 找到的名字记入 fallbackSymbolNames（供断言校验 universe 回填）。
+   */
+  private appendSourceFallback(existing: Array<{ name: string }>): SupplementalSymbol[] {
+    const existingNames = new Set(existing.map(s => s.name));
+    const arch = this.client.getArchitecture();
+    const wanted = [
+      ...arch.hotspots.slice(0, 10).map(h => h.name),
+      ...arch.entry_points.slice(0, 8).map(e => e.name),
+    ].filter(n => !existingNames.has(n));
+    if (wanted.length === 0) return [];
+    const found = findSymbolDefinitions(wanted, this.scanResult, this.sourceCache)
+      .filter(s => !existingNames.has(s.name));
+    for (const s of found) this.fallbackSymbolNames.add(s.name);
+    return found;
   }
 
   private getKnownFiles(): Set<string> {
@@ -166,11 +197,29 @@ export class WikiContextBuilder {
       techStack: this.scanResult.techStack,
       sourceDirs: this.scanResult.sourceDirs,
       languages: arch.languages.map(l => ({ language: l.language, fileCount: l.file_count })),
+      readmeExcerpt: this.readRepoFileExcerpt('README.md', 2000),
+      docsFiles: this.scanResult.files
+        .map(f => f.relativePath)
+        .filter(p => p.startsWith('docs/') && p.endsWith('.md') && !isTestPath(p))
+        .slice(0, 10),
       packageName: pkgMeta.name,
       packageDescription: pkgMeta.description,
       entryFiles,
       topSymbols,
     };
+  }
+
+  /** 读仓库根下文本文件的前 N 字符（段落边界截断；不可读返回 undefined） */
+  private readRepoFileExcerpt(relPath: string, maxLen: number): string | undefined {
+    try {
+      const content = readFileSync(join(this.scanResult.rootDir, relPath), 'utf-8');
+      if (content.length <= maxLen) return content;
+      const cut = content.slice(0, maxLen);
+      const lastBreak = Math.max(cut.lastIndexOf('\n\n'), cut.lastIndexOf('\n#'));
+      return (lastBreak > maxLen * 0.5 ? cut.slice(0, lastBreak) : cut).trimEnd() + '\n\n（已截断）';
+    } catch {
+      return undefined;
+    }
   }
 
   /** package.json 的 name/description（读取失败返回空串，诚实降级） */
@@ -297,6 +346,13 @@ export class WikiContextBuilder {
 
   /** caller 源码缓存（词法核验用；不可读文件缓存为 null） */
   private sourceCache = new Map<string, string | null>();
+
+  /** 源码回落找到的符号名全集（供 WikiService 回填断言校验 universe，防自证矛盾） */
+  private fallbackSymbolNames = new Set<string>();
+
+  getFallbackSymbolNames(): Set<string> {
+    return this.fallbackSymbolNames;
+  }
 
   private edgeHasLexicalEvidence(callerFile: string, calleeName: string): boolean {
     if (!callerFile || !calleeName) return true;
@@ -528,10 +584,20 @@ export class WikiContextBuilder {
       });
     }
 
+    // Tauri 项目：IPC 面是真正的对外 API（图谱 CALLS 边不覆盖 IPC 边界），
+    // 作为 api 页主数据；导出函数降为辅助（截 8 条）
+    let ipc;
+    if (isTauriProject(this.scanResult.rootDir)) {
+      ipc = scanIpcSurface(this.scanResult, this.sourceCache);
+      for (const cmd of ipc.commands) this.fallbackSymbolNames.add(cmd.name);
+      for (const evt of ipc.events) this.fallbackSymbolNames.add(evt.name);
+    }
+
     return {
       commands,
-      exportedFunctions,
+      exportedFunctions: ipc ? exportedFunctions.slice(0, 8) : exportedFunctions,
       frameworkNodes: [],
+      ipc,
     };
   }
 
@@ -922,7 +988,39 @@ export class WikiContextBuilder {
       });
     }
 
-    return { projectName, version, license, description, runtime, docIndex };
+    // 仓库既有文档（根 README/AGENTS.md + docs/**.md）：标题取首个 # 行
+    const relatedDocs: Array<{ path: string; title: string }> = [];
+    for (const rel of ['README.md', 'AGENTS.md']) {
+      if (this.scanResult.files.some(f => f.relativePath === rel)) {
+        relatedDocs.push({ path: rel, title: this.docTitleOf(rel) ?? rel });
+      }
+    }
+    for (const rel of this.scanResult.files
+      .map(f => f.relativePath)
+      .filter(p => p.startsWith('docs/') && p.endsWith('.md') && !isTestPath(p))
+      .slice(0, 15 - relatedDocs.length)) {
+      relatedDocs.push({ path: rel, title: this.docTitleOf(rel) ?? rel });
+    }
+
+    return {
+      projectName, version, license, description, runtime, docIndex,
+      relatedDocs,
+      legacyDocs: this.legacyDocs,
+    };
+  }
+
+  /** 读 markdown 文件首个 # 标题（前 50 行内；失败返回 null） */
+  private docTitleOf(relPath: string): string | null {
+    try {
+      const content = readFileSync(join(this.scanResult.rootDir, relPath), 'utf-8');
+      for (const line of content.split('\n').slice(0, 50)) {
+        const m = line.match(/^#\s+(.{1,80})/);
+        if (m) return m[1].trim();
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   /**

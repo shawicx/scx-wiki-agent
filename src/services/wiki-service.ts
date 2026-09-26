@@ -10,6 +10,7 @@ import { validatePageContent } from '../knowledge/wiki-quality-validator.js';
 import type { PageQualityReport } from '../knowledge/wiki-quality-validator.js';
 import { verifyAndAnnotateClaims } from '../knowledge/claim-verifier.js';
 import type { ClaimStats } from '../knowledge/claim-verifier.js';
+import { extractDefinedSymbolNames } from '../knowledge/source-fallback.js';
 import { collectEvidenceFiles, buildEvidenceBlock, injectEvidenceBlock } from '../knowledge/wiki-evidence.js';
 import { ConfigDetector } from '../knowledge/config-detector.js';
 import { TopicDiscovery, loadTopics, saveTopics } from '../knowledge/topic-discovery.js';
@@ -99,7 +100,7 @@ export class WikiService {
     }
 
     // 决定生成哪些页面（校验页名合法性）
-    const pages = this.resolvePages(options?.pages, topicPages, chapterPages);
+    let pages = this.resolvePages(options?.pages, topicPages, chapterPages);
 
     // 检测式配置探测器：探测项目实际配置（package.json/lockfile/eslint/...），
     // 复用 scanResult 的源文件列表避免重复扫描
@@ -112,21 +113,47 @@ export class WikiService {
     const fallbackBuilder = new WikiFallbackBuilder();
     const onChunk = options?.onChunk ?? (() => {});
 
+    const filenames: string[] = [];
+    const writtenPages: Array<{ page: string; relPath: string; source: string; status: PageStatus }> = [];
+    const skippedPages: Array<{ page: string; reason: string }> = [];
+    const legacyRemoved: string[] = [];
+
+    // data-flow 预检：无执行序列数据时整页剔除（诚实空壳页对读者无价值）。
+    // 必须在 plannedPaths / README 索引 / 编号目录清理计算前完成，否则目录表与 Related
+    // 会出现指向未产出页的死链。预检构建的 context 存入 prebuiltContexts 复用
+    // （getArchitecture 无缓存，避免同一图谱查询跑两遍）。
+    const prebuiltContexts = new Map<string, unknown>();
+    if (pages.includes('data-flow')) {
+      const dfContext = contextBuilder.buildByName('data-flow', pages) as DataFlowContext | null;
+      if (dfContext && dfContext.sequences.length > 0) {
+        prebuiltContexts.set('data-flow', dfContext);
+      } else {
+        pages = pages.filter(p => p !== 'data-flow');
+        const oldRel = pageRelPath('data-flow');
+        const oldPath = join(wikiDir, oldRel);
+        if (existsSync(oldPath)) {
+          rmSync(oldPath);
+          legacyRemoved.push(oldRel);
+        }
+        skippedPages.push({ page: 'data-flow', reason: '无执行序列数据（可信 CALLS 边不足），跳过空壳页生成' });
+      }
+    }
+
     // 接管式重建：清理旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页/章节页/编号目录残留
     const staleNumberedDirs = this.cleanupStaleNumberedDirFiles(wikiDir, pages, options?.pruneStale ?? false);
-    const legacyRemoved = [
+    legacyRemoved.push(
       ...this.cleanupLegacyFlatFiles(wikiDir, pages),
       ...this.cleanupRetiredPages(wikiDir),
       ...this.cleanupStaleTopicPages(wikiDir, pages),
       ...this.cleanupStaleChapterPages(wikiDir, pages),
-    ];
+    );
 
     // 质量闸门输入：本次计划写入的页面路径 + 仓库真实文件清单
     const plannedPaths = new Set(pages.map(p => pageRelPath(p)));
 
-    const filenames: string[] = [];
-    const writtenPages: Array<{ page: string; relPath: string; source: string; status: PageStatus }> = [];
-    const skippedPages: Array<{ page: string; reason: string }> = [];
+    // 存量手写文档纳入 README 索引（只索引不动文件；cleanup 已先行，删除后仍存在的才被索引）
+    contextBuilder.setLegacyDocs(this.collectLegacyDocs(wikiDir, plannedPaths));
+
     const qualityReports: PageQualityReport[] = [];
     const claimStats: Array<{ page: string } & ClaimStats> = [];
     const mode = options?.mode ?? 'full';
@@ -135,20 +162,9 @@ export class WikiService {
       const relPath = pageRelPath(page);
       currentPage = page;
 
-      const pageContext = contextBuilder.buildByName(page, pages);
+      const pageContext = prebuiltContexts.get(page) ?? contextBuilder.buildByName(page, pages);
       if (pageContext === null || pageContext === undefined) {
         skippedPages.push({ page, reason: '页面 context 未实现，跳过写盘' });
-        continue;
-      }
-
-      // data-flow 无执行序列数据时跳过（诚实空壳页对读者无价值，报告注明原因并移除旧页）
-      if (page === 'data-flow' && (pageContext as DataFlowContext).sequences.length === 0) {
-        const oldPath = join(wikiDir, relPath);
-        if (existsSync(oldPath)) {
-          rmSync(oldPath);
-          legacyRemoved.push(relPath);
-        }
-        skippedPages.push({ page, reason: '无执行序列数据（可信 CALLS 边不足），跳过空壳页生成' });
         continue;
       }
 
@@ -167,7 +183,7 @@ export class WikiService {
       let bodyContent = produced.content;
       if (produced.source === 'llm') {
         const verified = verifyAndAnnotateClaims(bodyContent, {
-          symbols: this.getSymbolUniverse(),
+          symbols: this.getSymbolUniverse(contextBuilder.getFallbackSymbolNames()),
           knownFiles,
           grepCount: pattern => this.client.searchCode(pattern).totalGrepMatches,
         });
@@ -250,16 +266,21 @@ export class WikiService {
     return valid.length > 0 ? valid : allPages;
   }
 
-  /** 图谱符号名全集（断言校验一级核验；构建内缓存，首次 LLM 页时查询） */
+  /** 图谱符号名全集（断言校验一级核验；构建内缓存，首次 LLM 页时查询）。
+   *  fallback 为源码回落/IPC 扫描找到的名字——必须并入，否则工具自己注入的
+   *  证据会被断言校验反手标成「待确认」（自证矛盾）。 */
   private symbolUniverse: Set<string> | null = null;
-  private getSymbolUniverse(): Set<string> {
+  private getSymbolUniverse(fallback?: ReadonlySet<string>): Set<string> {
     if (this.symbolUniverse === null) {
       const q = this.client.queryGraph(
         'MATCH (n) WHERE n.is_test = false RETURN DISTINCT n.name AS name LIMIT 5000',
       );
       this.symbolUniverse = new Set(q.rows.map(r => String(r[0])));
     }
-    return this.symbolUniverse;
+    if (!fallback || fallback.size === 0) return this.symbolUniverse;
+    const merged = new Set(this.symbolUniverse);
+    for (const n of fallback) merged.add(n);
+    return merged;
   }
 
   /**
@@ -293,7 +314,8 @@ export class WikiService {
     return proposed;
   }
 
-  /** 组装章节树校验参考集：模块来自架构包，符号来自 outline 引用文件（有界查询） */
+  /** 组装章节树校验参考集：模块来自架构包，符号来自 outline 引用文件
+   *  （图谱有界查询 + 源码正则回落——图谱漏采的 brief 符号免于 W3「查无实据」误剔） */
   private outlineKnown(knownFiles: Set<string>, outlineRaw: unknown): OutlineKnown {    const arch = this.client.getArchitecture();
     const rawChapters = (outlineRaw as { chapters?: unknown })?.chapters;
     const refFiles = [...new Set(
@@ -310,8 +332,74 @@ export class WikiService {
          RETURN DISTINCT n.name AS name LIMIT 2000`,
       );
       for (const row of q.rows) symbols.add(row[0] as string);
+      for (const name of extractDefinedSymbolNames(refFiles, this.scanResult, this.outlineSourceCache)) {
+        symbols.add(name);
+      }
     }
     return { files: knownFiles, modules: new Set(arch.packages.map(p => p.name)), symbols };
+  }
+
+  /** outlineKnown 源码回落专用缓存（绝对路径 → 内容） */
+  private outlineSourceCache = new Map<string, string | null>();
+
+  /**
+   * 枚举 .wiki 内工具计划之外的手写/存量文档（README 索引用，只读不动文件）。
+   * 范围：wiki 根非 README 的 .md、工具所有编号目录内页面名空间外的 .md、
+   * 非工具编号目录内的 .md（08/09 由专属清理负责，其中用户文件已被治理）。
+   * 标题取文件首个 # 行（前 50 行内），截 30 条。
+   */
+  private collectLegacyDocs(wikiDir: string, plannedPaths: ReadonlySet<string>): Array<{ file: string; title: string }> {
+    const pageNames = new Set(ALL_PAGE_NAMES);
+    const owned = new Set(ownedNumberedDirs());
+    const docs: Array<{ file: string; title: string }> = [];
+    let topEntries: string[];
+    try {
+      topEntries = readdirSync(wikiDir);
+    } catch {
+      return docs;
+    }
+    const candidates: string[] = [];
+    // wiki 根：非 README 的 .md
+    for (const entry of topEntries) {
+      if (entry.endsWith('.md') && entry !== 'README.md') candidates.push(entry);
+    }
+    // 编号目录（含非工具目录）
+    for (const entry of topEntries) {
+      if (!/^\d{2}-/.test(entry)) continue;
+      if (entry === TOPIC_DIR || entry === CHAPTER_DIR) continue; // 专属清理已治理
+      let dirEntries: string[];
+      try {
+        dirEntries = readdirSync(join(wikiDir, entry));
+      } catch {
+        continue;
+      }
+      for (const file of dirEntries) {
+        if (!file.endsWith('.md')) continue;
+        const rel = `${entry}/${file}`;
+        const stem = file.replace(/\.md$/, '');
+        if (owned.has(entry) && pageNames.has(stem)) continue; // 注册名空间 = 工具页面（未计划的已被清理）
+        candidates.push(rel);
+      }
+    }
+    for (const rel of candidates.slice(0, 30)) {
+      if (plannedPaths.has(rel)) continue;
+      docs.push({ file: rel, title: this.legacyDocTitle(join(wikiDir, rel)) ?? rel });
+    }
+    return docs;
+  }
+
+  /** 读 wiki 内手写文档的首个 # 标题（前 50 行；失败返回 null） */
+  private legacyDocTitle(absPath: string): string | null {
+    try {
+      const content = readFileSync(absPath, 'utf-8');
+      for (const line of content.split('\n').slice(0, 50)) {
+        const m = line.match(/^#\s+(.{1,80})/);
+        if (m) return m[1].trim();
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   /**

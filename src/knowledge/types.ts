@@ -2,11 +2,13 @@
 
 import type { SymbolType, RelationType } from '../core/types.js';
 
-/** Hotspot 补强符号：structure 页证据不足时从图谱补充的真实符号（二次扩展检索） */
+/** Hotspot 补强符号：structure 页证据不足时从图谱补充的真实符号（二次扩展检索）。
+ *  startLine/signature 在源码回落（source-fallback）路径下携带定义行信息。 */
 export interface SupplementalSymbol {
   name: string;
   type: SymbolType;
   file: string;
+  startLine?: number;
   complexity?: number;
   signature?: string | null;
 }
@@ -20,6 +22,10 @@ export interface OverviewContext {
   sourceDirs: string[];
   /** 源码语言分布（来自 MCP get_architecture；多语言项目如 Tauri 须说明各语言职责域） */
   languages?: Array<{ language: string; fileCount: number }>;
+  /** 根 README.md 摘录（前 ~2000 字符；项目自述的既有事实源） */
+  readmeExcerpt?: string;
+  /** docs/ 下的 markdown 清单（≤10，延伸阅读） */
+  docsFiles?: string[];
   /** package.json 的 name/description（缺失为空串） */
   packageName?: string;
   packageDescription?: string;
@@ -96,6 +102,32 @@ export interface ModulesContext {
   supplementalSymbols?: SupplementalSymbol[];
 }
 
+/** IPC 调用点（Tauri 项目的真正 API 边界） */
+export interface IpcRef {
+  file: string;
+  line: number;
+}
+
+/** IPC 命令：前端 invoke ↔ Rust #[tauri::command] 对表（rustDef 为空 = 仅前端调用） */
+export interface IpcCommand {
+  name: string;
+  frontendCalls: IpcRef[];
+  rustDef: IpcRef | null;
+}
+
+/** IPC 事件：前端 listen ↔ 前端/Rust emit 对表 */
+export interface IpcEvent {
+  name: string;
+  listeners: IpcRef[];
+  emits: Array<IpcRef & { side: 'frontend' | 'rust' }>;
+}
+
+/** Tauri IPC 面（tauri-ipc.ts 正则扫描产物） */
+export interface IpcSurface {
+  commands: IpcCommand[];
+  events: IpcEvent[];
+}
+
 /** Context for api page */
 export interface ApiContext {
   commands: Array<{
@@ -118,6 +150,8 @@ export interface ApiContext {
     startLine: number;
     metadata: Record<string, unknown>;
   }>;
+  /** Tauri IPC 面（Tauri 项目时为 api 页主数据） */
+  ipc?: IpcSurface;
   supplementalSymbols?: SupplementalSymbol[];
 }
 
@@ -187,6 +221,10 @@ export interface ReadmeContext {
   runtime: string;
   /** 文档索引：文件名 → 该文档回答的核心问题（file 含编号目录前缀） */
   docIndex: Array<{ file: string; dir: string; tier: string; answer: string }>;
+  /** 仓库既有文档（根 README/AGENTS.md + docs/**.md），链接 ../ 前缀指向 wiki 外 */
+  relatedDocs?: Array<{ path: string; title: string }>;
+  /** .wiki 内工具计划之外的手写/存量文档（只索引不动文件） */
+  legacyDocs?: Array<{ file: string; title: string }>;
 }
 
 /** Context for tech-stack page (技术栈，R3 拒绝编造用途) */

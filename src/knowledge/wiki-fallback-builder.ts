@@ -217,6 +217,31 @@ export class WikiFallbackBuilder {
     const builder = new WikiBuilder()
       .addTitle('API Reference');
 
+    // Tauri IPC 面（desktop 项目 API 的主体，置前）
+    if (ctx.ipc && (ctx.ipc.commands.length > 0 || ctx.ipc.events.length > 0)) {
+      if (ctx.ipc.commands.length > 0) {
+        builder.addSection('Tauri IPC 命令', '前端 invoke ↔ Rust #[tauri::command] 对表（正则扫描，invoke(变量) 动态命令名不在内）').addTable(
+          ['命令', '前端调用点', 'Rust 定义', '状态'],
+          ctx.ipc.commands.map(c => [
+            `\`${c.name}\``,
+            c.frontendCalls.slice(0, 3).map(r => `${r.file}:${r.line}`).join('<br>') || '-',
+            c.rustDef ? `${c.rustDef.file}:${c.rustDef.line}` : '-',
+            c.rustDef === null ? '仅前端调用' : c.frontendCalls.length === 0 ? '未被前端调用' : '双侧',
+          ]),
+        );
+      }
+      if (ctx.ipc.events.length > 0) {
+        builder.addSection('Tauri IPC 事件', '').addTable(
+          ['事件', '前端监听点', '发射点'],
+          ctx.ipc.events.map(e => [
+            `\`${e.name}\``,
+            e.listeners.slice(0, 3).map(r => `${r.file}:${r.line}`).join('<br>') || '-',
+            e.emits.slice(0, 3).map(r => `${r.side} ${r.file}:${r.line}`).join('<br>') || '-',
+          ]),
+        );
+      }
+    }
+
     const commands = ctx.commands.filter((c, i, a) => a.findIndex(t => t.name === c.name) === i);
     if (commands.length > 0) {
       builder.addSection('CLI Commands', '').addTable(
@@ -235,7 +260,8 @@ export class WikiFallbackBuilder {
       );
     }
 
-    if (commands.length === 0 && functions.length === 0) {
+    const hasIpc = !!ctx.ipc && (ctx.ipc.commands.length > 0 || ctx.ipc.events.length > 0);
+    if (!hasIpc && commands.length === 0 && functions.length === 0) {
       builder.addParagraph('No API surface detected.');
     }
 
@@ -472,7 +498,7 @@ export class WikiFallbackBuilder {
     // 阅读路径（纯文本页名导航，不造链接，避免子集构建时死链）
     builder.addSection('阅读路径', [
       '- 新人上手：overview → tech-stack → onboarding',
-      '- 理解结构：architecture → modules → data-flow',
+      '- 理解结构：architecture → modules；调用关系查 calls',
       '- 日常开发：conventions → constraints；排障看 troubleshooting',
       '- 查证细节：calls → classes → glossary',
     ].join('\n'));
@@ -492,6 +518,24 @@ export class WikiFallbackBuilder {
           docs.map(d => [`[${d.file}](${d.file})`, d.tier, d.answer]),
         );
       }
+    }
+
+    // 仓库既有文档（指向 wiki 目录外，../ 前缀）
+    if (ctx.relatedDocs && ctx.relatedDocs.length > 0) {
+      builder.addSection('相关文档（仓库）', 'Wiki 之外的既有文档，链接为仓库相对路径');
+      builder.addTable(
+        ['文档', '标题'],
+        ctx.relatedDocs.map(d => [`[${d.path}](../${d.path})`, d.title]),
+      );
+    }
+
+    // .wiki 内手写/存量文档（只索引不动文件）
+    if (ctx.legacyDocs && ctx.legacyDocs.length > 0) {
+      builder.addSection('手写/存量文档', '非本工具生成、保留原文的手写文档');
+      builder.addTable(
+        ['文档', '标题'],
+        ctx.legacyDocs.map(d => [`[${d.file}](${d.file})`, d.title]),
+      );
     }
 
     return builder.build();

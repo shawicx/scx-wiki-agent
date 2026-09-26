@@ -83,6 +83,17 @@ describe('validatePageContent', () => {
     expect(r.issues.some(i => i.rule === 'dead-link')).toBe(false);
   });
 
+  it('wiki 根 README 链接 ../仓库文件不误报死链（relatedDocs 场景）', () => {
+    const content = '# Readme\n\n[仓库 README](../README.md) 与 [文档](../docs/guide.md)。';
+    const r = validatePageContent(content, {
+      ...baseOpts,
+      pagePath: 'README.md',
+      knownFiles: new Set(['README.md', 'docs/guide.md']),
+      plannedPaths: new Set<string>(),
+    });
+    expect(r.issues.some(i => i.rule === 'dead-link')).toBe(false);
+  });
+
   it('子目录页面内的相对链接按所在目录解析', () => {
     const content = '# Guide\n\n参见 [overview](../overview.md)。';
     const r = validatePageContent(content, { ...baseOpts, pagePath: '05-guides/onboarding.md' });

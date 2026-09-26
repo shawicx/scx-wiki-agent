@@ -148,8 +148,9 @@ export class WikiPageGenerator {
 
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- 第一段用3-5句话说明项目是什么、解决什么问题、面向什么场景
+- 第一段用3-5句话说明项目是什么、解决什么问题、面向什么场景；如提供 readmeExcerpt（仓库 README 自述），须吸收其项目定位与功能描述（冲突处以代码证据为准并标「待确认」）
 - 如 languages 显示多语言（如 TypeScript + Rust），必须在概述中说明各语言的职责域（前端/后端划分），不得遗漏任一语言的存在
+- 如提供 docsFiles，在概述末尾列出延伸阅读清单（相对路径原样保留）
 - "核心设计思路"章节：用2-3段自然语言描述项目的架构理念、关键设计决策、技术选型理由（结合技术栈）
 - "技术栈"章节：用表格列出每项技术及用途，并在表格后用1-2段分析技术选型的合理性
 - "项目结构"章节：逐一描述每个源代码目录的职责（至少覆盖所有 sourceDirs），说明目录间的关系
@@ -165,6 +166,8 @@ export class WikiPageGenerator {
         entryFiles: ctx.entryFiles.map(f => f.path),
         sourceDirs: ctx.sourceDirs,
         languages: ctx.languages ?? [],
+        readmeExcerpt: ctx.readmeExcerpt ?? null,
+        docsFiles: ctx.docsFiles ?? [],
         packageName: ctx.packageName ?? '',
         packageDescription: ctx.packageDescription ?? '',
         topSymbols: ctx.topSymbols
@@ -410,6 +413,7 @@ export class WikiPageGenerator {
     const nodes = ctx.frameworkNodes
       .filter((n, i, a) => a.findIndex(t => t.name === n.name) === i)
       .slice(0, 10);
+    const hasIpc = !!ctx.ipc && (ctx.ipc.commands.length > 0 || ctx.ipc.events.length > 0);
 
     return this.generate(onChunk, {
       systemPrompt: `你是一个资深代码文档专家。请根据API数据生成详尽、专业的API参考文档页面（Markdown格式）。
@@ -417,12 +421,32 @@ export class WikiPageGenerator {
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - 开头用1-2段概述项目的对外接口设计理念和主要交互方式
-- "CLI 命令"章节：用表格列出（命令名 | 说明 | 源文件位置），并在表格后逐个说明每个命令的功能、参数、使用场景（基于 description/docstring）
+${hasIpc ? `
+- "Tauri IPC 命令"章节（本项目 API 的主体，必须置前）：用表格列出（命令 | 前端调用点 | Rust 定义 | 状态），
+  按功能分组并对每组说明用途与典型时序；rustDef 为空的命令标注「仅前端调用，Rust 侧未检出」，
+  仅 Rust 定义的标注「未被前端调用」——两侧不匹配是重要事实，禁止省略或补造；
+  最后注明扫描局限（invoke(变量) 动态命令名不在表内）
+- "IPC 事件"章节：用表格列出（事件 | 前端监听点 | 发射点（前端/Rust）），说明事件驱动的交互模式` : ''}
+- "CLI 命令"章节（如有）：用表格列出（命令名 | 说明 | 源文件位置），并在表格后逐个说明每个命令的功能、参数、使用场景（基于 description/docstring）
 - "导出函数"章节：用表格列出（函数名 | 签名 | 说明 | 源文件:行号），按功能分组。对每个重要函数，补充1-2句说明其用途（基于 docstring/signature）
 - 如果有框架相关的节点（如Controller、Router），用表格列出并说明
 - 每个表格前用一段话说明该分类的作用和设计
 - 内容要充实，不要只罗列，要解释每个 API 的用途`,
       userPrompt: JSON.stringify({
+        ...(hasIpc ? {
+          ipc: {
+            commands: ctx.ipc!.commands.map(c => ({
+              name: c.name,
+              frontendCalls: c.frontendCalls.slice(0, 5).map(r => `${r.file}:${r.line}`),
+              rustDef: c.rustDef ? `${c.rustDef.file}:${c.rustDef.line}` : null,
+            })),
+            events: ctx.ipc!.events.map(e => ({
+              name: e.name,
+              listeners: e.listeners.slice(0, 5).map(r => `${r.file}:${r.line}`),
+              emits: e.emits.slice(0, 5).map(r => `${r.side} ${r.file}:${r.line}`),
+            })),
+          },
+        } : {}),
         commands: commands.map(c => ({
           name: c.name,
           file: `${c.filePath}:${c.startLine}`,

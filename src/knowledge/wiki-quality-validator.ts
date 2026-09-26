@@ -164,6 +164,10 @@ function checkDeadLinks(text: string, opts: ValidateOptions, issues: QualityIssu
     const resolved = posix.normalize(posix.join(posix.dirname(opts.pagePath), target));
     if (opts.plannedPaths.has(resolved)) continue;
     if (opts.knownFiles.has(resolved) || opts.knownFiles.has(target)) continue;
+    // 指向 wiki 目录外的仓库文件（如根 README 页链接 ../README.md、../docs/x.md）：
+    // 剥离前导 ../ 后按仓库相对路径核对
+    const repoRelative = resolved.replace(/^(?:\.\.\/)+/, '');
+    if (repoRelative !== resolved && opts.knownFiles.has(repoRelative)) continue;
     dead.add(target);
   }
   for (const d of dead) {

@@ -127,6 +127,10 @@ describe('WikiService', () => {
     writeFileSync(join(wikiDir, '01-overview', 'my-notes.md'), '# 手写笔记', 'utf-8');
     await service.buildWiki(wikiDir, { noLlm: true });
     expect(existsSync(keepPath)).toBe(true);
+    // 手写文档被纳入 README 索引（只索引不动文件）
+    const readme = readFileSync(join(wikiDir, 'README.md'), 'utf-8');
+    expect(readme).toContain('[01-overview/my-notes.md](01-overview/my-notes.md)');
+    expect(readme).toContain('手写笔记');
   });
 
   it('should call ensureIndexed on the client', async () => {
@@ -143,7 +147,7 @@ describe('WikiService', () => {
     const wikiDir = join(tmpDir, 'wiki');
     const generated = await service.buildWiki(wikiDir, { noLlm: true });
 
-    // Tier 0 结构层（data-flow 除外：无执行序列数据时跳过空壳页生成）
+    // Tier 0 结构层（data-flow 除外：无执行序列数据时预检剔除，README 索引不含死链）
     expect(generated).toContain('01-overview/overview.md');
     expect(generated).toContain('02-architecture/architecture.md');
     expect(generated).not.toContain('02-architecture/data-flow.md');

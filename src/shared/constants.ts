@@ -25,6 +25,9 @@ export const IGNORED_DIRS = [
 export const SUPPORTED_EXTENSIONS = [
   '.ts', '.tsx', '.js', '.jsx',
   '.mjs', '.cjs',
+  '.vue',
+  '.rs',
+  '.css',
   '.md',
   '.json',
   '.yaml', '.yml',
@@ -32,4 +35,5 @@ export const SUPPORTED_EXTENSIONS = [
   '.env', '.env.example',
 ];
 
-export const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+/** import 语句可解析的扩展名（Vue SFC 的 <script> 与 TS 同语法） */
+export const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.css'];

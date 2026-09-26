@@ -68,7 +68,8 @@ describe('TopicDiscovery', () => {
     const topics = new TopicDiscovery(client as any, makeScanResult(prodFiles)).discover();
 
     expect(topics.length).toBe(1);
-    expect(topics[0].id).toBe('topic-7');
+    // id 用主导符号 slug（可读且跨构建稳定），不再用图谱数字 id
+    expect(topics[0].id).toBe('buildwiki');
     // label 为语义文本（非路径）时直接用作标题
     expect(topics[0].title).toBe('质量闸门');
     // fixtures 文件被过滤，只保留生产文件（按查询行序）
@@ -106,12 +107,12 @@ describe('TopicDiscovery', () => {
     expect(topics).toEqual([]);
   });
 
-  it('label 为目录路径时改用主导符号命名标题；文件数不足 3 不立题', () => {
+  it('label 为目录路径时改用主导符号命名标题；通用/过短符号不配命名（退回模块联合）；文件数不足 3 不立题', () => {
     const queryResults = new Map<string, QueryResult>([
-      [symbolsCypher(['a', 'b', 'c']), {
+      [symbolsCypher(['buildWidget', 'b', 'c']), {
         columns: ['name', 'file'],
         rows: [
-          ['a', 'src/services/a.ts'],
+          ['buildWidget', 'src/services/a.ts'],
           ['b', 'src/knowledge/b.ts'],
           ['c', 'src/core/c.ts'],
         ],
@@ -137,8 +138,8 @@ describe('TopicDiscovery', () => {
         ],
         entry_points: [], hotspots: [], boundaries: [], layers: [],
         clusters: [
-          // label='src'（sourceDirs 内，无区分度）→ 用首主导符号命名
-          { id: 1, label: 'src', members: 6, cohesion: 0.9, top_nodes: ['a', 'b', 'c'] },
+          // label='src'（sourceDirs 内，无区分度）→ 用首个非通用主导符号命名
+          { id: 1, label: 'src', members: 6, cohesion: 0.9, top_nodes: ['buildWidget', 'b', 'c'] },
           // 跨包但仅 2 个文件 → 不立题
           { id: 2, label: 'small', members: 6, cohesion: 0.8, top_nodes: ['x', 'y', 'z'] },
         ],
@@ -150,8 +151,47 @@ describe('TopicDiscovery', () => {
     ])).discover();
 
     expect(topics.length).toBe(1);
-    expect(topics[0].title).toBe('a 协作面');
+    expect(topics[0].title).toBe('buildWidget 协作面');
+    expect(topics[0].id).toBe('buildwidget');
     expect(topics[0].files.length).toBe(3);
+  });
+
+  it('主导符号全部为通用名（constructor 等）时退回跨模块联合命名；高度重叠的簇不重复立题', () => {
+    const queryResults = new Map<string, QueryResult>([
+      [symbolsCypher(['constructor', 'init', 'run']), {
+        columns: ['name', 'file'],
+        rows: [
+          ['constructor', 'src/services/a.ts'],
+          ['init', 'src/knowledge/b.ts'],
+          ['run', 'src/core/c.ts'],
+        ],
+        total: 3,
+      }],
+    ]);
+    const client = createMockClient({
+      queryResults,
+      architecture: {
+        total_nodes: 10, total_edges: 10, node_labels: [], edge_types: [], languages: [],
+        packages: [
+          { name: 'services', node_count: 5, fan_in: 1, fan_out: 1 },
+          { name: 'knowledge', node_count: 5, fan_in: 1, fan_out: 1 },
+          { name: 'core', node_count: 5, fan_in: 1, fan_out: 1 },
+        ],
+        entry_points: [], hotspots: [], boundaries: [], layers: [],
+        clusters: [
+          { id: 1, label: 'src', members: 6, cohesion: 0.9, top_nodes: ['constructor', 'init', 'run'] },
+          // 与上一簇文件高度重叠（同一协作面的另一种聚类切法）→ 不重复立题
+          { id: 2, label: 'src', members: 8, cohesion: 0.95, top_nodes: ['constructor', 'init', 'run'] },
+        ],
+      },
+    });
+    const topics = new TopicDiscovery(client as any, makeScanResult([
+      'src/services/a.ts', 'src/knowledge/b.ts', 'src/core/c.ts',
+    ])).discover();
+
+    expect(topics.length).toBe(1);
+    expect(topics[0].title).toBe('services ↔ knowledge 协作');
+    expect(topics[0].id).toBe('services-knowledge-core');
   });
 
   it('无合格 cluster 时回退最高调用次数的跨包边界', () => {

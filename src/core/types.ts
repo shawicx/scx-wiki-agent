@@ -1,4 +1,4 @@
-export type Language = 'typescript' | 'javascript' | 'tsx' | 'jsx' | 'markdown' | 'json' | 'yaml' | 'unknown';
+export type Language = 'typescript' | 'javascript' | 'tsx' | 'jsx' | 'vue' | 'rust' | 'css' | 'markdown' | 'json' | 'yaml' | 'unknown';
 
 export type SymbolType = 'function' | 'class' | 'interface' | 'method' | 'variable' | 'import' | 'export';
 

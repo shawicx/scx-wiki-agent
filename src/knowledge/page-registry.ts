@@ -43,7 +43,6 @@ export const PAGE_REGISTRY: PageDescriptor[] = [
   { name: 'modules', tier: 'structure', dir: '02-architecture', answer: '每个模块的文件、符号、职责' },
   { name: 'api', tier: 'structure', dir: '03-interface', answer: '导出函数与 CLI 命令（带 file:line）' },
   { name: 'cli', tier: 'surface', dir: '03-interface', answer: 'CLI 命令、参数、退出码' },
-  { name: 'decisions', tier: 'structure', dir: '04-design', answer: '架构决策记录（ADR：编号+状态+背景+决策+后果）' },
   { name: 'onboarding', tier: 'operations', dir: '05-guides', answer: '上手指南：环境准备、安装、首次运行、脚本' },
   { name: 'testing', tier: 'operations', dir: '05-guides', answer: '框架、测试目录、覆盖率、夹具' },
   { name: 'troubleshooting', tier: 'operations', dir: '05-guides', answer: '排障手册：错误分类、诊断步骤、常见陷阱' },
@@ -122,7 +121,22 @@ export const RETIRED_WIKI_PATHS: string[] = [
   '03-interface/cli-commands.md',      // → cli
   '04-design/page-registry.md',        // 注册表机制并入源码注释与 README
   '06-constraints/limitations.md',     // → constraints
+  '04-design/decisions.md',            // 页面下线：无真实 ADR 数据源，自动推导条目会伪装成决策记录
 ];
+
+/**
+ * 工具所有的编号目录（注册页目录 + 主题/章目录）。
+ * 这些目录内的 .md 由工具治理：构建时清理未列入计划的残留（旧版产物/改名遗留）。
+ */
+export function ownedNumberedDirs(): string[] {
+  const dirs = new Set<string>();
+  for (const p of PAGE_REGISTRY) {
+    if (p.dir) dirs.add(p.dir);
+  }
+  dirs.add(TOPIC_DIR);
+  dirs.add(CHAPTER_DIR);
+  return [...dirs];
+}
 
 /** 主题页名前缀（动态页：`topic:<id>`） */
 export const TOPIC_PAGE_PREFIX = 'topic:';

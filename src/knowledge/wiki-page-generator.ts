@@ -10,9 +10,12 @@ import type {
   GlossaryContext,
   OnboardingContext,
   TroubleshootingContext,
-  DecisionsContext,
   TestingContext,
   ConstraintsContext,
+  EnvironmentContext,
+  TechStackContext,
+  ConventionsContext,
+  CliContext,
   TopicContext,
   ChapterPageContext,
 } from './types.js';
@@ -129,9 +132,12 @@ export class WikiPageGenerator {
       case 'onboarding': return this.generateOnboarding(ctx, onChunk);
       case 'troubleshooting': return this.generateTroubleshooting(ctx, onChunk);
       case 'glossary': return this.generateGlossary(ctx, onChunk);
-      case 'decisions': return this.generateDecisions(ctx, onChunk);
       case 'testing': return this.generateTesting(ctx, onChunk);
       case 'constraints': return this.generateConstraints(ctx, onChunk);
+      case 'environment': return this.generateEnvironment(ctx, onChunk);
+      case 'tech-stack': return this.generateTechStack(ctx, onChunk);
+      case 'conventions': return this.generateConventions(ctx, onChunk);
+      case 'cli': return this.generateCliPage(ctx, onChunk);
       default: return '';
     }
   }
@@ -143,6 +149,7 @@ export class WikiPageGenerator {
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - 第一段用3-5句话说明项目是什么、解决什么问题、面向什么场景
+- 如 languages 显示多语言（如 TypeScript + Rust），必须在概述中说明各语言的职责域（前端/后端划分），不得遗漏任一语言的存在
 - "核心设计思路"章节：用2-3段自然语言描述项目的架构理念、关键设计决策、技术选型理由（结合技术栈）
 - "技术栈"章节：用表格列出每项技术及用途，并在表格后用1-2段分析技术选型的合理性
 - "项目结构"章节：逐一描述每个源代码目录的职责（至少覆盖所有 sourceDirs），说明目录间的关系
@@ -154,11 +161,12 @@ export class WikiPageGenerator {
         projectType: ctx.projectType,
         hasTypeScript: ctx.hasTypeScript,
         fileCount: ctx.fileCount,
+        techStack: ctx.techStack,
+        entryFiles: ctx.entryFiles.map(f => f.path),
+        sourceDirs: ctx.sourceDirs,
+        languages: ctx.languages ?? [],
         packageName: ctx.packageName ?? '',
         packageDescription: ctx.packageDescription ?? '',
-        techStack: ctx.techStack,
-        sourceDirs: ctx.sourceDirs,
-        entryFiles: ctx.entryFiles.map(f => f.path),
         topSymbols: ctx.topSymbols
           .filter((s, i, a) => a.findIndex(t => t.name === s.name) === i)
           .slice(0, 10)
@@ -183,6 +191,7 @@ export class WikiPageGenerator {
     const toDetail = (m: ModuleSummary) => ({
       name: m.name,
       symbolCount: m.symbols.length,
+      languages: m.languages ?? [],
       topSymbols: m.symbols
         .filter((s, i, a) => a.findIndex(t => t.name === s.name) === i)
         .slice(0, 6)
@@ -231,6 +240,7 @@ export class WikiPageGenerator {
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - 对本批每个模块，用1-2段详细描述其职责、核心符号的作用（引用 docstring 和 signature）、设计意图
+- 模块的 languages 显示多语言时，必须分别说明各语言的职责域（如该模块同时含 TypeScript 与 Rust 代码）
 - 如果模块有 topSymbols，必须逐一说明其用途
 - 只描述本批数据中的模块，禁止描述其他批次的模块`,
         userPrompt: JSON.stringify({
@@ -306,6 +316,7 @@ export class WikiPageGenerator {
     const toDetail = (m: ModuleSummary) => ({
       name: m.name,
       files: m.files.slice(0, 10),
+      languages: m.languages ?? [],
       topSymbols: m.symbols
         .filter((s, i, a) => a.findIndex(t => t.name === s.name) === i)
         .slice(0, 6)
@@ -362,6 +373,7 @@ export class WikiPageGenerator {
   - "交互方式"：与其他模块的协作方式（基于 dependsOn 和 usedBy）
   - "文件结构"：用表格列出该模块的文件及其关键符号和职责（文件名 | 关键符号 | 职责）
   - "核心符号"：对每个 topSymbol，用1-2句说明其用途（基于 docstring/signature）
+- 模块的 languages 显示多语言时，必须分别说明各语言的职责域
 - 按模块重要性排序（保持数据顺序）
 - 只描述本批数据中的模块，禁止描述其他批次的模块
 - 不要输出原始代码片段，但要引用关键函数的签名`,
@@ -438,7 +450,7 @@ export class WikiPageGenerator {
 - "环境准备"章节：详细列出所需环境（Node.js版本、包管理器、系统要求），说明每个依赖的作用
 - "安装步骤"章节：给出完整的安装流程，使用提供的包管理器，包含每步的预期输出和验证方法
 - "项目初始化"章节：列出实际的CLI命令（从提供的命令列表中获取），说明每个命令的作用、参数（options 数据直接引用）与使用场景
-- "基本使用"章节：详细列出核心命令和用法，用代码块展示命令示例，说明典型工作流（如 scan → build 的完整流程）
+- "基本使用"章节：详细列出核心命令和用法，用代码块展示命令示例，说明典型工作流（如 scan → build 的完整流程）；构建/测试等实际命令必须从 scripts 数据直接引用，严禁标「待确认」
 - "环境变量"章节：如提供 envVars 数据，用表格列出变量名与敏感标记；未提供则不设该章节（不要标注待确认）
 - "项目结构概览"章节：逐一描述每个源代码目录的含义和作用
 - "开发指南"章节：说明如何构建、如何运行测试、如何开发调试
@@ -453,6 +465,8 @@ export class WikiPageGenerator {
         packageManager: ctx.packageManager,
         nodeVersion: ctx.nodeVersion,
         cliCommands: ctx.cliCommands,
+        scripts: ctx.scripts ?? {},
+        envVars: ctx.envVars ?? [],
       }, null, 2),
       maxOutputTokens: 8000,
     });
@@ -576,6 +590,7 @@ export class WikiPageGenerator {
 - "协作方式"：基于 edges 边表分析文件间如何配合（调用方向、数据流），用表格呈现调用边（R2 严禁时序图）
 - "跨模块边界"：基于 boundaries 分析该主题与外部的耦合点及修改代价
 - "设计动机"：基于符号命名与协作模式推断该主题的设计意图，推断处须标注为推断
+- 描述运行机制（生命周期、时序、等待/释放语义等）时，必须有数据中调用边或符号的 file:line 锚点佐证；无锚点佐证的机制描述必须显式标注「推断」，禁止以确定语气叙述
 - 严禁编造数据外的方法、参数或行为（R1/R3）`,
       userPrompt: JSON.stringify({
         id: ctx.id,
@@ -615,6 +630,7 @@ ${ctx.brief}
 - 按写作简报的要点组织小节；简报未覆盖但数据支持的内容可补充
 - 每条事实声明必须带 file:line 或函数名锚点（R1）
 - 调用关系用表格（调用方→被调用方→file:line），严禁时序图（R2）
+- 描述运行机制（生命周期、时序、等待/释放语义等）时，必须有数据中调用边或符号的 file:line 锚点佐证；无锚点佐证的机制描述必须显式标注「推断」，禁止以确定语气叙述
 - 严禁编造数据外的方法、参数或行为（R3）`,
       userPrompt: JSON.stringify({
         chapter: ctx.chapterTitle,
@@ -634,27 +650,6 @@ ${ctx.brief}
           location: e.line > 0 ? `${e.file}:${e.line}` : e.file,
         })),
         boundaries: ctx.boundaries,
-      }, null, 2),
-      maxOutputTokens: 8000,
-    });
-  }
-
-  async generateDecisions(ctx: DecisionsContext, onChunk: (text: string) => void): Promise<string> {
-    return this.generate(onChunk, {
-      systemPrompt: `你是一个资深软件架构师。请根据 ADR 数据生成详尽、专业的架构决策记录页面（Markdown格式）。
-
-要求：
-- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- 开头一段说明本页定位：记录影响架构走向的关键决策及其代价
-- 对每条 ADR，包含："编号+标题"作为章节，章节内先用表格列出（状态/背景/决策/后果/相关文件），再用1-2段深入解读该决策的动机与代价
-- 状态必须原样保留（如 proposed），严禁改为 accepted；fromMcp 为 false 时必须保留「自动推导/待确认」的诚实说明，禁止伪装成人工评审过的决策
-- "相关文件"必须只使用提供的 files 锚点，严禁添加数据之外的文件
-- "决策脉络"章节：分析各决策之间的关联（如分层决策如何约束模块边界、技术选型如何固化分层）
-- 内容要充实，让读者理解决策的 why 而不仅是 what`,
-      userPrompt: JSON.stringify({
-        adrs: ctx.adrs,
-        fromMcp: ctx.fromMcp,
-        supplementalSymbols: ctx.supplementalSymbols ?? [],
       }, null, 2),
       maxOutputTokens: 8000,
     });
@@ -689,6 +684,96 @@ ${ctx.brief}
 - 每条事实声明必须带 file 锚点（R1）
 - 内容要充实，让读者理解项目的硬边界与维护成本所在`,
       userPrompt: JSON.stringify({ ...ctx }, null, 2),
+      maxOutputTokens: 8000,
+    });
+  }
+
+  async generateEnvironment(ctx: EnvironmentContext, onChunk: (text: string) => void): Promise<string> {
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个资深代码文档专家。请根据运行态探测数据生成详尽、专业的环境文档页面（Markdown格式）。
+
+要求：
+- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
+- "项目信息"章节：用表格列出包名/版本/运行时（ESM/CJS）/Node 版本/包管理器，并用一段话说明运行时与包管理器的实际影响（如 ESM 对 import 的要求、包管理器对应的安装命令前缀）
+- "脚本命令"章节：用表格列出 scripts 的每个命令与脚本内容，逐个解释其行为与预期产出
+- "环境变量"章节：如提供 envVars，用表格列出变量名/敏感标记，说明典型用途；未提供则不设该章节（不要标注待确认）
+- 数据已提供的字段（packageManager/scripts/envVars）严禁再标「待确认」（R5）
+- 内容要充实，让读者据此能正确准备环境与运行全部命令`,
+      userPrompt: JSON.stringify({
+        packageName: ctx.packageName,
+        version: ctx.version,
+        runtime: ctx.runtime,
+        nodeVersion: ctx.nodeVersion,
+        packageManager: ctx.packageManager,
+        scripts: ctx.scripts,
+        envVars: ctx.envVars,
+      }, null, 2),
+      maxOutputTokens: 8000,
+    });
+  }
+
+  async generateTechStack(ctx: TechStackContext, onChunk: (text: string) => void): Promise<string> {
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个资深代码文档专家。请根据依赖分析数据生成详尽、专业的技术栈文档页面（Markdown格式）。
+
+要求：
+- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
+- 开头用1-2段概述项目的技术选型全貌（运行时/构建工具/包管理器/核心框架）
+- "核心依赖"章节：用表格列出（依赖 | 版本 | 首个 import 点），按职责分组（框架/UI/状态/工具等），对每组用1-2段说明选型理由与协作关系（基于依赖职责与 import 分布，不得编造调用细节）
+- "开发依赖"章节：用表格列出（依赖 | 版本 | 首个 import 点），说明各自的开发场景用途
+- "声明未用依赖"章节：仅当 unusedDeps 非空时输出表格，且必须在其前写明：「下表由源码 import 扫描推导（覆盖 .ts/.js/.vue/.css），存在动态加载、字符串引用等扫描盲区，清理前请人工复核」——严禁断言这些依赖一定无用
+- 每条 import 点锚点必须原样保留（R1/R3）
+- 内容要充实，让读者理解技术栈全貌与升级影响面`,
+      userPrompt: JSON.stringify({
+        coreDeps: ctx.coreDeps,
+        devDeps: ctx.devDeps,
+        unusedDeps: ctx.unusedDeps,
+        runtime: ctx.runtime,
+        buildTool: ctx.buildTool,
+        packageManager: ctx.packageManager,
+      }, null, 2),
+      maxOutputTokens: 8000,
+    });
+  }
+
+  async generateConventions(ctx: ConventionsContext, onChunk: (text: string) => void): Promise<string> {
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个资深代码文档专家。请根据规约探测数据生成详尽、专业的规约文档页面（Markdown格式）。
+
+要求：
+- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
+- "工具链规约"章节：用表格列出 Linter/EditorConfig 的配置状态与配置文件，editorConfig 原文用代码块展示
+- "AI 协作规约（AGENTS.md 提炼）"章节：如提供 agentsMd，**提炼**其规约要点（命名/导入/注释/禁止项/工作流约定），按主题分组为表格或列表——严禁整篇复制原文，严禁编造原文没有的规约
+- "命名与结构规约"章节：仅基于 AGENTS.md 与工具链配置可确定的内容归纳；无依据的方面直接省略
+- 数据已提供的字段（hasLinter/linterConfig/agentsMd）严禁再标「待确认」（R5）
+- 内容要充实，让新成员与 AI 都能据此遵守项目规约`,
+      userPrompt: JSON.stringify({
+        hasLinter: ctx.hasLinter,
+        linterConfig: ctx.linterConfig,
+        hasEditorConfig: ctx.hasEditorConfig,
+        editorConfig: ctx.editorConfig,
+        agentsMd: ctx.agentsMd ? ctx.agentsMd.slice(0, 6000) : null,
+      }, null, 2),
+      maxOutputTokens: 8000,
+    });
+  }
+
+  async generateCliPage(ctx: CliContext, onChunk: (text: string) => void): Promise<string> {
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个资深代码文档专家。请根据 CLI 命令数据生成详尽、专业的 CLI 参考文档页面（Markdown格式）。
+
+要求：
+- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
+- 开头用1-2段概述 CLI 的命令组织方式与典型工作流
+- "命令总表"章节：用表格列出（命令 | 说明 | 源文件:行号）
+- 每个命令单独一节：说明其功能、参数（options 表格：参数 | 说明）、使用场景与示例（示例中的命令名与参数必须来自数据，严禁编造参数）
+- "退出码"章节：如提供 exitCodes，用表格列出（码 | 触发上下文 | 源文件），说明其语义
+- 每条事实声明必须带 file:line 锚点（R1）
+- 内容要充实，让读者不用翻源码就能正确使用 CLI`,
+      userPrompt: JSON.stringify({
+        commands: ctx.commands,
+        exitCodes: ctx.exitCodes,
+      }, null, 2),
       maxOutputTokens: 8000,
     });
   }

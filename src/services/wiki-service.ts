@@ -21,9 +21,9 @@ import {
   PAGE_REGISTRY, ALL_PAGE_NAMES, tier2PagesFor,
   findPageDescriptor, pageRelPath, buildRelatedSection, RETIRED_WIKI_PATHS,
   isTopicPage, topicPageName, TOPIC_DIR,
-  isChapterPage, chapterPageName, CHAPTER_DIR,
+  isChapterPage, chapterPageName, CHAPTER_DIR, ownedNumberedDirs,
 } from '../knowledge/page-registry.js';
-import type { WikiBuildOptions } from '../knowledge/types.js';
+import type { WikiBuildOptions, DataFlowContext } from '../knowledge/types.js';
 
 /** 单页产出结果：最终内容 + 走的生成路径 + LLM 路径放弃原因（仅降级时） */
 interface PageProduced {
@@ -112,7 +112,8 @@ export class WikiService {
     const fallbackBuilder = new WikiFallbackBuilder();
     const onChunk = options?.onChunk ?? (() => {});
 
-    // 接管式重建：清理旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页/章节页残留
+    // 接管式重建：清理旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页/章节页/编号目录残留
+    const staleNumberedDirs = this.cleanupStaleNumberedDirFiles(wikiDir, pages, options?.pruneStale ?? false);
     const legacyRemoved = [
       ...this.cleanupLegacyFlatFiles(wikiDir, pages),
       ...this.cleanupRetiredPages(wikiDir),
@@ -137,6 +138,17 @@ export class WikiService {
       const pageContext = contextBuilder.buildByName(page, pages);
       if (pageContext === null || pageContext === undefined) {
         skippedPages.push({ page, reason: '页面 context 未实现，跳过写盘' });
+        continue;
+      }
+
+      // data-flow 无执行序列数据时跳过（诚实空壳页对读者无价值，报告注明原因并移除旧页）
+      if (page === 'data-flow' && (pageContext as DataFlowContext).sequences.length === 0) {
+        const oldPath = join(wikiDir, relPath);
+        if (existsSync(oldPath)) {
+          rmSync(oldPath);
+          legacyRemoved.push(relPath);
+        }
+        skippedPages.push({ page, reason: '无执行序列数据（可信 CALLS 边不足），跳过空壳页生成' });
         continue;
       }
 
@@ -202,7 +214,7 @@ export class WikiService {
       writtenPages.push({ page, relPath, source: produced.source, status: existed ? 'updated' : 'created' });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport, claimStats);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport, claimStats, staleNumberedDirs);
     return filenames;
   }
 
@@ -329,7 +341,7 @@ export class WikiService {
     return removed;
   }
 
-  /** 清理已退休页面路径的残留文件（改名/下线登记于 RETIRED_WIKI_PATHS） */
+  /** 清理已退休页面路径的残留文件（改名/下线登记于 RETIRED_WIKI_PATHS）；清空的宿主目录一并移除 */
   private cleanupRetiredPages(wikiDir: string): string[] {
     const removed: string[] = [];
     for (const rel of RETIRED_WIKI_PATHS) {
@@ -337,6 +349,12 @@ export class WikiService {
       if (existsSync(target)) {
         rmSync(target);
         removed.push(rel);
+        const dir = dirname(target);
+        try {
+          if (readdirSync(dir).length === 0) rmSync(dir, { recursive: true });
+        } catch {
+          // 目录不存在或不可读则忽略
+        }
       }
     }
     return removed;
@@ -385,6 +403,56 @@ export class WikiService {
     return removed;
   }
 
+  /**
+   * 编号目录治理：
+   * - 工具所有的编号目录（PAGE_REGISTRY 声明 + 08/09，后两者由专属清理负责，此处跳过）：
+   *   目录内文件名落在注册页名空间（ALL_PAGE_NAMES）但未列入本次计划的 .md 视为
+   *   旧版产物残留（如旧版章节页 01-overview/architecture.md），清理；
+   *   页名空间之外的文件（用户手写笔记等）不动。
+   * - 白名单之外的编号目录（如旧版生成的 02-frontend、03-backend）：非本工具产出，默认只在
+   *   构建报告中列出提示；--prune-stale 时整目录删除（显式授权，防静默误删用户文件）。
+   * 返回待处理的非白名单编号目录列表（空数组=无）。
+   */
+  private cleanupStaleNumberedDirFiles(wikiDir: string, pages: string[], prune: boolean): string[] {
+    const planned = new Set(pages.map(pageRelPath));
+    const owned = new Set(ownedNumberedDirs());
+    const pageNames = new Set(ALL_PAGE_NAMES);
+    const staleDirs: string[] = [];
+    let topEntries: string[];
+    try {
+      topEntries = readdirSync(wikiDir);
+    } catch {
+      return staleDirs;
+    }
+    for (const entry of topEntries) {
+      if (!/^\d{2}-/.test(entry)) continue;
+      const dirPath = join(wikiDir, entry);
+      let entries: string[];
+      try {
+        entries = readdirSync(dirPath);
+      } catch {
+        continue; // 非目录不动
+      }
+      if (entry === TOPIC_DIR || entry === CHAPTER_DIR) continue; // 专属清理负责
+      if (owned.has(entry)) {
+        for (const file of entries) {
+          const rel = `${entry}/${file}`;
+          const stem = file.replace(/\.md$/, '');
+          // 只清注册页名空间内的未计划残留；页名空间外的用户文件保留
+          if (file.endsWith('.md') && pageNames.has(stem) && !planned.has(rel)) {
+            rmSync(join(dirPath, file));
+          }
+        }
+      } else if (prune) {
+        rmSync(dirPath, { recursive: true });
+        staleDirs.push(`${entry}/（已删除）`);
+      } else {
+        staleDirs.push(`${entry}/（非本工具目录，--prune-stale 可清除）`);
+      }
+    }
+    return staleDirs;
+  }
+
   private async generatePage(
     page: string,
     pageContext: unknown,
@@ -431,6 +499,7 @@ export class WikiService {
     llmDropped: Array<{ page: string; reason: string }>,
     outline: OutlineReport | null,
     claimStats: Array<{ page: string } & ClaimStats>,
+    staleNumberedDirs: string[] = [],
   ): void {
     const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -501,6 +570,13 @@ export class WikiService {
 
     if (legacyRemoved.length > 0) {
       lines.push(`  清理陈旧产物 ${legacyRemoved.length} 个：${legacyRemoved.join(', ')}`);
+    }
+
+    if (staleNumberedDirs.length > 0) {
+      lines.push(`  发现非本工具的编号目录 ${staleNumberedDirs.length} 个：`);
+      for (const d of staleNumberedDirs) {
+        lines.push(`    - ${d}`);
+      }
     }
 
     if (skipped.length > 0) {

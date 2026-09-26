@@ -18,6 +18,8 @@ export interface OverviewContext {
   fileCount: number;
   techStack: string[];
   sourceDirs: string[];
+  /** 源码语言分布（来自 MCP get_architecture；多语言项目如 Tauri 须说明各语言职责域） */
+  languages?: Array<{ language: string; fileCount: number }>;
   /** package.json 的 name/description（缺失为空串） */
   packageName?: string;
   packageDescription?: string;
@@ -35,6 +37,8 @@ export interface ModuleSummary {
   outgoingRelations: Array<{ target: string; type: RelationType }>;
   incomingRelations: Array<{ source: string; type: RelationType }>;
   codeSnippets: Array<{ symbolName: string; content: string; startLine: number }>;
+  /** 模块内文件的语言分布（多语言模块须分别说明各语言职责域） */
+  languages?: Array<{ language: string; fileCount: number }>;
 }
 
 /** Context for architecture page */
@@ -199,23 +203,6 @@ export interface TechStackContext {
   packageManager: string;
 }
 
-/** Context for decisions page (ADR 架构决策记录) */
-export interface DecisionsContext {
-  /** ADR 条目（编号+状态+背景+决策+后果） */
-  adrs: Array<{
-    id: string;
-    title: string;
-    status: 'accepted' | 'proposed' | 'deprecated';
-    context: string;
-    decision: string;
-    consequences: string;
-    files: string[];
-  }>;
-  /** 是否来自 MCP 持久化（false=自动降级生成） */
-  fromMcp: boolean;
-  supplementalSymbols?: SupplementalSymbol[];
-}
-
 /** Context for environment page (运行态) */
 export interface EnvironmentContext {
   packageName: string;
@@ -351,5 +338,7 @@ export interface WikiBuildOptions {
   refreshTopics?: boolean;
   /** 重新规划章节树并覆盖 outline.json（无 LLM 时回退现有锁定文件） */
   refreshOutline?: boolean;
+  /** 清理 wiki 内非本工具产出的编号目录（默认只报告不删除） */
+  pruneStale?: boolean;
   onChunk?: (filename: string, text: string) => void;
 }

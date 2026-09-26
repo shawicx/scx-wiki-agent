@@ -94,27 +94,59 @@ describe('WikiPageGenerator', () => {
     expect(streamText).not.toHaveBeenCalled();
   });
 
-  it('generateByName 派发 decisions 并注入 ADR 数据（LLM 路径补齐）', async () => {
+  it('generateByName 派发 environment/tech-stack/conventions/cli（LLM 路径补齐）', async () => {
     mockStreamText.mockReturnValue({
       fullStream: (async function* () {
-        yield { type: 'text-delta', text: '# ADR' };
+        yield { type: 'text-delta', text: '# Page' };
       })(),
     } as any);
 
     const generator = new WikiPageGenerator('gpt-4o-mini');
-    const result = await generator.generateByName('decisions', {
-      adrs: [{
-        id: 'ADR-001', title: '分层', status: 'proposed',
-        context: 'c', decision: 'd', consequences: 'x', files: ['src/a.ts'],
-      }],
-      fromMcp: false,
-    }, vi.fn());
 
+    await generator.generateByName('environment', {
+      packageName: 'p', version: '1.0.0', runtime: 'ESM', nodeVersion: '20',
+      packageManager: 'bun', scripts: { test: 'bun test' }, envVars: [],
+    }, vi.fn());
     expect(streamText).toHaveBeenCalledOnce();
-    const callArgs = mockStreamText.mock.calls[0][0] as any;
-    expect(callArgs.prompt).toContain('ADR-001');
-    expect(callArgs.prompt).toContain('proposed');
-    expect(result).toBe('# ADR');
+    let callArgs = mockStreamText.mock.calls[0][0] as any;
+    expect(callArgs.prompt).toContain('"bun"');
+    expect(callArgs.prompt).toContain('bun test');
+    mockStreamText.mockClear();
+
+    await generator.generateByName('tech-stack', {
+      coreDeps: [{ name: 'vue', version: '3', importFiles: ['src/main.ts'] }],
+      devDeps: [], unusedDeps: [{ name: 'left-pad', version: '1' }],
+      runtime: 'ESM', buildTool: 'vite', packageManager: 'bun',
+    }, vi.fn());
+    expect(streamText).toHaveBeenCalledOnce();
+    callArgs = mockStreamText.mock.calls[0][0] as any;
+    expect(callArgs.prompt).toContain('left-pad');
+    expect(callArgs.system).toContain('人工复核');
+    mockStreamText.mockClear();
+
+    await generator.generateByName('conventions', {
+      hasLinter: true, linterConfig: 'scripts.lint: oxlint',
+      hasEditorConfig: false, editorConfig: null,
+      agentsMd: '## 命名\n使用 kebab-case',
+    }, vi.fn());
+    expect(streamText).toHaveBeenCalledOnce();
+    callArgs = mockStreamText.mock.calls[0][0] as any;
+    expect(callArgs.prompt).toContain('oxlint');
+    expect(callArgs.prompt).toContain('kebab-case');
+    mockStreamText.mockClear();
+
+    await generator.generateByName('cli', {
+      commands: [{ name: 'build', description: '构建', filePath: 'src/cli/build.ts', startLine: 10, options: [] }],
+      exitCodes: [{ code: 1, context: 'process.exit(1)', filePath: 'src/cli/build.ts' }],
+    }, vi.fn());
+    expect(streamText).toHaveBeenCalledOnce();
+    callArgs = mockStreamText.mock.calls[0][0] as any;
+    expect(callArgs.prompt).toContain('src/cli/build.ts');
+
+    // decisions 已下线：不派发 LLM
+    mockStreamText.mockClear();
+    await generator.generateByName('decisions', {}, vi.fn());
+    expect(streamText).not.toHaveBeenCalled();
   });
 
   it('generateByName 派发 testing 并注入探测事实', async () => {

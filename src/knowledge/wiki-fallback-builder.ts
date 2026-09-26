@@ -19,7 +19,6 @@ import type {
   ConstraintsContext,
   CliContext,
   TechStackContext,
-  DecisionsContext,
   TopicContext,
   ChapterPageContext,
 } from './types.js';
@@ -51,7 +50,6 @@ export class WikiFallbackBuilder {
       case 'constraints': return this.buildConstraints(ctx);
       case 'cli': return this.buildCli(ctx);
       case 'tech-stack': return this.buildTechStack(ctx);
-      case 'decisions': return this.buildDecisions(ctx);
       default: return '';
     }
   }
@@ -815,41 +813,6 @@ export class WikiFallbackBuilder {
       builder.addTable(
         ['From', 'To', '调用次数'],
         ctx.boundaries.map(b => [b.from, b.to, String(b.callCount)]),
-      );
-    }
-
-    return builder.build();
-  }
-
-  /**
-   * decisions.md：ADR 架构决策记录。
-   * 每条 ADR：编号+状态+背景+决策+后果+相关文件（R1 锚点、R4 结构化）。
-   */
-  buildDecisions(ctx: DecisionsContext): string {
-    const builder = new WikiBuilder().addTitle('Architecture Decision Records');
-
-    if (!ctx.fromMcp) {
-      builder.addParagraph(
-        unconfirmedNote('MCP 未提供持久化 ADR，以下决策记录基于代码结构自动推导生成（状态均为 proposed），建议人工审阅后用 manage_adr(mode=update) 持久化'),
-      );
-    }
-
-    if (ctx.adrs.length === 0) {
-      builder.addParagraph('No architecture decisions detected.');
-      return builder.build();
-    }
-
-    for (const adr of ctx.adrs) {
-      builder.addSection(`${adr.id}: ${adr.title}`, '');
-      builder.addTable(
-        ['项', '内容'],
-        [
-          ['状态', adr.status],
-          ['背景', adr.context],
-          ['决策', adr.decision],
-          ['后果', adr.consequences],
-          ['相关文件', adr.files.map(f => `\`${f}\``).join(', ') || '-'],
-        ],
       );
     }
 

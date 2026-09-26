@@ -14,7 +14,7 @@ import type { WikiPageGenerator } from './wiki-page-generator.js';
 import type { TopicDefinition } from './topic-discovery.js';
 import type { OutlineFileData } from './outline.js';
 import { PAGE_REGISTRY } from './page-registry.js';
-import { isTestPath } from '../shared/utils.js';
+import { isTestPath, matchPackageForFile } from '../shared/utils.js';
 
 const SYSTEM_PROMPT = [
   '你是资深软件架构师，为代码仓库规划「仓库专属章节树」——wiki 固定页面之外的深度补充结构。',
@@ -26,8 +26,9 @@ const SYSTEM_PROMPT = [
   '- 每章 2-6 页，每页聚焦一个可独立成文的协作面或机制',
   '- 建议总量 3-6 章、6-12 页（上限 8 章 16 页，宁缺毋滥；证据不足以立章的主题直接放弃）',
   '- 页的 files 锚点只能从 candidateFiles 中选取，每页 3-12 个，必须逐字真实存在',
-  '- brief 必须点名数据中的真实符号名与文件，说明该页要写什么、覆盖哪些要点（2-6 句）',
-  '- 章节与页的标题用中文；id 用 kebab-case（如 terminal-rendering）',
+  '- brief 必须点名数据中的真实符号名与文件，只概括数据可见的分工与覆盖要点（2-6 句）；',
+  '  禁止预写运行机制或行为语义（生成期无法核验，会诱导虚构）',
+  '- 章节与页的标题用中文；id 用 kebab-case（如 terminal-rendering，禁止数字编号前缀）',
   '',
   '输出格式（严格遵守，只输出 JSON 本体，无围栏、无任何说明文字）：',
   '{"chapters":[{"id":"","title":"","summary":"","pages":[{"id":"","title":"","brief":"","files":[],"modules":[],"symbols":[]}]}]}',
@@ -72,15 +73,16 @@ export class OutlinePlanner {
       .map(f => f.relativePath)
       .filter(p => !isTestPath(p));
 
-    // 每模块文件分组（候选锚点池）
+    // 每模块文件分组（候选锚点池；路径段精确归属，多段包名取最长）
+    const pkgNames = arch.packages.map(p => p.name);
     const filesByModule = new Map<string, string[]>();
     const ungrouped: string[] = [];
     for (const file of productionFiles) {
-      const mod = arch.packages.find(pkg => file.includes(`/${pkg.name}/`));
+      const mod = matchPackageForFile(file, pkgNames);
       if (mod) {
-        const list = filesByModule.get(mod.name) ?? [];
+        const list = filesByModule.get(mod) ?? [];
         list.push(file);
-        filesByModule.set(mod.name, list);
+        filesByModule.set(mod, list);
       } else {
         ungrouped.push(file);
       }
@@ -102,7 +104,7 @@ export class OutlinePlanner {
     for (const row of symQ.rows) {
       const file = (row[1] as string) ?? '';
       if (!file || isTestPath(file)) continue;
-      const mod = arch.packages.find(pkg => file.includes(`/${pkg.name}/`))?.name ?? '';
+      const mod = matchPackageForFile(file, pkgNames) ?? '';
       const list = symbolsByModule.get(mod) ?? [];
       list.push({ name: row[0] as string, doc: String(row[2] ?? '').slice(0, 80) });
       symbolsByModule.set(mod, list);

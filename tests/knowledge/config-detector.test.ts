@@ -45,6 +45,22 @@ describe('ConfigDetector', () => {
       expect(env.packageManager).toBe('pnpm');
     });
 
+    it('从 bun.lock 推断包管理器（lockfile 优先级：packageManager 字段 > bun > pnpm > yarn > npm）', () => {
+      writeFileSync(join(tempDir, 'bun.lock'), '');
+      let detector = new ConfigDetector(tempDir);
+      expect(detector.detectEnvironment().packageManager).toBe('bun');
+
+      rmSync(join(tempDir, 'bun.lock'));
+      writeFileSync(join(tempDir, 'bun.lockb'), '');
+      detector = new ConfigDetector(tempDir);
+      expect(detector.detectEnvironment().packageManager).toBe('bun');
+
+      // packageManager 字段最优先
+      writeFileSync(join(tempDir, 'package.json'), JSON.stringify({ packageManager: 'bun@1.4.1' }));
+      writeFileSync(join(tempDir, 'pnpm-lock.yaml'), '');
+      expect(detector.detectEnvironment().packageManager).toBe('bun');
+    });
+
     it('从源码 process.env 提取环境变量', () => {
       mkdirSync(join(tempDir, 'src'));
       writeFileSync(join(tempDir, 'src/index.ts'),
@@ -68,6 +84,24 @@ describe('ConfigDetector', () => {
       const detector = new ConfigDetector(tempDir);
       const conv = detector.detectConventions();
       expect(conv.agentsMd).toContain('Commands');
+    });
+
+    it('检测 .oxlintrc.json 配置', () => {
+      writeFileSync(join(tempDir, '.oxlintrc.json'), '{"rules":{}}');
+      const detector = new ConfigDetector(tempDir);
+      const conv = detector.detectConventions();
+      expect(conv.hasLinter).toBe(true);
+      expect(conv.linterConfig).toBe('.oxlintrc.json');
+    });
+
+    it('无配置文件时从 scripts.lint 反推 oxlint（新工具常无独立配置）', () => {
+      writeFileSync(join(tempDir, 'package.json'), JSON.stringify({
+        scripts: { lint: 'oxlint src' },
+      }));
+      const detector = new ConfigDetector(tempDir);
+      const conv = detector.detectConventions();
+      expect(conv.hasLinter).toBe(true);
+      expect(conv.linterConfig).toContain('oxlint');
     });
   });
 
@@ -108,6 +142,18 @@ describe('ConfigDetector', () => {
       const testing = detector.detectTesting();
       expect(testing.testDirs).toContain('tests');
       expect(testing.fixturesDir).toContain('fixtures');
+    });
+
+    it('从源文件清单反推与源码同置的测试目录（src/stores/foo.test.ts → src/stores）', () => {
+      const detector = new ConfigDetector(tempDir);
+      detector.setSourceFiles([
+        join(tempDir, 'src/stores/config.test.ts'),
+        join(tempDir, 'src/stores/config.ts'),
+        join(tempDir, 'src/services/ssh.test.ts'),
+      ]);
+      const testing = detector.detectTesting();
+      expect(testing.testDirs).toContain('src/stores');
+      expect(testing.testDirs).toContain('src/services');
     });
   });
 

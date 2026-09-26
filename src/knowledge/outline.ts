@@ -11,7 +11,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isTestPath } from '../shared/utils.js';
+import { isTestPath, matchPackageForFile } from '../shared/utils.js';
 
 export interface OutlinePage {
   id: string;
@@ -281,16 +281,13 @@ function isOutlineShape(raw: unknown): raw is OutlineFileData {
   });
 }
 
-/** 文件路径覆盖到的已知模块数（`/<mod>/` 包含匹配，与 topic-discovery 同法） */
+/** 文件路径覆盖到的已知模块数（路径段精确匹配，与 topic-discovery 同法） */
 function spannedModules(files: string[], modules: Set<string>): number {
+  const names = [...modules];
   const span = new Set<string>();
   for (const file of files) {
-    for (const mod of modules) {
-      if (file.includes(`/${mod}/`)) {
-        span.add(mod);
-        break;
-      }
-    }
+    const pkg = matchPackageForFile(file, names);
+    if (pkg) span.add(pkg);
   }
   return span.size;
 }

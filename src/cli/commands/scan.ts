@@ -15,12 +15,9 @@ export function registerScanCommand(program: Command) {
       console.log(`\nProject: ${result.rootDir}`);
       console.log(`Type: ${result.projectType}`);
       console.log(`TypeScript: ${result.hasTypeScript ? 'Yes' : 'No'}`);
-      console.log(`\nTech Stack:`);
-      for (const dep of result.techStack.slice(0, 20)) {
+      console.log(`\nTech Stack (${result.techStack.length}):`);
+      for (const dep of result.techStack) {
         console.log(`  - ${dep}`);
-      }
-      if (result.techStack.length > 20) {
-        console.log(`  ... and ${result.techStack.length - 20} more`);
       }
 
       console.log(`\nSource Directories:`);

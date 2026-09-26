@@ -89,7 +89,7 @@ describe('buildChapterPageContext（章节页）', () => {
   const edgeCypher = `MATCH (a)-[:CALLS]->(b)
        WHERE a.file_path IN [${fileList}] AND b.file_path IN [${fileList}]
          AND a.is_test = false AND b.is_test = false
-       RETURN a.name AS caller, b.name AS callee, b.file_path AS file, b.start_line AS line
+       RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line
        LIMIT 30`;
 
   it('携带章信息与简报；查询与主题页共用图谱取法；未定义页返回 null', () => {
@@ -100,8 +100,8 @@ describe('buildChapterPageContext（章节页）', () => {
         total: 1,
       }],
       [edgeCypher, {
-        columns: ['caller', 'callee', 'file', 'line'],
-        rows: [['XtermManager', 'attachResize', 'src/a.ts', 40]],
+        columns: ['caller', 'callerFile', 'callee', 'file', 'line'],
+        rows: [['XtermManager', 'src/a.ts', 'attachResize', 'src/b.ts', 40]],
         total: 1,
       }],
     ]);

@@ -2,7 +2,7 @@ import { readdirSync, statSync, existsSync, readFileSync } from 'fs';
 import { join, extname, basename, relative } from 'path';
 import ignore from 'ignore';
 import { IGNORED_DIRS, SUPPORTED_EXTENSIONS, CODE_EXTENSIONS } from '../shared/constants.js';
-import { getFileLanguage, relativePath } from '../shared/utils.js';
+import { getFileLanguage, relativePath, importedPackageName } from '../shared/utils.js';
 import type { Language } from './types.js';
 
 export type ProjectType = 'backend' | 'frontend' | 'cli' | 'desktop' | 'agent' | 'monorepo' | 'unknown';
@@ -166,26 +166,26 @@ export class FileScanner {
   /**
    * 扫描源文件，提取所有 import 语句引用的包名。
    * 只保留被实际 import 的依赖，过滤死依赖（声明了但从未使用）。
+   * 覆盖 ES import / require / 动态 import，以及 CSS `@import "pkg"`
+   * （tailwind 插件类依赖的常见引入方式，如 tw-animate-css）。
    */
   private collectImportedPackages(files: ScannedFile[]): Set<string> {
     const imported = new Set<string>();
-    // 匹配 ES import: import ... from 'pkg'; import 'pkg'; 动态 import('pkg')
-    const importRegex = /(?:import\s+(?:[\s\S]*?\s+from\s+)?|require\s*\(\s*)['"]([^'"./][^'"]*)['"]/g;
+    // 匹配 ES import: import ... from 'pkg'; import 'pkg'; 动态 import('pkg'); require('pkg')
+    // from 前缀限定单行且不越过引号，防止副作用导入（import 'pkg'）被后续行的 from 吞掉
+    const importRegex = /(?:import\s+(?:[^\n'";]*?\s+from\s+)?|import\s*\(\s*|require\s*\(\s*)['"]([^'"]+)['"]/g;
+    // 匹配 CSS @import: @import "pkg"; @import 'pkg';
+    const cssImportRegex = /@import\s+(?:url\(\s*)?['"]([^'"./][^'"]*)['"]/g;
 
     for (const file of files) {
       if (!CODE_EXTENSIONS.includes(file.extension)) continue;
       try {
         const source = readFileSync(file.absolutePath, 'utf-8');
+        const regex = file.extension === '.css' ? cssImportRegex : importRegex;
         let match: RegExpExecArray | null;
-        while ((match = importRegex.exec(source)) !== null) {
-          // 取包名（scoped 包含 @scope/name，非 scoped 取首段）
-          let pkg = match[1];
-          if (pkg.startsWith('@')) {
-            pkg = pkg.split('/').slice(0, 2).join('/');
-          } else {
-            pkg = pkg.split('/')[0];
-          }
-          imported.add(pkg);
+        while ((match = regex.exec(source)) !== null) {
+          const pkg = importedPackageName(match[1]);
+          if (pkg) imported.add(pkg);
         }
       } catch {
         // skip unreadable files

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
-import { join, extname, relative } from 'path';
+import { join, extname, relative, basename, dirname } from 'path';
 
 export interface EnvironmentInfo {
   packageName: string;
@@ -136,10 +136,13 @@ export class ConfigDetector {
       nodeVersion = pkg.engines.node;
     }
 
-    // 包管理器：优先 package.json#packageManager，回退 lockfile
+    // 包管理器：优先 package.json#packageManager，回退 lockfile（全项目唯一判定点，
+    // 与 tech-stack 等页面共享，避免各页各自探测导致文档互相矛盾）
     let packageManager = 'npm';
     if (pkg?.packageManager) {
       packageManager = pkg.packageManager.split('@')[0];
+    } else if (existsSync(join(this.rootDir, 'bun.lock')) || existsSync(join(this.rootDir, 'bun.lockb'))) {
+      packageManager = 'bun';
     } else if (existsSync(join(this.rootDir, 'pnpm-lock.yaml'))) {
       packageManager = 'pnpm';
     } else if (existsSync(join(this.rootDir, 'yarn.lock'))) {
@@ -156,13 +159,23 @@ export class ConfigDetector {
     let linterConfig: string | null = null;
     for (const f of [
       'eslint.config.js', 'eslint.config.mjs', 'eslint.config.ts', 'eslint.config.cjs',
-      '.eslintrc.js', '.eslintrc.json', '.eslintrc.cjs', 'biome.json',
+      '.eslintrc.js', '.eslintrc.json', '.eslintrc.cjs', 'biome.json', '.oxlintrc.json',
     ]) {
       const p = join(this.rootDir, f);
       if (existsSync(p)) {
         hasLinter = true;
         linterConfig = f;
         break;
+      }
+    }
+
+    // 配置文件未识别时，从 scripts.lint 反推（oxlint/deno 等新工具常无独立配置文件）
+    if (!hasLinter) {
+      const lintScript = this.readPackageJsonLoose()?.scripts?.lint ?? '';
+      const m = lintScript.match(/\b(oxlint|eslint|biome|ruff|deno(?:\s+lint)?)\b/);
+      if (m) {
+        hasLinter = true;
+        linterConfig = `scripts.lint: ${m[1].trim()}`;
       }
     }
 
@@ -236,10 +249,18 @@ export class ConfigDetector {
       }
     }
 
-    // 测试目录探测
-    const testDirs: string[] = [];
+    // 测试目录探测：根级约定目录 + 从源文件清单反推（*.test.* / *.spec.* 所在目录）。
+    // 现代项目常把测试与源码同置（src/stores/foo.test.ts），只查根级会漏报。
+    const testDirs = new Set<string>();
     for (const d of ['tests', 'test', '__tests__', 'spec']) {
-      if (existsSync(join(this.rootDir, d))) testDirs.push(d);
+      if (existsSync(join(this.rootDir, d))) testDirs.add(d);
+    }
+    for (const abs of this.getSourceFiles()) {
+      const base = basename(abs);
+      if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(base)) {
+        const dir = relative(this.rootDir, dirname(abs)).replace(/\\/g, '/');
+        if (dir && dir !== '.') testDirs.add(dir);
+      }
     }
 
     // 夹具目录：tests/fixtures | test/fixtures | tests/data
@@ -251,7 +272,7 @@ export class ConfigDetector {
       if (existsSync(data)) { fixturesDir = `${d}/data`; break; }
     }
 
-    return { framework, configPath, testDirs, fixturesDir, coverageThreshold: null };
+    return { framework, configPath, testDirs: [...testDirs].sort(), fixturesDir, coverageThreshold: null };
   }
 
   detectConstraints(): ConstraintsInfo {

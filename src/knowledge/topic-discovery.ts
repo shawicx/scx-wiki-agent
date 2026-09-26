@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
 import type { ArchitectureData } from '../mcp/types.js';
 import type { ScanResult } from '../core/scanner.js';
-import { isTestPath } from '../shared/utils.js';
+import { isTestPath, matchPackageForFile } from '../shared/utils.js';
 
 export interface TopicDefinition {
   id: string;
@@ -31,6 +31,34 @@ const MIN_CLUSTER_MEMBERS = 5;
 /** 立题最低文件数（与证据下限对齐，避免主题页天然薄证据） */
 const MIN_TOPIC_FILES = 3;
 const MAX_TOPIC_FILES = 12;
+/** 主题间文件重叠率上限（超过视为同一协作面，后者不立题） */
+const MAX_TOPIC_OVERLAP = 0.5;
+
+/**
+ * 语言级通用符号名，不配作为主题标题与 id 来源
+ * （图谱聚类的 top_nodes 常被 constructor 等通用名占据，据此命名会产出「constructor 协作面」这类无语义主题）
+ */
+const GENERIC_SYMBOLS = new Set([
+  'constructor', 'main', 'init', 'run', 'new', 'dispose', 'setup', 'teardown',
+  'execute', 'handle', 'update', 'render', 'create', 'destroy', 'close', 'open',
+  'start', 'stop', 'get', 'set', 'from', 'value',
+]);
+
+/** ascii 标识符 → kebab-case slug（空结果返回 null） */
+function kebab(s: string): string | null {
+  const slug = s.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase().replace(/^-+|-+$/g, '');
+  return slug.length > 0 ? slug : null;
+}
+
+/** 两组文件的 Jaccard 重叠率 */
+function overlapRatio(a: string[], b: string[]): number {
+  const A = new Set(a);
+  const B = new Set(b);
+  let inter = 0;
+  for (const x of A) if (B.has(x)) inter++;
+  const union = A.size + B.size - inter;
+  return union > 0 ? inter / union : 0;
+}
 
 export class TopicDiscovery {
   constructor(
@@ -54,31 +82,47 @@ export class TopicDiscovery {
       .sort((a, b) => (b.members * b.cohesion) - (a.members * a.cohesion));
 
     const topics: TopicDefinition[] = [];
+    const usedIds = new Set<string>();
     for (const cluster of candidates) {
       const files = this.filesForSymbols(cluster.top_nodes);
       const pkgs = this.packagesForFiles(files, arch);
       if (pkgs.size < 2 || files.length < MIN_TOPIC_FILES) continue;
-      topics.push({
-        id: `topic-${cluster.id}`,
-        title: this.topicTitle(cluster),
-        files: files.slice(0, MAX_TOPIC_FILES),
-      });
+      // 与已立题主题高度重叠的簇不重复立题（同一协作面的两种聚类切法）
+      if (topics.some(t => overlapRatio(t.files, files) > MAX_TOPIC_OVERLAP)) continue;
+
+      const def = this.topicDefinition(cluster, files, [...pkgs], usedIds);
+      if (!def) continue;
+      topics.push(def);
       if (topics.length >= MAX_TOPICS) break;
     }
     return topics;
   }
 
   /**
-   * 标题规则：label 是目录路径（或落在 sourceDirs）时无区分度，
-   * 改用聚类首个主导符号命名（确定性，无 LLM）。
+   * 主题命名：label 为语义文本（非路径、不在 sourceDirs）时直接用作标题；
+   * 否则主导符号取首个非通用名 top_node（constructor 等语言级符号无区分度）；
+   * 再退回跨模块名联合。id 用符号/模块的 kebab slug（可读、跨构建稳定），
+   * 冲突时追加序号。
    */
-  private topicTitle(cluster: ArchitectureData['clusters'][number]): string {
-    const generic = !cluster.label
-      || cluster.label.includes('/')
-      || this.scanResult.sourceDirs.includes(cluster.label);
-    const lead = cluster.top_nodes[0] ?? '';
-    if (generic && lead) return `${lead} 协作面`;
-    return cluster.label || `主题 ${cluster.id}`;
+  private topicDefinition(
+    cluster: ArchitectureData['clusters'][number],
+    files: string[],
+    pkgs: string[],
+    usedIds: Set<string>,
+  ): TopicDefinition | null {
+    const semanticLabel = cluster.label
+      && !cluster.label.includes('/')
+      && !this.scanResult.sourceDirs.includes(cluster.label)
+      ? cluster.label
+      : null;
+    const lead = cluster.top_nodes.find(n => !GENERIC_SYMBOLS.has(n) && n.length >= 4 && kebab(n) !== null);
+    const title = semanticLabel
+      ?? (lead ? `${lead} 协作面` : `${pkgs.slice(0, 2).join(' ↔ ')} 协作`);
+    const baseId = (lead ? kebab(lead) : kebab(pkgs.join('-'))) ?? `topic-${cluster.id}`;
+    let id = baseId;
+    for (let n = 2; usedIds.has(id); n++) id = `${baseId}-${n}`;
+    usedIds.add(id);
+    return { id, title, files: files.slice(0, MAX_TOPIC_FILES) };
   }
 
   private fromBoundaries(arch: ArchitectureData): TopicDefinition | null {
@@ -87,7 +131,7 @@ export class TopicDiscovery {
     const pkgFile = (pkgName: string) =>
       this.scanResult.files
         .map(f => f.relativePath)
-        .filter(p => p.includes(`/${pkgName}/`) && !isTestPath(p));
+        .filter(p => matchPackageForFile(p, [pkgName]) !== null && !isTestPath(p));
     const files = [...pkgFile(top.from), ...pkgFile(top.to)].slice(0, MAX_TOPIC_FILES);
     if (files.length < MIN_TOPIC_FILES) return null;
     return {
@@ -114,14 +158,11 @@ export class TopicDiscovery {
   }
 
   private packagesForFiles(files: string[], arch: ArchitectureData): Set<string> {
+    const pkgNames = arch.packages.map(p => p.name);
     const pkgs = new Set<string>();
     for (const file of files) {
-      for (const pkg of arch.packages) {
-        if (file.includes(`/${pkg.name}/`)) {
-          pkgs.add(pkg.name);
-          break;
-        }
-      }
+      const pkg = matchPackageForFile(file, pkgNames);
+      if (pkg) pkgs.add(pkg);
     }
     return pkgs;
   }

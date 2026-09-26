@@ -143,10 +143,10 @@ describe('WikiService', () => {
     const wikiDir = join(tmpDir, 'wiki');
     const generated = await service.buildWiki(wikiDir, { noLlm: true });
 
-    // Tier 0 结构层
+    // Tier 0 结构层（data-flow 除外：无执行序列数据时跳过空壳页生成）
     expect(generated).toContain('01-overview/overview.md');
     expect(generated).toContain('02-architecture/architecture.md');
-    expect(generated).toContain('02-architecture/data-flow.md');
+    expect(generated).not.toContain('02-architecture/data-flow.md');
     expect(generated).toContain('02-architecture/modules.md');
     expect(generated).toContain('03-interface/api.md');
     expect(generated).toContain('07-reference/glossary.md');
@@ -263,25 +263,8 @@ describe('WikiService', () => {
     // troubleshooting：规则模板生成，弱证据 → 标注待确认
     const ts = readFileSync(join(wikiDir, '05-guides', 'troubleshooting.md'), 'utf-8');
     expect(ts).toContain('待确认');
-    // decisions：自动推导 ADR → 标注待确认
-    const decisions = readFileSync(join(wikiDir, '04-design', 'decisions.md'), 'utf-8');
-    expect(decisions).toContain('待确认');
-  });
-
-  it('should derive ADRs from graph evidence without project-specific hardcoding', async () => {
-    const client = createMockClient();
-    const service = new WikiService(client as any, makeBackendScanResult());
-    const wikiDir = join(tmpDir, 'wiki');
-    await service.buildWiki(wikiDir, { noLlm: true });
-
-    const decisions = readFileSync(join(wikiDir, '04-design', 'decisions.md'), 'utf-8');
-    // mock 图谱含 layers + boundaries，技术栈含 express → 三类证据条目均应出现
-    expect(decisions).toContain('分层结构');
-    expect(decisions).toContain('模块调用边界');
-    expect(decisions).toContain('核心技术选型');
-    // 自动推导条目状态一律 proposed（不再伪装成 accepted）
-    expect(decisions).toContain('proposed');
-    expect(decisions).not.toContain('accepted');
+    // decisions 页已下线（无真实 ADR 数据源，自动推导条目会伪装成决策记录）
+    expect(existsSync(join(wikiDir, '04-design', 'decisions.md'))).toBe(false);
   });
 
   it('should inject evidence block with real source files after the page title', async () => {

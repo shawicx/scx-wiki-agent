@@ -92,21 +92,21 @@ describe('WikiContextBuilder (MCP-backed)', () => {
 
   describe('buildDataFlowContext', () => {
     it('从 entry_points + CALLS 边构建真实调用序列（带行号，子链去重）', () => {
-      // data-flow 用 Cypher CALLS 边 BFS，过滤测试节点，RETURN 携带 start_line
+      // data-flow 用 Cypher CALLS 边 BFS，过滤测试节点，RETURN 携带 caller 双键与 start_line
       const callsEdgeCypher = `MATCH (caller)-[:CALLS]->(callee)
          WHERE caller.name IN ["registerBuildCommand"]
            AND caller.is_test = false
            AND callee.is_test = false
-         RETURN caller.name AS caller, callee.name AS callee,
-                callee.file_path AS file, callee.label AS label, callee.start_line AS line
+         RETURN caller.name AS caller, caller.file_path AS callerFile,
+                callee.name AS callee, callee.file_path AS file, callee.label AS label, callee.start_line AS line
          LIMIT 40`;
       const queryResults = new Map<string, QueryResult>([
         [callsEdgeCypher, {
-          columns: ['caller', 'callee', 'file', 'label', 'line'],
+          columns: ['caller', 'callerFile', 'callee', 'file', 'label', 'line'],
           rows: [
-            ['registerBuildCommand', 'FileScanner', 'src/core/scanner.ts', 'Class', 67],
-            ['registerBuildCommand', 'WikiService', 'src/services/wiki-service.ts', 'Class', 19],
-            ['registerBuildCommand', 'CodebaseMemoryClient', 'src/mcp/codebase-memory-client.ts', 'Class', 24],
+            ['registerBuildCommand', 'src/cli/commands/build.ts', 'FileScanner', 'src/core/scanner.ts', 'Class', 67],
+            ['registerBuildCommand', 'src/cli/commands/build.ts', 'WikiService', 'src/services/wiki-service.ts', 'Class', 19],
+            ['registerBuildCommand', 'src/cli/commands/build.ts', 'CodebaseMemoryClient', 'src/mcp/codebase-memory-client.ts', 'Class', 24],
           ],
           total: 3,
         }],
@@ -308,7 +308,7 @@ describe('WikiContextBuilder (MCP-backed)', () => {
     const edgeCypher = `MATCH (a)-[:CALLS]->(b)
        WHERE a.file_path IN [${fileList}] AND b.file_path IN [${fileList}]
          AND a.is_test = false AND b.is_test = false
-       RETURN a.name AS caller, b.name AS callee, b.file_path AS file, b.start_line AS line
+       RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line
        LIMIT 30`;
 
     it('查询主题文件的符号、CALLS 边与相关边界；未定义主题返回 null', () => {
@@ -322,8 +322,8 @@ describe('WikiContextBuilder (MCP-backed)', () => {
           total: 2,
         }],
         [edgeCypher, {
-          columns: ['caller', 'callee', 'file', 'line'],
-          rows: [['buildWiki', 'pageRelPath', 'src/knowledge/page-registry.ts', 96]],
+          columns: ['caller', 'callerFile', 'callee', 'file', 'line'],
+          rows: [['buildWiki', 'src/services/wiki-service.ts', 'pageRelPath', 'src/knowledge/page-registry.ts', 96]],
           total: 1,
         }],
       ]);

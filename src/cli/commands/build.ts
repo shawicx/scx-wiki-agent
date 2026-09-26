@@ -20,6 +20,7 @@ export function registerBuildCommand(program: Command) {
     .option('--mode <mode>', 'Build mode: full (rewrite all) or update (skip unchanged pages)', 'full')
     .option('--refresh-topics', 'Re-detect adaptive topic pages and overwrite topics.json')
     .option('--refresh-outline', 'Re-plan outline chapters via LLM and overwrite outline.json')
+    .option('--prune-stale', 'Delete numbered wiki dirs not owned by this tool (reported by default)')
     .action(async (options) => {
       const root = options.projectRoot ?? process.cwd();
       const wikiDir = join(root, WIKI_DIR);
@@ -37,6 +38,7 @@ export function registerBuildCommand(program: Command) {
         mode: options.mode === 'update' ? 'update' : 'full',
         refreshTopics: options.refreshTopics === true,
         refreshOutline: options.refreshOutline === true,
+        pruneStale: options.pruneStale === true,
         onChunk: (filename, text) => {
           process.stdout.write(text);
         },

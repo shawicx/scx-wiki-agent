@@ -378,5 +378,9 @@ export interface WikiBuildOptions {
   refreshOutline?: boolean;
   /** 清理 wiki 内非本工具产出的编号目录（默认只报告不删除） */
   pruneStale?: boolean;
+  /** LLM 请求超时（秒，来自全局配置 provider.timeout） */
+  timeoutSec?: number;
+  /** 单轮流式生成的输出 token 预算（来自全局配置 build.max_output_tokens，默认 8000） */
+  maxOutputTokens?: number;
   onChunk?: (filename: string, text: string) => void;
 }

@@ -75,6 +75,10 @@ export class WikiService {
           });
         }
       },
+      {
+        timeoutMs: options?.timeoutSec ? options.timeoutSec * 1000 : undefined,
+        maxOutputTokens: options?.maxOutputTokens,
+      },
     );
 
     // 章节树：outline.json 锁定；缺失且 LLM 可用时 planner 首次自动提议（--refresh-outline 重建）；

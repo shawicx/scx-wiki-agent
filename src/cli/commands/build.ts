@@ -4,6 +4,7 @@ import { FileScanner } from '../../core/scanner.js';
 import { WikiService } from '../../services/wiki-service.js';
 import { CodebaseMemoryClient } from '../../mcp/codebase-memory-client.js';
 import { WIKI_DIR } from '../../shared/constants.js';
+import { loadGlobalConfig, globalConfigPath } from '../../shared/config.js';
 import type { WikiBuildOptions } from '../../knowledge/types.js';
 
 export function registerBuildCommand(program: Command) {
@@ -12,12 +13,12 @@ export function registerBuildCommand(program: Command) {
     .description('Generate wiki documentation from codebase knowledge graph')
     .option('--project-root <path>', 'Project root directory')
     .option('--mcp-binary <path>', 'Path to codebase-memory-mcp binary')
-    .option('--model <model>', 'LLM model name (e.g. gpt-4o, qwen2.5)', 'gpt-4o-mini')
+    .option('--model <model>', 'LLM model name (e.g. gpt-4o, qwen2.5)')
     .option('--base-url <url>', 'OpenAI-compatible API base URL')
     .option('--api-key <key>', 'API key for the LLM provider')
     .option('--no-llm', 'Generate wiki without LLM (pure rules)')
     .option('--pages <pages>', 'Comma-separated page names to generate', 'all')
-    .option('--mode <mode>', 'Build mode: full (rewrite all) or update (skip unchanged pages)', 'full')
+    .option('--mode <mode>', 'Build mode: full (rewrite all) or update (skip unchanged pages); default full, config-overridable')
     .option('--refresh-topics', 'Re-detect adaptive topic pages and overwrite topics.json')
     .option('--refresh-outline', 'Re-plan outline chapters via LLM and overwrite outline.json')
     .option('--prune-stale', 'Delete numbered wiki dirs not owned by this tool (reported by default)')
@@ -25,20 +26,34 @@ export function registerBuildCommand(program: Command) {
       const root = options.projectRoot ?? process.cwd();
       const wikiDir = join(root, WIKI_DIR);
 
+      // 全局配置合并：CLI 参数 > ~/.scx/wiki-agent/config.yaml > 内置默认
+      const config = loadGlobalConfig();
+      const model = options.model ?? config?.provider.model ?? 'gpt-4o-mini';
+      const baseURL = options.baseUrl ?? config?.provider.baseURL;
+      const apiKey = options.apiKey ?? config?.provider.apiKey;
+      const noLlm = options.llm === false || config?.build.noLlm === true;
+      if (config) {
+        console.log(`[wiki] 已加载全局配置 ${globalConfigPath()}（provider: ${config.provider.name}）`);
+      }
+
       const pages = options.pages === 'all'
         ? undefined
         : options.pages.split(',').map((p: string) => p.trim());
 
       const buildOptions: WikiBuildOptions = {
-        model: options.llm !== false ? options.model : undefined,
-        baseURL: options.baseUrl,
-        apiKey: options.apiKey,
-        noLlm: options.llm === false,
+        model: noLlm ? undefined : model,
+        baseURL,
+        apiKey,
+        noLlm,
         pages,
-        mode: options.mode === 'update' ? 'update' : 'full',
+        mode: options.mode === 'update' || options.mode === 'full'
+          ? options.mode
+          : (config?.build.mode ?? 'full'),
         refreshTopics: options.refreshTopics === true,
         refreshOutline: options.refreshOutline === true,
         pruneStale: options.pruneStale === true,
+        timeoutSec: config?.provider.timeoutSec,
+        maxOutputTokens: config?.build.maxOutputTokens,
         onChunk: (filename, text) => {
           process.stdout.write(text);
         },

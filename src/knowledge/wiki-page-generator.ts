@@ -82,6 +82,14 @@ function sectionScope(pageTitle: string, sectionTitle: string, siblings: string[
   ].join('\n');
 }
 
+/** 生成器级设置（来自全局配置：请求超时与输出预算） */
+export interface GeneratorSettings {
+  /** 请求超时毫秒数（每次流式请求独立计时） */
+  timeoutMs?: number;
+  /** 单轮流式输出的默认 token 预算（页面配置未显式指定时生效） */
+  maxOutputTokens?: number;
+}
+
 export class WikiPageGenerator {
   private model: ReturnType<ReturnType<typeof createOpenAI>> | null;
 
@@ -90,6 +98,7 @@ export class WikiPageGenerator {
     baseURL?: string,
     apiKey?: string,
     private onNotice?: (notice: PageGenNotice) => void,
+    private settings?: GeneratorSettings,
   ) {
     if (modelName) {
       const options: Parameters<typeof createOpenAI>[0] = {};
@@ -115,7 +124,7 @@ export class WikiPageGenerator {
   /** 规划类调用的原始文本（章节树 planner 复用模型与续写能力；不做 sanitize） */
   async plan(systemPrompt: string, userPrompt: string): Promise<string> {
     if (!this.model) return '';
-    const r = await this.generateWithContinuation(() => {}, { systemPrompt, userPrompt, maxOutputTokens: 8000 });
+    const r = await this.generateWithContinuation(() => {}, { systemPrompt, userPrompt });
     return r.content;
   }
 
@@ -181,7 +190,6 @@ export class WikiPageGenerator {
           })),
         supplementalSymbols: ctx.supplementalSymbols ?? [],
       }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -232,7 +240,6 @@ export class WikiPageGenerator {
           layers: ctx.layers,
           clusters: ctx.clusters,
         }, null, 2),
-        maxOutputTokens: 8000,
       },
     ];
 
@@ -250,7 +257,6 @@ export class WikiPageGenerator {
           modules: batch,
           supplementalSymbols: ctx.supplementalSymbols ?? [],
         }, null, 2),
-        maxOutputTokens: 8000,
       });
     });
 
@@ -270,7 +276,6 @@ export class WikiPageGenerator {
           usedBy: [...new Set(m.incomingRelations.map(r => r.source))].slice(0, 5),
         })),
       }, null, 2),
-      maxOutputTokens: 8000,
     });
 
     return sections;
@@ -306,7 +311,6 @@ export class WikiPageGenerator {
 - 严禁使用 sequenceDiagram 表达调用关系（R2 边表优于时序图）；调用关系详见 calls.md
 - 内容要充实，要让读者理解数据在各阶段如何变换`,
       userPrompt: JSON.stringify({ sequences, supplementalSymbols: ctx.supplementalSymbols ?? [] }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -360,7 +364,6 @@ export class WikiPageGenerator {
             symbolCount: m.symbols.length,
           })),
         }, null, 2),
-        maxOutputTokens: 8000,
       },
     ];
 
@@ -384,7 +387,6 @@ export class WikiPageGenerator {
           modules: batch,
           supplementalSymbols: ctx.supplementalSymbols ?? [],
         }, null, 2),
-        maxOutputTokens: 8000,
       });
     });
 
@@ -397,7 +399,6 @@ export class WikiPageGenerator {
 - 用一张表汇总 otherModules 的名称与规模（模块 | 文件数 | 符号数）
 - 严禁虚构这些聚合模块的内部细节（未提供其符号数据）`,
         userPrompt: JSON.stringify({ otherModules: ctx.otherModules }, null, 2),
-        maxOutputTokens: 8000,
       });
     }
 
@@ -461,7 +462,6 @@ ${hasIpc ? `
         frameworkNodes: nodes.map(n => ({ name: n.name, type: n.type, file: n.filePath })),
         supplementalSymbols: ctx.supplementalSymbols ?? [],
       }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -492,7 +492,6 @@ ${hasIpc ? `
         scripts: ctx.scripts ?? {},
         envVars: ctx.envVars ?? [],
       }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -521,7 +520,6 @@ ${hasIpc ? `
         constants: ctx.constants ?? [],
         entryFiles: ctx.entryFiles ?? [],
       }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -596,7 +594,6 @@ ${hasIpc ? `
         symbols: b.symbols.map(toEntry),
         supplementalSymbols: supplementalBySection[i],
       }, null, 2),
-      maxOutputTokens: 8000,
     }));
   }
 
@@ -635,7 +632,6 @@ ${hasIpc ? `
         })),
         boundaries: ctx.boundaries,
       }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -675,7 +671,6 @@ ${ctx.brief}
         })),
         boundaries: ctx.boundaries,
       }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -691,7 +686,6 @@ ${ctx.brief}
 - 未检测到的项（framework 为 null 等）必须诚实标注「未检测到」，严禁编造框架特性、用例数量或覆盖率数字（R5）
 - 内容要充实，让读者知道如何运行测试、测试覆盖了什么`,
       userPrompt: JSON.stringify({ ...ctx }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -708,7 +702,6 @@ ${ctx.brief}
 - 每条事实声明必须带 file 锚点（R1）
 - 内容要充实，让读者理解项目的硬边界与维护成本所在`,
       userPrompt: JSON.stringify({ ...ctx }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -732,7 +725,6 @@ ${ctx.brief}
         scripts: ctx.scripts,
         envVars: ctx.envVars,
       }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -756,7 +748,6 @@ ${ctx.brief}
         buildTool: ctx.buildTool,
         packageManager: ctx.packageManager,
       }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -778,7 +769,6 @@ ${ctx.brief}
         editorConfig: ctx.editorConfig,
         agentsMd: ctx.agentsMd ? ctx.agentsMd.slice(0, 6000) : null,
       }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -798,7 +788,6 @@ ${ctx.brief}
         commands: ctx.commands,
         exitCodes: ctx.exitCodes,
       }, null, 2),
-      maxOutputTokens: 8000,
     });
   }
 
@@ -910,6 +899,11 @@ ${ctx.brief}
       openai: { thinking: { type: 'disabled' } },
       ollama: { think: false },
     };
+    const maxOutputTokens = config.maxOutputTokens ?? this.settings?.maxOutputTokens;
+    // 超时独立计时（AbortSignal.timeout 不可复用，每次请求新建）
+    const abortSignal = this.settings?.timeoutMs
+      ? AbortSignal.timeout(this.settings.timeoutMs)
+      : undefined;
 
     const result = prefix
       ? streamText({
@@ -920,14 +914,16 @@ ${ctx.brief}
             { role: 'assistant', content: prefix },
             { role: 'user', content: CONTINUE_INSTRUCTION },
           ],
-          maxOutputTokens: config.maxOutputTokens,
+          maxOutputTokens,
+          abortSignal,
           providerOptions,
         })
       : streamText({
           model: this.model,
           system,
           prompt: config.userPrompt,
-          maxOutputTokens: config.maxOutputTokens,
+          maxOutputTokens,
+          abortSignal,
           providerOptions,
         });
 

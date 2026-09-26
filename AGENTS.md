@@ -8,6 +8,10 @@ Before making any code changes, read the `.wiki/` directory to understand the cu
 
 The `build` command requires the external `codebase-memory-mcp` binary to be installed (knowledge-graph data source). It is resolved via `CODEBASE_MEMORY_MCP_BINARY` or PATH.
 
+## Global Config
+
+`~/.scx/wiki-agent/config.yaml` (YAML; created with a commented template by `init`). Priority: CLI flags > config file > built-in defaults. Sections: `provider` (name/model/api_key/base_url/timeout — api_key supports `${ENV_VAR}` refs; base_url defaults mapped by provider name for openai/deepseek/glm/anthropic/ollama) and `build` (mode/max_output_tokens/no_llm). Parse/load lives in `src/shared/config.ts` (pure parser + IO shell, fail-open: missing/broken config never blocks a build). `provider.timeout` becomes a per-request `AbortSignal.timeout`; `build.max_output_tokens` replaces the per-page hardcoded 8000 budget.
+
 ## Commands
 
 ```bash

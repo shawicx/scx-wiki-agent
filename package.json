@@ -39,7 +39,8 @@
     "@ai-sdk/openai": "^3.0.67",
     "ai": "^6.0.193",
     "commander": "^15.0.0",
-    "ignore": "^7.0.5"
+    "ignore": "^7.0.5",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

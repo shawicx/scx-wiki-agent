@@ -9,6 +9,7 @@
 - src/cli/index.ts
 - src/core/scanner.ts
 - src/knowledge/wiki-page-generator.ts
+- src/shared/config.ts
 - tsup.config.ts
 - vitest.config.ts
 </details>
@@ -23,6 +24,7 @@
 | `ai` | ^6.0.193 | `src/knowledge/wiki-page-generator.ts` |
 | `commander` | ^15.0.0 | `src/cli/commands/build.ts` |
 | `ignore` | ^7.0.5 | `src/core/scanner.ts` |
+| `yaml` | ^2.9.1 | `src/shared/config.ts` |
 
 ## 开发依赖
 

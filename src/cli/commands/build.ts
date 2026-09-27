@@ -18,10 +18,9 @@ export function registerBuildCommand(program: Command) {
     .option('--api-key <key>', 'API key for the LLM provider')
     .option('--no-llm', 'Generate wiki without LLM (pure rules)')
     .option('--pages <pages>', 'Comma-separated page names to generate', 'all')
-    .option('--mode <mode>', 'Build mode: full (rewrite all) or update (skip unchanged pages); default full, config-overridable')
+    .option('--mode <mode>', 'Build mode: full (wipe and rewrite .wiki) or update (skip unchanged pages); default full, config-overridable')
     .option('--refresh-topics', 'Re-detect adaptive topic pages and overwrite topics.json')
     .option('--refresh-outline', 'Re-plan outline chapters via LLM and overwrite outline.json')
-    .option('--prune-stale', 'Delete numbered wiki dirs not owned by this tool (reported by default)')
     .action(async (options) => {
       const root = options.projectRoot ?? process.cwd();
       const wikiDir = join(root, WIKI_DIR);
@@ -51,7 +50,6 @@ export function registerBuildCommand(program: Command) {
           : (config?.build.mode ?? 'full'),
         refreshTopics: options.refreshTopics === true,
         refreshOutline: options.refreshOutline === true,
-        pruneStale: options.pruneStale === true,
         timeoutSec: config?.provider.timeoutSec,
         maxOutputTokens: config?.build.maxOutputTokens,
         onChunk: (filename, text) => {

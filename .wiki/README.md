@@ -1,15 +1,24 @@
-# scx-wiki-agent
+# @scxfe/wiki-agent
+
+<details>
+<summary>Relevant source files</summary>
+
+- AGENTS.md
+- README.md
+</details>
+
+从代码知识图谱生成结构化中文 Markdown Wiki 的 CLI 工具（LLM 增强叙述 + 纯规则回退）
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | 0.1.0 |
+| 版本 | 0.1.3 |
 | 许可证 | ISC |
 | 运行时 | ESM |
 
 ## 阅读路径
 
 - 新人上手：overview → tech-stack → onboarding
-- 理解结构：architecture → modules → data-flow
+- 理解结构：architecture → modules；调用关系查 calls
 - 日常开发：conventions → constraints；排障看 troubleshooting
 - 查证细节：calls → classes → glossary
 
@@ -35,12 +44,6 @@
 | --- | --- | --- |
 | [03-interface/api.md](03-interface/api.md) | structure | 导出函数与 CLI 命令（带 file:line） |
 | [03-interface/cli.md](03-interface/cli.md) | surface | CLI 命令、参数、退出码 |
-
-## 04-design/
-
-| 文档 | 层级 | 回答的问题 |
-| --- | --- | --- |
-| [04-design/decisions.md](04-design/decisions.md) | structure | 架构决策记录（ADR：编号+状态+背景+决策+后果） |
 
 ## 05-guides/
 
@@ -71,3 +74,12 @@
 | --- | --- | --- |
 | [08-topics/topic-6.md](08-topics/topic-6.md) | structure | 仓库专属主题（图谱聚类推导） |
 | [08-topics/topic-9.md](08-topics/topic-9.md) | structure | 仓库专属主题（图谱聚类推导） |
+
+## 相关文档（仓库）
+
+Wiki 之外的既有文档，链接为仓库相对路径
+
+| 文档 | 标题 |
+| --- | --- |
+| [README.md](../README.md) | scx-wiki-agent |
+| [AGENTS.md](../AGENTS.md) | Agents.md |

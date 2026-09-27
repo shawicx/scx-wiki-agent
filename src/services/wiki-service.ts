@@ -43,6 +43,12 @@ export class WikiService {
   ) {}
 
   async buildWiki(wikiDir: string, options?: WikiBuildOptions): Promise<string[]> {
+    // .wiki 为工具独占目录：full 模式整目录先删后建（无陈旧残留、无外来目录，也不告警）。
+    // update 模式保留存量以便内容一致时跳过重写，陈旧产物由下方逐路径清理负责。
+    const mode = options?.mode ?? 'full';
+    if (mode === 'full') {
+      rmSync(wikiDir, { recursive: true, force: true });
+    }
     mkdirSync(wikiDir, { recursive: true });
 
     // 确保图谱已索引（替代旧的 index 阶段）
@@ -143,24 +149,22 @@ export class WikiService {
       }
     }
 
-    // 接管式重建：清理旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页/章节页/编号目录残留
-    const staleNumberedDirs = this.cleanupStaleNumberedDirFiles(wikiDir, pages, options?.pruneStale ?? false);
+    // 接管式清理（update 模式路径；full 模式整目录已重建，以下均为空操作）：
+    // 旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页/章节页/编号目录残留
+    this.cleanupStaleNumberedDirFiles(wikiDir, pages);
     legacyRemoved.push(
       ...this.cleanupLegacyFlatFiles(wikiDir, pages),
       ...this.cleanupRetiredPages(wikiDir),
       ...this.cleanupStaleTopicPages(wikiDir, pages),
       ...this.cleanupStaleChapterPages(wikiDir, pages),
+      ...this.removeEmptyOwnedDirs(wikiDir),
     );
 
     // 质量闸门输入：本次计划写入的页面路径 + 仓库真实文件清单
     const plannedPaths = new Set(pages.map(p => pageRelPath(p)));
 
-    // 存量手写文档纳入 README 索引（只索引不动文件；cleanup 已先行，删除后仍存在的才被索引）
-    contextBuilder.setLegacyDocs(this.collectLegacyDocs(wikiDir, plannedPaths));
-
     const qualityReports: PageQualityReport[] = [];
     const claimStats: Array<{ page: string } & ClaimStats> = [];
-    const mode = options?.mode ?? 'full';
 
     for (const page of pages) {
       const relPath = pageRelPath(page);
@@ -186,8 +190,10 @@ export class WikiService {
       // 正文断言校验（仅 LLM 页）：三级核验后，查无实据的标识符标注「待确认」
       let bodyContent = produced.content;
       if (produced.source === 'llm') {
+        const universe = new Set(this.getSymbolUniverse(contextBuilder.getFallbackSymbolNames()));
+        for (const dep of contextBuilder.getDepNames()) universe.add(dep);
         const verified = verifyAndAnnotateClaims(bodyContent, {
-          symbols: this.getSymbolUniverse(contextBuilder.getFallbackSymbolNames()),
+          symbols: universe,
           knownFiles,
           grepCount: pattern => this.client.searchCode(pattern).totalGrepMatches,
         });
@@ -234,7 +240,7 @@ export class WikiService {
       writtenPages.push({ page, relPath, source: produced.source, status: existed ? 'updated' : 'created' });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport, claimStats, staleNumberedDirs);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport, claimStats);
     return filenames;
   }
 
@@ -347,66 +353,6 @@ export class WikiService {
   private outlineSourceCache = new Map<string, string | null>();
 
   /**
-   * 枚举 .wiki 内工具计划之外的手写/存量文档（README 索引用，只读不动文件）。
-   * 范围：wiki 根非 README 的 .md、工具所有编号目录内页面名空间外的 .md、
-   * 非工具编号目录内的 .md（08/09 由专属清理负责，其中用户文件已被治理）。
-   * 标题取文件首个 # 行（前 50 行内），截 30 条。
-   */
-  private collectLegacyDocs(wikiDir: string, plannedPaths: ReadonlySet<string>): Array<{ file: string; title: string }> {
-    const pageNames = new Set(ALL_PAGE_NAMES);
-    const owned = new Set(ownedNumberedDirs());
-    const docs: Array<{ file: string; title: string }> = [];
-    let topEntries: string[];
-    try {
-      topEntries = readdirSync(wikiDir);
-    } catch {
-      return docs;
-    }
-    const candidates: string[] = [];
-    // wiki 根：非 README 的 .md
-    for (const entry of topEntries) {
-      if (entry.endsWith('.md') && entry !== 'README.md') candidates.push(entry);
-    }
-    // 编号目录（含非工具目录）
-    for (const entry of topEntries) {
-      if (!/^\d{2}-/.test(entry)) continue;
-      if (entry === TOPIC_DIR || entry === CHAPTER_DIR) continue; // 专属清理已治理
-      let dirEntries: string[];
-      try {
-        dirEntries = readdirSync(join(wikiDir, entry));
-      } catch {
-        continue;
-      }
-      for (const file of dirEntries) {
-        if (!file.endsWith('.md')) continue;
-        const rel = `${entry}/${file}`;
-        const stem = file.replace(/\.md$/, '');
-        if (owned.has(entry) && pageNames.has(stem)) continue; // 注册名空间 = 工具页面（未计划的已被清理）
-        candidates.push(rel);
-      }
-    }
-    for (const rel of candidates.slice(0, 30)) {
-      if (plannedPaths.has(rel)) continue;
-      docs.push({ file: rel, title: this.legacyDocTitle(join(wikiDir, rel)) ?? rel });
-    }
-    return docs;
-  }
-
-  /** 读 wiki 内手写文档的首个 # 标题（前 50 行；失败返回 null） */
-  private legacyDocTitle(absPath: string): string | null {
-    try {
-      const content = readFileSync(absPath, 'utf-8');
-      for (const line of content.split('\n').slice(0, 50)) {
-        const m = line.match(/^#\s+(.{1,80})/);
-        if (m) return m[1].trim();
-      }
-      return null;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * 清理旧版扁平输出（wiki 根下的 ${page}.md）。
    * 只删除本工具拥有的页面文件；编号目录接管后这些扁平文件成为陈旧残留。
    * readme 特例：旧 'readme.md' 让位于 'README.md'。
@@ -466,7 +412,7 @@ export class WikiService {
     return removed;
   }
 
-  /** 清理 09-chapters 下未列入本次计划的章节页残留；清空的章目录一并移除（目录为工具所有） */
+  /** 清理 09-chapters 下未列入本次计划的章节页残留；清空的章目录与章节根目录一并移除（目录为工具所有） */
   private cleanupStaleChapterPages(wikiDir: string, pages: string[]): string[] {
     const chapterRoot = join(wikiDir, CHAPTER_DIR);
     if (!existsSync(chapterRoot)) return [];
@@ -492,29 +438,47 @@ export class WikiService {
       }
       if (kept === 0) rmSync(chapterDir, { recursive: true });
     }
+    try {
+      if (readdirSync(chapterRoot).length === 0) rmSync(chapterRoot, { recursive: true });
+    } catch {
+      // 目录不可读则保留
+    }
+    return removed;
+  }
+
+  /** 清理后扫描：清空的工具编号目录一并移除（update 模式下页面全部停写/剔除后的残留空目录） */
+  private removeEmptyOwnedDirs(wikiDir: string): string[] {
+    const removed: string[] = [];
+    for (const dir of ownedNumberedDirs()) {
+      const dirPath = join(wikiDir, dir);
+      try {
+        if (readdirSync(dirPath).length === 0) {
+          rmSync(dirPath, { recursive: true });
+          removed.push(`${dir}/`);
+        }
+      } catch {
+        // 不存在或非目录则跳过
+      }
+    }
     return removed;
   }
 
   /**
-   * 编号目录治理：
+   * 编号目录治理（update 模式路径；.wiki 为工具独占目录，full 模式已整目录重建）：
    * - 工具所有的编号目录（PAGE_REGISTRY 声明 + 08/09，后两者由专属清理负责，此处跳过）：
    *   目录内文件名落在注册页名空间（ALL_PAGE_NAMES）但未列入本次计划的 .md 视为
    *   旧版产物残留（如旧版章节页 01-overview/architecture.md），清理；
-   *   页名空间之外的文件（用户手写笔记等）不动。
-   * - 白名单之外的编号目录（如旧版生成的 02-frontend、03-backend）：非本工具产出，默认只在
-   *   构建报告中列出提示；--prune-stale 时整目录删除（显式授权，防静默误删用户文件）。
-   * 返回待处理的非白名单编号目录列表（空数组=无）。
+   *   页名空间之外的文件一并清理（目录为工具独占）。
+   * - 白名单之外的编号目录：旧版/其他工具残留，直接删除（工具独占目录，不告警）。
    */
-  private cleanupStaleNumberedDirFiles(wikiDir: string, pages: string[], prune: boolean): string[] {
+  private cleanupStaleNumberedDirFiles(wikiDir: string, pages: string[]): void {
     const planned = new Set(pages.map(pageRelPath));
     const owned = new Set(ownedNumberedDirs());
-    const pageNames = new Set(ALL_PAGE_NAMES);
-    const staleDirs: string[] = [];
     let topEntries: string[];
     try {
       topEntries = readdirSync(wikiDir);
     } catch {
-      return staleDirs;
+      return;
     }
     for (const entry of topEntries) {
       if (!/^\d{2}-/.test(entry)) continue;
@@ -529,20 +493,15 @@ export class WikiService {
       if (owned.has(entry)) {
         for (const file of entries) {
           const rel = `${entry}/${file}`;
-          const stem = file.replace(/\.md$/, '');
-          // 只清注册页名空间内的未计划残留；页名空间外的用户文件保留
-          if (file.endsWith('.md') && pageNames.has(stem) && !planned.has(rel)) {
+          // 目录为工具独占：未列入计划的 .md 一律清理，不区分页名空间
+          if (file.endsWith('.md') && !planned.has(rel)) {
             rmSync(join(dirPath, file));
           }
         }
-      } else if (prune) {
-        rmSync(dirPath, { recursive: true });
-        staleDirs.push(`${entry}/（已删除）`);
       } else {
-        staleDirs.push(`${entry}/（非本工具目录，--prune-stale 可清除）`);
+        rmSync(dirPath, { recursive: true });
       }
     }
-    return staleDirs;
   }
 
   private async generatePage(
@@ -591,7 +550,6 @@ export class WikiService {
     llmDropped: Array<{ page: string; reason: string }>,
     outline: OutlineReport | null,
     claimStats: Array<{ page: string } & ClaimStats>,
-    staleNumberedDirs: string[] = [],
   ): void {
     const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -662,13 +620,6 @@ export class WikiService {
 
     if (legacyRemoved.length > 0) {
       lines.push(`  清理陈旧产物 ${legacyRemoved.length} 个：${legacyRemoved.join(', ')}`);
-    }
-
-    if (staleNumberedDirs.length > 0) {
-      lines.push(`  发现非本工具的编号目录 ${staleNumberedDirs.length} 个：`);
-      for (const d of staleNumberedDirs) {
-        lines.push(`    - ${d}`);
-      }
     }
 
     if (skipped.length > 0) {

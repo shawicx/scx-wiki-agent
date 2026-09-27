@@ -161,7 +161,7 @@ export class WikiPageGenerator {
 - 如 languages 显示多语言（如 TypeScript + Rust），必须在概述中说明各语言的职责域（前端/后端划分），不得遗漏任一语言的存在
 - 如提供 docsFiles，在概述末尾列出延伸阅读清单（相对路径原样保留）
 - "核心设计思路"章节：用2-3段自然语言描述项目的架构理念、关键设计决策、技术选型理由（结合技术栈）
-- "技术栈"章节：用表格列出每项技术及用途，并在表格后用1-2段分析技术选型的合理性
+- "技术栈"章节：用表格列出每项技术及用途，并在表格后用1-2段分析技术选型的合理性；如提供 depUsage（每个依赖的 import 调用点文件与计数），用途陈述必须锚定这些 import 点，有 import 证据的依赖严禁标「待确认」或「声明未用」
 - "项目结构"章节：逐一描述每个源代码目录的职责（至少覆盖所有 sourceDirs），说明目录间的关系
 - "入口文件"章节：列出每个入口点，说明其启动流程和职责
 - "核心组件"章节：基于 topSymbols 数据，用一段话介绍项目中复杂度最高/调用最频繁的核心组件
@@ -189,6 +189,7 @@ export class WikiPageGenerator {
             complexity: s.complexity,
           })),
         supplementalSymbols: ctx.supplementalSymbols ?? [],
+        depUsage: ctx.depUsage ?? [],
       }, null, 2),
     });
   }
@@ -506,7 +507,7 @@ ${hasIpc ? `
 - "运行时问题"章节：详细列出可能的运行时问题（如模块解析、路径问题、权限问题、外部依赖缺失如 codebase-memory-mcp 未安装）及解决方案；constants 中的限制常量（超时/上限）是排障的关键边界，必须逐个说明触界时的典型症状
 - "调试技巧"章节：列出针对该项目的调试方法（如 watch 构建、单文件测试调试、如何查看日志；入口文件 entryFiles 是排障起点）
 - 每个问题用"问题描述 → 原因分析 → 解决方案"的详细格式，解决方案要具体可操作（给出实际命令）
-- 只描述与项目技术栈相关的问题，不要编造不相关的场景
+- 只描述与项目技术栈相关的问题，不要编造不相关的场景；如提供 depUsage（依赖的 import 调用点），技术相关问题的叙述可锚定这些 import 点，有 import 证据的依赖严禁标「待确认」
 - 数据已提供的字段（scripts/envVars/constants）严禁再标「待确认」；仅数据确实未覆盖的方面才诚实标注（R5）
 - 内容要充实，要覆盖开发者实际会遇到的问题`,
       userPrompt: JSON.stringify({
@@ -519,6 +520,7 @@ ${hasIpc ? `
         envVars: ctx.envVars ?? [],
         constants: ctx.constants ?? [],
         entryFiles: ctx.entryFiles ?? [],
+        depUsage: ctx.depUsage ?? [],
       }, null, 2),
     });
   }
@@ -800,7 +802,7 @@ ${ctx.brief}
     '铁律（违反即不可用）：',
     'R1 锚点强制：每条事实声明必须带 file:line 或 qualified_name；无锚点的声明不得写入。',
     'R2 边表优于时序图：调用关系用表格（调用方→被调用方→file:line），严禁用 sequenceDiagram 表达静态可达性。',
-    'R3 拒绝编造用途：任何依赖/函数的"用途"必须有源码调用点佐证；无调用点则标注"声明未用"。',
+    'R3 拒绝编造用途：任何依赖/函数的"用途"必须有源码调用点佐证；数据中给出的 import 调用点（importFiles/depUsage）或调用边即为佐证，仅当既无 import 点也无调用边时才标"声明未用"。',
     'R4 结构化优先：用表格/列表而非散文；签名用代码块。',
     'R5 待确认标记：数据不足以描述的方面，写「待确认」并简述缺什么证据，禁止猜测或编造合理化解释。',
     'R6 图表真实性：Mermaid 图中的节点/标签必须来自数据中的真实模块名、符号名或文件路径；无继承数据时严禁编造 classDiagram 继承边。',

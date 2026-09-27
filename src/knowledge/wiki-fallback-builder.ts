@@ -395,11 +395,26 @@ export class WikiFallbackBuilder {
   buildCalls(ctx: CallsContext): string {
     const builder = new WikiBuilder()
       .addTitle('Calls')
-      .addParagraph('调用关系边表（按入口函数分组）。每条边可被 trace_path / CALLS 查询复现。');
+      .addParagraph('调用关系边表（按入口/热点分组）。每条边可被 trace_path / CALLS 查询复现。');
 
-    if (ctx.groups.length === 0 && ctx.fanIn.length === 0) {
+    if (ctx.groups.length === 0 && ctx.fanIn.length === 0 && !ctx.ipc) {
       builder.addParagraph('No call edges traced.');
       return builder.build();
+    }
+
+    // Tauri IPC：真实跨语言执行边（前端 invoke → Rust 命令），置前
+    if (ctx.ipc && ctx.ipc.commands.length > 0) {
+      builder.addSection(
+        'Tauri IPC 调用边（跨语言）',
+        '前端 invoke ↔ Rust #[tauri::command] 对表（正则扫描；图谱 CALLS 边不覆盖跨语言边界，invoke(变量) 动态命令名不在内）',
+      ).addTable(
+        ['命令', '前端调用点', 'Rust 定义'],
+        ctx.ipc.commands.slice(0, 40).map(c => [
+          `\`${c.name}\``,
+          c.frontendCalls.slice(0, 3).map(r => `${r.file}:${r.line}`).join('<br>') || '-',
+          c.rustDef ? `${c.rustDef.file}:${c.rustDef.line}` : '-',
+        ]),
+      );
     }
 
     // 扇入表（被调用最多的符号）
@@ -411,9 +426,12 @@ export class WikiFallbackBuilder {
       );
     }
 
-    // 按入口分组的调用边表
+    // 按入口分组的调用边表（hotspot 组诚实标注为热点锚定，非应用入口）
     for (const group of ctx.groups) {
-      builder.addSection(group.entry, `入口文件：${group.entryFile}`);
+      const subtitle = group.kind === 'hotspot'
+        ? `高扇入热点锚定（非应用入口）：${group.entryFile}`
+        : `入口文件：${group.entryFile}`;
+      builder.addSection(group.entry, subtitle);
       builder.addTable(
         ['调用方', '被调用方', '源文件:行号'],
         group.edges.map(e => [
@@ -526,15 +544,6 @@ export class WikiFallbackBuilder {
       builder.addTable(
         ['文档', '标题'],
         ctx.relatedDocs.map(d => [`[${d.path}](../${d.path})`, d.title]),
-      );
-    }
-
-    // .wiki 内手写/存量文档（只索引不动文件）
-    if (ctx.legacyDocs && ctx.legacyDocs.length > 0) {
-      builder.addSection('手写/存量文档', '非本工具生成、保留原文的手写文档');
-      builder.addTable(
-        ['文档', '标题'],
-        ctx.legacyDocs.map(d => [`[${d.file}](${d.file})`, d.title]),
       );
     }
 

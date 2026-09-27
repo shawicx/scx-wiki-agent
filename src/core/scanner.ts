@@ -197,8 +197,10 @@ export class FileScanner {
 
   private detectProjectType(files: ScannedFile[], techStack: string[]): ProjectType {
     // Check for monorepo indicators
+    // pnpm-workspace.yaml 需真实声明 packages 才算 workspace：
+    // 仅含 allowBuilds 等审批配置的文件（CI/安全用途）不代表 monorepo
     if (
-      existsSync(join(this.rootDir, 'pnpm-workspace.yaml')) ||
+      this.workspaceHasPackages('pnpm-workspace.yaml') ||
       existsSync(join(this.rootDir, 'turbo.json'))
     ) {
       return 'monorepo';
@@ -217,6 +219,16 @@ export class FileScanner {
     }
 
     return bestType;
+  }
+
+  /** pnpm-workspace.yaml 是否声明了 packages（无该字段的审批型配置不算 workspace） */
+  private workspaceHasPackages(relPath: string): boolean {
+    try {
+      const content = readFileSync(join(this.rootDir, relPath), 'utf-8');
+      return /^\s*packages\s*:/m.test(content);
+    } catch {
+      return false;
+    }
   }
 
   private detectSourceDirs(files: ScannedFile[]): string[] {

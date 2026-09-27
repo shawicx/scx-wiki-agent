@@ -111,26 +111,47 @@ describe('WikiService', () => {
     expect(existsSync(join(wikiDir, '01-overview', 'overview.md'))).toBe(true);
   });
 
-  it('should remove retired page paths left behind by renames', async () => {
+  it('should wipe .wiki wholesale in full mode (tool-exclusive directory, no warnings)', async () => {
     const client = createMockClient();
     const service = new WikiService(client as any, makeBackendScanResult());
     const wikiDir = join(tmpDir, 'wiki');
     mkdirSync(join(wikiDir, '01-overview'), { recursive: true });
+    mkdirSync(join(wikiDir, '02-legacy-frontend'), { recursive: true });
     writeFileSync(join(wikiDir, '01-overview', 'project-overview.md'), '# stale renamed page', 'utf-8');
-
-    await service.buildWiki(wikiDir, { noLlm: true });
-
-    // 登记过的退休路径被清理
-    expect(existsSync(join(wikiDir, '01-overview', 'project-overview.md'))).toBe(false);
-    // 未登记的用户文件不受影响
-    const keepPath = join(wikiDir, '01-overview', 'my-notes.md');
     writeFileSync(join(wikiDir, '01-overview', 'my-notes.md'), '# 手写笔记', 'utf-8');
+    writeFileSync(join(wikiDir, '02-legacy-frontend', 'guide.md'), '# 旧版手写目录', 'utf-8');
+    writeFileSync(join(wikiDir, 'orphan.md'), '# 根级残留', 'utf-8');
+
     await service.buildWiki(wikiDir, { noLlm: true });
-    expect(existsSync(keepPath)).toBe(true);
-    // 手写文档被纳入 README 索引（只索引不动文件）
+
+    // full 模式整目录重建：退休路径/手写文件/外来编号目录/根级残留全部消失
+    expect(existsSync(join(wikiDir, '01-overview', 'project-overview.md'))).toBe(false);
+    expect(existsSync(join(wikiDir, '01-overview', 'my-notes.md'))).toBe(false);
+    expect(existsSync(join(wikiDir, '02-legacy-frontend'))).toBe(false);
+    expect(existsSync(join(wikiDir, 'orphan.md'))).toBe(false);
+    // 正常页面照常产出，README 不再索引手写文档
+    expect(existsSync(join(wikiDir, '01-overview', 'overview.md'))).toBe(true);
     const readme = readFileSync(join(wikiDir, 'README.md'), 'utf-8');
-    expect(readme).toContain('[01-overview/my-notes.md](01-overview/my-notes.md)');
-    expect(readme).toContain('手写笔记');
+    expect(readme).not.toContain('my-notes.md');
+  });
+
+  it('update mode should silently remove foreign numbered dirs and unplanned files in owned dirs', async () => {
+    const client = createMockClient();
+    const service = new WikiService(client as any, makeBackendScanResult());
+    const wikiDir = join(tmpDir, 'wiki');
+    await service.buildWiki(wikiDir, { noLlm: true });
+    mkdirSync(join(wikiDir, '02-legacy-frontend'), { recursive: true });
+    writeFileSync(join(wikiDir, '02-legacy-frontend', 'guide.md'), '# 旧版手写目录', 'utf-8');
+    writeFileSync(join(wikiDir, '01-overview', 'my-notes.md'), '# 手写笔记', 'utf-8');
+
+    await service.buildWiki(wikiDir, { noLlm: true, mode: 'update' });
+
+    // update 模式：外来编号目录静默删除（工具独占目录，不告警）
+    expect(existsSync(join(wikiDir, '02-legacy-frontend'))).toBe(false);
+    // 工具页面保留（内容一致跳过重写）
+    expect(existsSync(join(wikiDir, '01-overview', 'overview.md'))).toBe(true);
+    // 工具所有目录内未列入计划的手写文件也一并清理（目录为工具独占）
+    expect(existsSync(join(wikiDir, '01-overview', 'my-notes.md'))).toBe(false);
   });
 
   it('should call ensureIndexed on the client', async () => {
@@ -421,6 +442,31 @@ describe('WikiService', () => {
     expect(overview).not.toContain('realThing`（待确认）');
     expect(client.searchCode).toHaveBeenCalledWith('realThing');
     expect(client.searchCode).toHaveBeenCalledWith('ghostThing');
+  });
+
+  it('should not flag declared dependency names as unverified claims', async () => {
+    mockStreamText.mockImplementation((() => ({
+      fullStream: (async function* () {
+        yield {
+          type: 'text-delta',
+          text: '# 概览\n\n会话层核心依赖 `express`（多处 import），另有 `ghostThing`。',
+        };
+      })(),
+      finishReason: Promise.resolve('stop'),
+    })) as any);
+
+    // searchCode 全部 0 命中、图谱 universe 为空：express 仅靠 dep-name 回填免于误标
+    const client = createMockClient();
+    const wikiDir = join(tmpDir, 'wiki-dep-claims');
+    const agentDir = join(tmpDir, '.scx-wiki-agent');
+    rmSync(join(agentDir, 'outline.json'), { force: true });
+
+    const service = new WikiService(client as any, makeBackendScanResult());
+    await service.buildWiki(wikiDir, { model: 'test-model', pages: ['overview'] });
+
+    const overview = readFileSync(join(wikiDir, '01-overview', 'overview.md'), 'utf-8');
+    expect(overview).not.toContain('`express`（待确认）');
+    expect(overview).toContain('`ghostThing`（待确认）');
   });
 
   it('should auto-plan outline on first build when LLM available and lock outline.json', async () => {    // 首次自动提议：outline.json 缺失 + 模型可用 → planner 产出并锁定

@@ -4,8 +4,8 @@
 
 | 项 | 值 |
 | --- | --- |
-| 包名 | scx-wiki-agent |
-| 版本 | 0.1.0 |
+| 包名 | @scxfe/wiki-agent |
+| 版本 | 0.1.3 |
 | 运行时 | ESM |
 | Node 版本 | 未指定 |
 | 包管理器 | pnpm |
@@ -29,6 +29,7 @@
 | CODEBASE_MEMORY_MCP_BINARY | 否 | ⚠️ 待确认 |
 | API_KEY | ⚠️ 是 | ⚠️ 待确认 |
 | BASE_URL | 否 | ⚠️ 待确认 |
+| TEST_WIKI_KEY | ⚠️ 是 | ⚠️ 待确认 |
 ## Related
 
 - 同目录：[overview.md](overview.md) · [tech-stack.md](tech-stack.md)

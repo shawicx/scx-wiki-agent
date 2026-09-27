@@ -39,6 +39,9 @@ import type {
 
 const ENTRY_FILE_NAMES = ['index.ts', 'index.js', 'main.ts', 'main.js', 'cli.ts', 'cli.js'];
 
+/** calls 页最少入口组数：不足时以高扇入热点锚定回填（防入口漏采导致整页只剩零星入口） */
+const CALLS_MIN_GROUPS = 3;
+
 /** modules 页详述上限：超过后其余模块聚合为概要（DeepWiki 目录分组分块的防超限映射） */
 const MODULE_DETAIL_LIMIT = 12;
 
@@ -65,8 +68,8 @@ export class WikiContextBuilder {
   private topics: TopicDefinition[] = [];
   /** 章节树净页（由 WikiService 从 outline.json 校验后注入） */
   private outlineChapters: OutlineChapter[] = [];
-  /** .wiki 内手写/存量文档清单（由 WikiService 清理后枚举注入，只索引不动文件） */
-  private legacyDocs: Array<{ file: string; title: string }> = [];
+  /** 声明依赖名全集（package.json + techStack；断言校验 universe 回填用，构建内缓存） */
+  private depNames: Set<string> | null = null;
 
   setTopics(topics: TopicDefinition[]): void {
     this.topics = topics;
@@ -74,10 +77,6 @@ export class WikiContextBuilder {
 
   setOutlineChapters(chapters: OutlineChapter[]): void {
     this.outlineChapters = chapters;
-  }
-
-  setLegacyDocs(docs: Array<{ file: string; title: string }>): void {
-    this.legacyDocs = docs;
   }
 
   /** 按页面名派发上下文构建（供 PageRegistry 调用）。plannedPages 用于 readme 索引只列本次产出的页面 */
@@ -206,7 +205,47 @@ export class WikiContextBuilder {
       packageDescription: pkgMeta.description,
       entryFiles,
       topSymbols,
+      depUsage: this.buildDepUsage(),
     };
+  }
+
+  /**
+   * 技术栈依赖的 import 调用点证据（overview/troubleshooting 等元数据页用）。
+   * 依赖名本身有 package.json 声明 + 真实 import 点双重实据，防止 R5 纪律下
+   * LLM 把会话层核心依赖（如 rxjs）反向标成「无调用点证据/待确认」。
+   */
+  private buildDepUsage(): Array<{ name: string; importFiles: string[]; importCount: number }> {
+    const importMap = this.collectImportFiles(this.declaredPackageDeps());
+    return this.scanResult.techStack.map(name => {
+      const files = importMap.get(name) ?? [];
+      return { name, importFiles: files.slice(0, 5), importCount: files.length };
+    });
+  }
+
+  /** 声明依赖名全集（dependencies + devDependencies；非 Node 项目为空集，构建内缓存） */
+  private declaredDepsCache: Set<string> | null = null;
+  private declaredPackageDeps(): Set<string> {
+    if (this.declaredDepsCache === null) {
+      const names = new Set<string>();
+      try {
+        const pkg = JSON.parse(readFileSync(join(this.scanResult.rootDir, 'package.json'), 'utf-8'));
+        for (const n of Object.keys(pkg.dependencies ?? {})) names.add(n);
+        for (const n of Object.keys(pkg.devDependencies ?? {})) names.add(n);
+      } catch {
+        // 无 package.json 的项目诚实返回空集
+      }
+      this.declaredDepsCache = names;
+    }
+    return this.declaredDepsCache;
+  }
+
+  /** 依赖名全集（声明名 + techStack 探测名）：断言校验 universe 回填用。
+   *  正文反引号里的依赖名有 package.json/import 双重实据，不该被标「待确认」 */
+  getDepNames(): Set<string> {
+    if (this.depNames === null) {
+      this.depNames = new Set([...this.declaredPackageDeps(), ...this.scanResult.techStack]);
+    }
+    return this.depNames;
   }
 
   /** 读仓库根下文本文件的前 N 字符（段落边界截断；不可读返回 undefined） */
@@ -702,6 +741,7 @@ export class WikiContextBuilder {
       envVars: env.envVars,
       constants,
       entryFiles,
+      depUsage: this.buildDepUsage(),
     };
   }
 
@@ -711,64 +751,22 @@ export class WikiContextBuilder {
    * trace_path 不可靠（对 Method 返回空、无 file/line），改用 Cypher CALLS 边。
    * 消费端防线：入口过滤（非代码/构建脚本不立组）+ name@file 双键 BFS（防同名污染）
    * + isTrustedCallEdge（跨语言幽灵边与无词法佐证的边丢弃）。
+   * 覆盖面兜底：入口组不足时以高扇入热点锚定补组（图谱 entry_points 漏采/跨语言
+   * 入口被滤时不至于整页只剩零星入口）；Tauri 项目附加 IPC 命令对表（真实跨语言执行边）。
    */
   buildCallsContext(): CallsContext {
     const arch = this.client.getArchitecture();
 
-    // 对每个 entry_point，BFS 查 2 层 CALLS 边
     const groups: CallsContext['groups'] = [];
-    const globalSeen = new Set<string>();
 
     const appEntries = arch.entry_points
       .filter(e => this.isAppEntryPoint(e.file))
       .slice(0, 6);
 
     for (const entry of appEntries) {
-      const edges: CallsContext['groups'][number]['edges'] = [];
-      let frontier = new Set<string>([`${entry.name}@${entry.file}`]);
-      const visited = new Set<string>([entry.name]);
-
-      for (let depth = 0; depth < 2 && frontier.size > 0; depth++) {
-        const callerList = [...frontier].map(k => `"${k.split('@')[0].replace(/"/g, '\\"')}"`).join(',');
-        // 必须给源节点指定 label（裸 MATCH 会返回 0 行）；分两次查 Method 和 Function
-        const qM = this.client.queryGraph(
-          `MATCH (a:Method)-[:CALLS]->(b) WHERE a.name IN [${callerList}] AND a.is_test = false AND b.is_test = false
-           RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 30`,
-        );
-        const qF = this.client.queryGraph(
-          `MATCH (a:Function)-[:CALLS]->(b) WHERE a.name IN [${callerList}] AND a.is_test = false AND b.is_test = false
-           RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 30`,
-        );
-
-        const nextFrontier = new Set<string>();
-        for (const row of [...qM.rows, ...qF.rows]) {
-          const callerName = row[0] as string;
-          const callerFile = (row[1] as string) ?? '';
-          const calleeName = row[2] as string;
-          const calleeFile = (row[3] as string) ?? '';
-          const calleeLine = (row[4] as number) ?? 0;
-
-          if (callerName === calleeName) continue;
-          if (isTestPath(calleeFile)) continue;
-          if (!frontier.has(`${callerName}@${callerFile}`)) continue;
-          if (!this.isTrustedCallEdge(callerFile, calleeFile, calleeName)) continue;
-
-          const edgeKey = `${callerName}->${calleeName}`;
-          if (globalSeen.has(edgeKey)) continue;
-          globalSeen.add(edgeKey);
-
-          edges.push({ caller: callerName, callee: calleeName, calleeFile, calleeLine });
-
-          if (!visited.has(calleeName)) {
-            visited.add(calleeName);
-            nextFrontier.add(`${calleeName}@${calleeFile}`);
-          }
-        }
-        frontier = nextFrontier;
-      }
-
+      const edges = this.collectCallEdges(entry.name, entry.file);
       if (edges.length > 0) {
-        groups.push({ entry: entry.name, entryFile: entry.file, edges });
+        groups.push({ entry: entry.name, entryFile: entry.file, kind: 'entry', edges });
       }
     }
 
@@ -790,7 +788,90 @@ export class WikiContextBuilder {
       inDegree: h.fan_in,
     }));
 
-    return { groups, fanIn };
+    // 热点回填：入口组不足 CALLS_MIN_GROUPS 时，以未被覆盖的高扇入热点锚定补组
+    if (groups.length < CALLS_MIN_GROUPS) {
+      const covered = new Set<string>();
+      for (const g of groups) {
+        for (const e of g.edges) {
+          covered.add(e.caller);
+          covered.add(e.callee);
+        }
+      }
+      for (const h of hotspotSlice) {
+        if (groups.length >= CALLS_MIN_GROUPS) break;
+        if (covered.has(h.name)) continue;
+        const file = fileBySymbol.get(h.name);
+        if (!file) continue;
+        const edges = this.collectCallEdges(h.name, file);
+        if (edges.length === 0) continue;
+        groups.push({ entry: h.name, entryFile: file, kind: 'hotspot', edges });
+      }
+    }
+
+    // Tauri IPC：前端 invoke → Rust 命令是真实执行边，但跨语言 CALLS 边被可信性过滤
+    // 拦截，图谱不可见；用 tauri-ipc 正则对表补上（与 api 页同源）
+    let ipc: CallsContext['ipc'];
+    if (isTauriProject(this.scanResult.rootDir)) {
+      ipc = scanIpcSurface(this.scanResult, this.sourceCache);
+    }
+
+    return { groups, fanIn, ...(ipc ? { ipc } : {}) };
+  }
+
+  /**
+   * 单锚点（入口或热点）2 层 CALLS 边采集。
+   * 组内按 caller->callee 去重（同一被调链在多个入口下重复出现是常态，
+   * 跨组全局去重会饿死后续入口组——旧版仅覆盖 2 个入口的根因）。
+   */
+  private collectCallEdges(
+    anchorName: string,
+    anchorFile: string,
+  ): CallsContext['groups'][number]['edges'] {
+    const edges: CallsContext['groups'][number]['edges'] = [];
+    const seen = new Set<string>();
+    let frontier = new Set<string>([`${anchorName}@${anchorFile}`]);
+    const visited = new Set<string>([anchorName]);
+
+    for (let depth = 0; depth < 2 && frontier.size > 0; depth++) {
+      const callerList = [...frontier].map(k => `"${k.split('@')[0].replace(/"/g, '\\"')}"`).join(',');
+      // 必须给源节点指定 label（裸 MATCH 会返回 0 行）；分两次查 Method 和 Function
+      const qM = this.client.queryGraph(
+        `MATCH (a:Method)-[:CALLS]->(b) WHERE a.name IN [${callerList}] AND a.is_test = false AND b.is_test = false
+         RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 30`,
+      );
+      const qF = this.client.queryGraph(
+        `MATCH (a:Function)-[:CALLS]->(b) WHERE a.name IN [${callerList}] AND a.is_test = false AND b.is_test = false
+         RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 30`,
+      );
+
+      const nextFrontier = new Set<string>();
+      for (const row of [...qM.rows, ...qF.rows]) {
+        const callerName = row[0] as string;
+        const callerFile = (row[1] as string) ?? '';
+        const calleeName = row[2] as string;
+        const calleeFile = (row[3] as string) ?? '';
+        const calleeLine = (row[4] as number) ?? 0;
+
+        if (callerName === calleeName) continue;
+        if (isTestPath(calleeFile)) continue;
+        if (!frontier.has(`${callerName}@${callerFile}`)) continue;
+        if (!this.isTrustedCallEdge(callerFile, calleeFile, calleeName)) continue;
+
+        const edgeKey = `${callerName}->${calleeName}`;
+        if (seen.has(edgeKey)) continue;
+        seen.add(edgeKey);
+
+        edges.push({ caller: callerName, callee: calleeName, calleeFile, calleeLine });
+
+        if (!visited.has(calleeName)) {
+          visited.add(calleeName);
+          nextFrontier.add(`${calleeName}@${calleeFile}`);
+        }
+      }
+      frontier = nextFrontier;
+    }
+
+    return edges;
   }
 
   /**
@@ -1005,7 +1086,6 @@ export class WikiContextBuilder {
     return {
       projectName, version, license, description, runtime, docIndex,
       relatedDocs,
-      legacyDocs: this.legacyDocs,
     };
   }
 

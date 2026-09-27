@@ -31,6 +31,8 @@ export interface OverviewContext {
   packageDescription?: string;
   entryFiles: Array<{ name: string; path: string }>;
   topSymbols: Array<{ name: string; type: SymbolType; docstring?: string | null; complexity?: number }>;
+  /** 技术栈依赖的 import 调用点证据（防 R5 把真实依赖标成待确认） */
+  depUsage?: Array<{ name: string; importFiles: string[]; importCount: number }>;
   supplementalSymbols?: SupplementalSymbol[];
 }
 
@@ -175,6 +177,8 @@ export interface CallsContext {
   groups: Array<{
     entry: string;
     entryFile: string;
+    /** entry = 应用入口；hotspot = 高扇入热点锚定组（入口漏采/跨语言入口被滤时的回填） */
+    kind?: 'entry' | 'hotspot';
     edges: Array<{
       caller: string;
       callee: string;
@@ -184,6 +188,8 @@ export interface CallsContext {
   }>;
   /** 全局扇入表（被调用次数最多的符号） */
   fanIn: Array<{ symbol: string; file: string; inDegree: number }>;
+  /** Tauri IPC 命令对表（前端 invoke → Rust 命令的真实跨语言执行边；非 Tauri 项目缺省） */
+  ipc?: IpcSurface;
 }
 
 /**
@@ -223,8 +229,6 @@ export interface ReadmeContext {
   docIndex: Array<{ file: string; dir: string; tier: string; answer: string }>;
   /** 仓库既有文档（根 README/AGENTS.md + docs/**.md），链接 ../ 前缀指向 wiki 外 */
   relatedDocs?: Array<{ path: string; title: string }>;
-  /** .wiki 内工具计划之外的手写/存量文档（只索引不动文件） */
-  legacyDocs?: Array<{ file: string; title: string }>;
 }
 
 /** Context for tech-stack page (技术栈，R3 拒绝编造用途) */
@@ -325,6 +329,8 @@ export interface TroubleshootingContext {
   constants?: Array<{ name: string; value: string; filePath: string }>;
   /** 入口文件（排障起点） */
   entryFiles?: string[];
+  /** 技术栈依赖的 import 调用点证据（排障叙述依赖用途时的锚点） */
+  depUsage?: Array<{ name: string; importFiles: string[]; importCount: number }>;
 }
 
 /** Context for topic pages（仓库专属主题，图谱推导） */
@@ -376,8 +382,6 @@ export interface WikiBuildOptions {
   refreshTopics?: boolean;
   /** 重新规划章节树并覆盖 outline.json（无 LLM 时回退现有锁定文件） */
   refreshOutline?: boolean;
-  /** 清理 wiki 内非本工具产出的编号目录（默认只报告不删除） */
-  pruneStale?: boolean;
   /** LLM 请求超时（秒，来自全局配置 provider.timeout） */
   timeoutSec?: number;
   /** 单轮流式生成的输出 token 预算（来自全局配置 build.max_output_tokens，默认 8000） */

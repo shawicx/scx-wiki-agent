@@ -49,6 +49,29 @@ describe('FileScanner', () => {
     expect(result.projectType).toBe('backend');
   });
 
+  it('仅含 allowBuilds 的 pnpm-workspace.yaml 不判为 monorepo（审批配置 ≠ workspace）', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'scanner-ws-'));
+    try {
+      writeFileSync(join(tmp, 'package.json'), JSON.stringify({
+        name: 'cli-demo',
+        dependencies: { commander: '^12.0.0' },
+      }));
+      writeFileSync(join(tmp, 'pnpm-workspace.yaml'), 'allowBuilds:\n  esbuild: true\n');
+      mkdirSync(join(tmp, 'src'));
+      writeFileSync(join(tmp, 'src', 'cli.ts'), "import { Command } from 'commander'\n");
+
+      const result = new FileScanner(tmp).scan();
+      expect(result.projectType).toBe('cli');
+
+      // 声明 packages 后才判为 monorepo
+      writeFileSync(join(tmp, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
+      const result2 = new FileScanner(tmp).scan();
+      expect(result2.projectType).toBe('monorepo');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('扫描 .vue/.rs/.css 文件；import 提取覆盖 Vue SFC 与 CSS @import（不再误报死依赖）', () => {
     const tmp = mkdtempSync(join(tmpdir(), 'scanner-'));
     try {

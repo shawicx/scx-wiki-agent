@@ -426,10 +426,10 @@ describe('WikiContextBuilder (MCP-backed)', () => {
   describe('buildCallsContext', () => {
     const methodCypher = (names: string) =>
       `MATCH (a:Method)-[:CALLS]->(b) WHERE a.name IN [${names}] AND a.is_test = false AND b.is_test = false
-         RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 30`;
+         RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 40`;
     const functionCypher = (names: string) =>
       `MATCH (a:Function)-[:CALLS]->(b) WHERE a.name IN [${names}] AND a.is_test = false AND b.is_test = false
-         RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 30`;
+         RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 40`;
     const edgeRow = (caller: string, callerFile: string, callee: string, calleeFile: string, line: number): any[] =>
       [caller, callerFile, callee, calleeFile, line, null];
 
@@ -502,31 +502,39 @@ describe('WikiContextBuilder (MCP-backed)', () => {
     });
   });
 
-  describe('依赖 import 证据（depUsage）', () => {
+  describe('依赖使用证据（depUsage）', () => {
     let tmp: string;
 
     beforeEach(() => {
       tmp = mkdtempSync(join(tmpdir(), 'dep-usage-'));
       mkdirSync(join(tmp, 'src'), { recursive: true });
-      writeFileSync(join(tmp, 'package.json'), JSON.stringify({ name: 'demo', dependencies: { commander: '^12.0.0' } }));
+      mkdirSync(join(tmp, 'tests'), { recursive: true });
+      writeFileSync(join(tmp, 'package.json'), JSON.stringify({
+        name: 'demo',
+        dependencies: { commander: '^12.0.0' },
+        devDependencies: { vitest: '^1.0.0', husky: '^9.0.0' },
+        scripts: { test: 'vitest run', prepare: 'husky install' },
+      }));
       writeFileSync(join(tmp, 'src', 'cli.ts'), "import { Command } from 'commander'\n");
+      writeFileSync(join(tmp, 'tests', 'cli.test.ts'), "import { describe } from 'vitest'\n");
     });
 
     afterEach(() => {
       rmSync(tmp, { recursive: true, force: true });
     });
 
-    function makeProjectScan(): ScanResult {
+    function makeProjectScan(techStack: string[] = ['commander', 'typescript']): ScanResult {
       return makeScanResult({
         rootDir: tmp,
-        techStack: ['commander', 'typescript'],
+        techStack,
         files: [
           { absolutePath: join(tmp, 'src/cli.ts'), relativePath: 'src/cli.ts', language: 'typescript' as const, extension: '.ts', size: 50 },
+          { absolutePath: join(tmp, 'tests/cli.test.ts'), relativePath: 'tests/cli.test.ts', language: 'typescript' as const, extension: '.ts', size: 50 },
         ],
       });
     }
 
-    it('overview/troubleshooting 携带依赖 import 调用点证据', () => {
+    it('overview/troubleshooting 携带依赖使用证据', () => {
       const scan = makeProjectScan();
       const builder = new WikiContextBuilder(createMockClient() as any, scan, new ConfigDetector(scan.rootDir));
       const overview = builder.buildOverviewContext();
@@ -535,9 +543,22 @@ describe('WikiContextBuilder (MCP-backed)', () => {
       expect(overview.depUsage).toBeDefined();
       const commander = overview.depUsage!.find(d => d.name === 'commander');
       expect(commander).toBeDefined();
+      expect(commander!.usageKind).toBe('import');
       expect(commander!.importFiles).toEqual(['src/cli.ts']);
       expect(commander!.importCount).toBe(1);
       expect(troubleshooting.depUsage?.some(d => d.name === 'commander')).toBe(true);
+    });
+
+    it('usageKind 分级：测试型工具=仅测试文件 import，脚本型=仅 scripts 引用，不再误报声明未用', () => {
+      const scan = makeProjectScan(['commander', 'vitest', 'husky', 'typescript']);
+      const builder = new WikiContextBuilder(createMockClient() as any, scan, new ConfigDetector(scan.rootDir));
+      const usage = builder.buildOverviewContext().depUsage!;
+      const by = new Map(usage.map(d => [d.name, d]));
+
+      expect(by.get('vitest')!.usageKind).toBe('test');
+      expect(by.get('vitest')!.importFiles).toEqual(['tests/cli.test.ts']);
+      expect(by.get('husky')!.usageKind).toBe('script');
+      expect(by.get('husky')!.importFiles).toEqual([]);
     });
 
     it('getDepNames 并入声明依赖名与 techStack 探测名（断言校验 universe 回填）', () => {
@@ -545,7 +566,67 @@ describe('WikiContextBuilder (MCP-backed)', () => {
       const names = builder.getDepNames();
 
       expect(names.has('commander')).toBe(true);
+      expect(names.has('vitest')).toBe(true);
       expect(names.has('typescript')).toBe(true);
+    });
+  });
+
+  describe('buildOnboardingContext CLI 命令启发式门控', () => {
+    const archWithComposable = {
+      total_nodes: 10, total_edges: 10, node_labels: [], edge_types: [],
+      languages: [{ language: 'TypeScript', file_count: 5 }],
+      packages: [{ name: 'components', node_count: 5, fan_in: 1, fan_out: 1 }],
+      entry_points: [
+        { name: 'openCreateQuickCommandGroup', qualified_name: 'p.openCreateQuickCommandGroup', file: 'src/components/settings/useGroupNameDialog.ts' },
+      ],
+      hotspots: [], boundaries: [], layers: [], clusters: [],
+    };
+
+    it('frontend 项目不把 composable（名含 Command）当 CLI 命令', () => {
+      const tmp = mkdtempSync(join(tmpdir(), 'onboard-'));
+      try {
+        writeFileSync(join(tmp, 'package.json'), JSON.stringify({ name: 'web' }));
+        const scan = makeScanResult({
+          rootDir: tmp,
+          projectType: 'frontend',
+          files: [
+            { absolutePath: join(tmp, 'src/components/settings/useGroupNameDialog.ts'), relativePath: 'src/components/settings/useGroupNameDialog.ts', language: 'typescript' as const, extension: '.ts', size: 50 },
+          ],
+        });
+        const builder = new WikiContextBuilder(createMockClient({ architecture: archWithComposable }) as any, scan, new ConfigDetector(tmp));
+        const ctx = builder.buildOnboardingContext();
+
+        expect(ctx.cliCommands).toEqual([]);
+        // 非命令式项目首次运行示例不再拼 node dist/bin.js <command>
+        expect(ctx.firstRunExample).not.toContain('node dist/bin.js');
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    });
+
+    it('cli 项目照常派生命令名，并登记入断言校验 universe', () => {
+      const tmp = mkdtempSync(join(tmpdir(), 'onboard-'));
+      try {
+        writeFileSync(join(tmp, 'package.json'), JSON.stringify({ name: 'cli', scripts: { build: 'tsc' } }));
+        const scan = makeScanResult({
+          rootDir: tmp,
+          projectType: 'cli',
+          files: [
+            { absolutePath: join(tmp, 'src/cli/commands/build.ts'), relativePath: 'src/cli/commands/build.ts', language: 'typescript' as const, extension: '.ts', size: 50 },
+          ],
+        });
+        const arch = {
+          ...archWithComposable,
+          entry_points: [{ name: 'registerBuildCommand', qualified_name: 'p.registerBuildCommand', file: 'src/cli/commands/build.ts' }],
+        };
+        const builder = new WikiContextBuilder(createMockClient({ architecture: arch }) as any, scan, new ConfigDetector(tmp));
+        const ctx = builder.buildOnboardingContext();
+
+        expect(ctx.cliCommands.map(c => c.name)).toContain('build');
+        expect(builder.getFallbackSymbolNames().has('build')).toBe(true);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
     });
   });
 });

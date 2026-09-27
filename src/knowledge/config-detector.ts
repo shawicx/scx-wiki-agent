@@ -32,7 +32,7 @@ export interface ConstraintsInfo {
 }
 
 const CODE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
-const KNOWN_SOURCE_DIRS = ['src', 'app', 'lib', 'packages', 'cmd', 'internal'];
+const KNOWN_SOURCE_DIRS = ['src', 'src-tauri', 'app', 'lib', 'packages', 'cmd', 'internal'];
 
 export interface PackageJsonInfo {
   name?: string;

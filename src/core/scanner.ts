@@ -24,7 +24,7 @@ export interface ScanResult {
   sourceDirs: string[];
 }
 
-const KNOWN_SOURCE_DIRS = ['src', 'app', 'lib', 'packages', 'cmd', 'internal'];
+const KNOWN_SOURCE_DIRS = ['src', 'src-tauri', 'app', 'lib', 'packages', 'cmd', 'internal'];
 
 const PROJECT_TYPE_INDICATORS: Record<string, string[]> = {
   backend: ['express', '@nestjs/core', 'fastify', '@fastify'],

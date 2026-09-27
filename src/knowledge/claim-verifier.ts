@@ -37,10 +37,13 @@ export interface ClaimVerifyContext {
   grepCount: (pattern: string) => number;
 }
 
-/** 不参与核验的 JS 字面量/关键字（末段或整词命中即跳过） */
+/** 不参与核验的 JS 字面量/关键字与包清单通用词汇（末段或整词命中即跳过） */
 const NON_CLAIM_WORDS = new Set([
   'true', 'false', 'null', 'undefined', 'this', 'typeof', 'instanceof',
   'string', 'number', 'boolean', 'const', 'async', 'await', 'return',
+  'engines', 'dependencies', 'devDependencies', 'peerDependencies',
+  'repository', 'homepage', 'license', 'keywords', 'scripts',
+  'dependsOn', 'usedBy', 'relations', 'moduleNames', 'otherModules',
 ]);
 
 /** 提取 inline 反引号片段中的标识符声明（跳过 fenced 代码块） */
@@ -141,4 +144,33 @@ function fileStems(files: ReadonlySet<string>): Set<string> {
     stems.add(base.replace(/\.[^.]+$/, ''));
   }
   return stems;
+}
+
+/**
+ * 收集页面 context 的数据字段名与标识符形字符串值全集（递归，深度 ≤3）。
+ * LLM 常把数据字段名写进反引号（如 `importFiles`、`nodeVersion`），也会引用
+ * 数据中的配置键名（如 .editorconfig 的 `insert_final_newline`）——它们都来自
+ * 工具自家数据契约/真实仓库扫描，有实据，不该被断言校验反手标成「待确认」。
+ */
+export function collectContextKeys(ctx: unknown, depth = 0): Set<string> {
+  const keys = new Set<string>();
+  collectInto(ctx, depth, keys, { budget: 800 });
+  return keys;
+}
+
+const IDENTIFIER_LIKE = /^[A-Za-z_$][\w$.-]{2,63}$/;
+
+function collectInto(node: unknown, depth: number, out: Set<string>, budget: { budget: number }): void {
+  if (depth >= 3 || budget.budget <= 0 || node === null || typeof node !== 'object') return;
+  const items = Array.isArray(node) ? node : [node];
+  for (const item of items) {
+    if (budget.budget <= 0) return;
+    budget.budget--;
+    if (item === null || typeof item !== 'object') continue;
+    for (const [key, value] of Object.entries(item as Record<string, unknown>)) {
+      if (key.length >= 3) out.add(key);
+      if (typeof value === 'string' && IDENTIFIER_LIKE.test(value)) out.add(value);
+      collectInto(value, depth + 1, out, budget);
+    }
+  }
 }

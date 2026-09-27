@@ -35,12 +35,15 @@ import type {
   TopicContext,
   ChapterPageContext,
   SupplementalSymbol,
+  DepUsage,
 } from './types.js';
 
 const ENTRY_FILE_NAMES = ['index.ts', 'index.js', 'main.ts', 'main.js', 'cli.ts', 'cli.js'];
 
-/** calls 页最少入口组数：不足时以高扇入热点锚定回填（防入口漏采导致整页只剩零星入口） */
-const CALLS_MIN_GROUPS = 3;
+/** calls 页目标入口组数：入口组不足时以高扇入热点锚定回填（覆盖稀疏的主力补偿） */
+const CALLS_MIN_GROUPS = 6;
+/** calls 页单次查询边数上限（BFS 每层两次查询各限此数） */
+const CALLS_EDGE_LIMIT = 40;
 
 /** modules 页详述上限：超过后其余模块聚合为概要（DeepWiki 目录分组分块的防超限映射） */
 const MODULE_DETAIL_LIMIT = 12;
@@ -195,7 +198,12 @@ export class WikiContextBuilder {
       fileCount: this.scanResult.files.length,
       techStack: this.scanResult.techStack,
       sourceDirs: this.scanResult.sourceDirs,
-      languages: arch.languages.map(l => ({ language: l.language, fileCount: l.file_count })),
+      languages: arch.languages.map(l => ({
+        language: l.language,
+        fileCount: l.file_count,
+        // 各语言真实文件锚点：防止 LLM 以「未提供该语言文件路径」为由整段标待确认
+        exampleFiles: this.exampleFilesForLanguage(l.language),
+      })),
       readmeExcerpt: this.readRepoFileExcerpt('README.md', 2000),
       docsFiles: this.scanResult.files
         .map(f => f.relativePath)
@@ -209,16 +217,59 @@ export class WikiContextBuilder {
     };
   }
 
+  /** 语言名 → 扫描清单内真实文件样本（≤3 个，优先生产代码） */
+  private exampleFilesForLanguage(language: string): string[] {
+    const want = language.toLowerCase();
+    const byLang = this.scanResult.files
+      .filter(f => !isTestPath(f.relativePath) && f.language.toLowerCase() === want)
+      .map(f => f.relativePath);
+    if (byLang.length > 0) return byLang.slice(0, 3);
+    // 语言名与扫描 language 字段不一致时按扩展名兑底（vue/css/json 等资源语言）
+    const extMap: Record<string, string[]> = {
+      typescript: ['.ts', '.tsx'], javascript: ['.js', '.jsx', '.mjs'],
+      rust: ['.rs'], vue: ['.vue'], python: ['.py'], go: ['.go'],
+      css: ['.css', '.scss', '.less'], markdown: ['.md'],
+      json: ['.json'], yaml: ['.yaml', '.yml'], toml: ['.toml'], html: ['.html', '.htm'],
+    };
+    const exts = extMap[want];
+    if (!exts) return [];
+    return this.scanResult.files
+      .filter(f => !isTestPath(f.relativePath) && exts.includes(f.extension))
+      .map(f => f.relativePath)
+      .slice(0, 3);
+  }
+
   /**
-   * 技术栈依赖的 import 调用点证据（overview/troubleshooting 等元数据页用）。
-   * 依赖名本身有 package.json 声明 + 真实 import 点双重实据，防止 R5 纪律下
-   * LLM 把会话层核心依赖（如 rxjs）反向标成「无调用点证据/待确认」。
+   * 技术栈依赖的使用证据（overview/onboarding/troubleshooting 等元数据页用）。
+   * 依赖名本身有 package.json 声明实据；用途证据分三级：生产 import 点 /
+   * 测试文件 import 点 / scripts 命令引用（如 vitest 仅由 `vitest run` 触发）。
+   * usageKind ≠ none 的依赖严禁被写成「声明未用」——防止把测试/脚本型工具
+   * 误标成死依赖（R5 噪音大头）。
    */
-  private buildDepUsage(): Array<{ name: string; importFiles: string[]; importCount: number }> {
-    const importMap = this.collectImportFiles(this.declaredPackageDeps());
+  private buildDepUsage(): Array<DepUsage> {
+    const declared = this.declaredPackageDeps();
+    const prodImports = this.collectImportFiles(declared, 'prod');
+    const testImports = this.collectImportFiles(declared, 'test');
+    let scripts: Record<string, string> = {};
+    try {
+      scripts = this.detector?.detectEnvironment().scripts ?? {};
+    } catch {
+      scripts = {};
+    }
     return this.scanResult.techStack.map(name => {
-      const files = importMap.get(name) ?? [];
-      return { name, importFiles: files.slice(0, 5), importCount: files.length };
+      const prod = prodImports.get(name) ?? [];
+      if (prod.length > 0) {
+        return { name, importFiles: prod.slice(0, 5), importCount: prod.length, usageKind: 'import' as const };
+      }
+      const test = testImports.get(name) ?? [];
+      if (test.length > 0) {
+        return { name, importFiles: test.slice(0, 5), importCount: test.length, usageKind: 'test' as const };
+      }
+      const inScript = Object.values(scripts).some(cmd => new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(cmd));
+      if (inScript) {
+        return { name, importFiles: [], importCount: 0, usageKind: 'script' as const };
+      }
+      return { name, importFiles: [], importCount: 0, usageKind: 'none' as const };
     });
   }
 
@@ -314,13 +365,26 @@ export class WikiContextBuilder {
         .slice(0, 3)
         .map(([language, fileCount]) => ({ language, fileCount }));
 
+    // 模块间依赖从 boundaries 回填：detail 分节按模块读 outgoing/incoming，
+    // 空数组会让 LLM 如实写出「无依赖证据」并成页标注待确认
+    const outgoing = new Map<string, ModuleSummary['outgoingRelations']>();
+    const incoming = new Map<string, ModuleSummary['incomingRelations']>();
+    for (const b of arch.boundaries) {
+      const out = outgoing.get(b.from) ?? [];
+      out.push({ target: b.to, type: 'calls' as RelationType });
+      outgoing.set(b.from, out);
+      const inc = incoming.get(b.to) ?? [];
+      inc.push({ source: b.from, type: 'calls' as RelationType });
+      incoming.set(b.to, inc);
+    }
+
     const modules: ModuleSummary[] = arch.packages.map(pkg => ({
       name: pkg.name,
       files: [],
       symbols: symbolsByPkg.get(pkg.name) ?? [],
       fileSymbols: [],
-      outgoingRelations: [],
-      incomingRelations: [],
+      outgoingRelations: outgoing.get(pkg.name) ?? [],
+      incomingRelations: incoming.get(pkg.name) ?? [],
       codeSnippets: [],
       languages: toLanguages(pkg.name),
     }));
@@ -355,6 +419,23 @@ export class WikiContextBuilder {
         for (const m of seq.messages) {
           covered.add(m.from);
           covered.add(m.to);
+        }
+      }
+    }
+
+    // 锚点回填：入口序列不足时以高出边符号补序列（图谱 entry_points 漏采/
+    // 跨语言入口被滤时不至于整页因「无执行序列」被剔除）
+    if (sequences.length < 3) {
+      for (const anchor of this.topCallerAnchors()) {
+        if (sequences.length >= 3) break;
+        if (covered.has(anchor.name)) continue;
+        const seq = this.buildCallChainFromEdges(anchor.name, anchor.file);
+        if (seq) {
+          sequences.push(seq);
+          for (const m of seq.messages) {
+            covered.add(m.from);
+            covered.add(m.to);
+          }
         }
       }
     }
@@ -527,8 +608,18 @@ export class WikiContextBuilder {
       });
     }
 
-    // 把文件符号归属到对应的 package（路径段精确匹配，多段包名取最长）
-    const pkgNames = arch.packages.map(p => p.name);
+    // 把文件符号归属到对应的 package（路径段精确匹配，多段包名取最长）；
+    // 模块间依赖从 boundaries 回填（detail 分节依赖此数据，空数组=成页「无依赖证据」待确认）
+    const outOf = new Map<string, ModuleSummary['outgoingRelations']>();
+    const inOf = new Map<string, ModuleSummary['incomingRelations']>();
+    for (const b of arch.boundaries) {
+      const out = outOf.get(b.from) ?? [];
+      out.push({ target: b.to, type: 'calls' as RelationType });
+      outOf.set(b.from, out);
+      const inc = inOf.get(b.to) ?? [];
+      inc.push({ source: b.from, type: 'calls' as RelationType });
+      inOf.set(b.to, inc);
+    }
     const modules: ModuleSummary[] = arch.packages.map(pkg => {
       const pkgFiles = Array.from(symbolsByFile.keys()).filter(f => matchPackageForFile(f, [pkg.name]) !== null);
       return {
@@ -539,8 +630,8 @@ export class WikiContextBuilder {
           file: f,
           symbols: (symbolsByFile.get(f) ?? []).slice(0, 5).map(s => ({ name: s.name, type: s.type })),
         })),
-        outgoingRelations: [],
-        incomingRelations: [],
+        outgoingRelations: outOf.get(pkg.name) ?? [],
+        incomingRelations: inOf.get(pkg.name) ?? [],
         codeSnippets: [],
         languages: this.languagesForFiles(pkgFiles),
       };
@@ -687,15 +778,22 @@ export class WikiContextBuilder {
     const nodeVersion = env.nodeVersion;
 
     const arch = this.client.getArchitecture();
-    const cliCommands = arch.entry_points
+    // CLI 命令名启发式（register*/*Command）只对 cli/agent 类型项目成立：
+    // frontend 项目的 Vue composable（如 openCreateQuickCommandGroup 含 "Command"）
+    // 会被误认为 CLI 命令，产成假命令表与无法核验的小写命令名
+    const isCliProject = this.scanResult.projectType === 'cli' || this.scanResult.projectType === 'agent';
+    const cliCommands = (isCliProject ? arch.entry_points : [])
       .filter(e => this.isAppEntryPoint(e.file))
       .filter(e => e.name.startsWith('register') || e.name.includes('Command'))
       .filter(e => !isTestPath(e.file))
       .slice(0, 10)
       .map(e => {
         const snippet = this.safeGetSnippet(e.name);
+        // 派生命令名登记入断言校验 universe：工具自己派生的标识符不能反手标「待确认」
+        const derived = e.name.replace(/^register/, '').replace(/Command$/, '').toLowerCase() || e.name;
+        this.fallbackSymbolNames.add(derived);
         return {
-          name: e.name.replace(/^register/, '').replace(/Command$/, '').toLowerCase() || e.name,
+          name: derived,
           description: this.commandDescription(e.name).description || `CLI command in ${e.file}`,
           options: snippet ? this.parseCommanderOptions(snippet.source ?? '') : [],
         };
@@ -703,7 +801,11 @@ export class WikiContextBuilder {
 
     // 首次运行最小示例
     const buildCmd = env.scripts.build ?? `${packageManager} run build`;
-    const firstRunExample = `${packageManager} install\n${buildCmd}\nnode dist/bin.js ${cliCommands[0]?.name ?? '<command>'}`;
+    const runCmd = cliCommands[0]?.name
+      ?? env.scripts.dev ?? env.scripts.start ?? buildCmd;
+    const firstRunExample = cliCommands[0]?.name
+      ? `${packageManager} install\n${buildCmd}\nnode dist/bin.js ${runCmd}`
+      : `${packageManager} install\n${runCmd}`;
 
     return {
       projectType: this.scanResult.projectType,
@@ -716,6 +818,14 @@ export class WikiContextBuilder {
       cliCommands,
       scripts: env.scripts,
       envVars: env.envVars,
+      depUsage: this.buildDepUsage(),
+      sourceDirFiles: this.scanResult.sourceDirs.map(dir => ({
+        dir,
+        files: this.scanResult.files
+          .map(f => f.relativePath)
+          .filter(p => p.startsWith(`${dir}/`) && !isTestPath(p))
+          .slice(0, 8),
+      })),
       firstRunExample,
     };
   }
@@ -746,6 +856,31 @@ export class WikiContextBuilder {
   }
 
   /**
+   * 高出边符号（调用方）锚点清单：采样 CALLS 边后在客户端聚合出边数排序。
+   * fan-in 热点是被调方（出边常为 0，立不出组）；调用方锚点才能铺开边表覆盖面。
+   */
+  private topCallerAnchors(): Array<{ name: string; file: string }> {
+    const q = this.client.queryGraph(
+      `MATCH (a)-[:CALLS]->(b) WHERE a.is_test = false AND b.is_test = false
+       RETURN a.name AS name, a.file_path AS file, b.name AS callee LIMIT 300`,
+    );
+    const degree = new Map<string, { name: string; file: string; count: number }>();
+    for (const row of q.rows) {
+      const name = row[0] as string;
+      const file = (row[1] as string) ?? '';
+      if (!file || isTestPath(file)) continue;
+      const key = `${name}@${file}`;
+      const entry = degree.get(key) ?? { name, file, count: 0 };
+      entry.count++;
+      degree.set(key, entry);
+    }
+    return [...degree.values()]
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 15)
+      .map(e => ({ name: e.name, file: e.file }));
+  }
+
+  /**
    * calls.md 数据源：调用边表（R2 边表优于时序图）。
    * 用 Cypher 查 (a:Method|Function)-[:CALLS]->(b)，按入口分组。
    * trace_path 不可靠（对 Method 返回空、无 file/line），改用 Cypher CALLS 边。
@@ -761,7 +896,7 @@ export class WikiContextBuilder {
 
     const appEntries = arch.entry_points
       .filter(e => this.isAppEntryPoint(e.file))
-      .slice(0, 6);
+      .slice(0, 8);
 
     for (const entry of appEntries) {
       const edges = this.collectCallEdges(entry.name, entry.file);
@@ -788,23 +923,35 @@ export class WikiContextBuilder {
       inDegree: h.fan_in,
     }));
 
-    // 热点回填：入口组不足 CALLS_MIN_GROUPS 时，以未被覆盖的高扇入热点锚定补组
+    // 锚点回填：入口组不足 CALLS_MIN_GROUPS 时补组。fan-in 热点多是被调方
+    // （出边少，立组常空），先取高出边符号作锚点，热点兜底；锚点文件去重
+    // （同一文件不重复立组，优先跨模块铺开覆盖面）
     if (groups.length < CALLS_MIN_GROUPS) {
       const covered = new Set<string>();
+      const anchorFiles = new Set<string>();
       for (const g of groups) {
+        anchorFiles.add(g.entryFile);
         for (const e of g.edges) {
           covered.add(e.caller);
           covered.add(e.callee);
         }
       }
-      for (const h of hotspotSlice) {
+      const candidates = [
+        ...this.topCallerAnchors(),
+        ...hotspotSlice.map(h => ({ name: h.name, file: fileBySymbol.get(h.name) ?? '' })),
+      ];
+      for (const cand of candidates) {
         if (groups.length >= CALLS_MIN_GROUPS) break;
-        if (covered.has(h.name)) continue;
-        const file = fileBySymbol.get(h.name);
-        if (!file) continue;
-        const edges = this.collectCallEdges(h.name, file);
+        if (covered.has(cand.name)) continue;
+        if (!cand.file || anchorFiles.has(cand.file)) continue;
+        const edges = this.collectCallEdges(cand.name, cand.file);
         if (edges.length === 0) continue;
-        groups.push({ entry: h.name, entryFile: file, kind: 'hotspot', edges });
+        anchorFiles.add(cand.file);
+        for (const e of edges) {
+          covered.add(e.caller);
+          covered.add(e.callee);
+        }
+        groups.push({ entry: cand.name, entryFile: cand.file, kind: 'hotspot', edges });
       }
     }
 
@@ -819,9 +966,10 @@ export class WikiContextBuilder {
   }
 
   /**
-   * 单锚点（入口或热点）2 层 CALLS 边采集。
+   * 单锚点（入口或热点）多层 CALLS 边采集。
    * 组内按 caller->callee 去重（同一被调链在多个入口下重复出现是常态，
-   * 跨组全局去重会饿死后续入口组——旧版仅覆盖 2 个入口的根因）。
+   * 跨组全局去重会饿死后续入口组）；visited 按 name@file 双键去重——
+   * 同名函数（如 Rust 的 new/run）在不同文件是不同符号，按名去重会截断覆盖。
    */
   private collectCallEdges(
     anchorName: string,
@@ -830,18 +978,18 @@ export class WikiContextBuilder {
     const edges: CallsContext['groups'][number]['edges'] = [];
     const seen = new Set<string>();
     let frontier = new Set<string>([`${anchorName}@${anchorFile}`]);
-    const visited = new Set<string>([anchorName]);
+    const visited = new Set<string>([`${anchorName}@${anchorFile}`]);
 
-    for (let depth = 0; depth < 2 && frontier.size > 0; depth++) {
+    for (let depth = 0; depth < 3 && frontier.size > 0; depth++) {
       const callerList = [...frontier].map(k => `"${k.split('@')[0].replace(/"/g, '\\"')}"`).join(',');
       // 必须给源节点指定 label（裸 MATCH 会返回 0 行）；分两次查 Method 和 Function
       const qM = this.client.queryGraph(
         `MATCH (a:Method)-[:CALLS]->(b) WHERE a.name IN [${callerList}] AND a.is_test = false AND b.is_test = false
-         RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 30`,
+         RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT ${CALLS_EDGE_LIMIT}`,
       );
       const qF = this.client.queryGraph(
         `MATCH (a:Function)-[:CALLS]->(b) WHERE a.name IN [${callerList}] AND a.is_test = false AND b.is_test = false
-         RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT 30`,
+         RETURN a.name AS caller, a.file_path AS callerFile, b.name AS callee, b.file_path AS file, b.start_line AS line, b.parent_class AS parent LIMIT ${CALLS_EDGE_LIMIT}`,
       );
 
       const nextFrontier = new Set<string>();
@@ -852,7 +1000,7 @@ export class WikiContextBuilder {
         const calleeFile = (row[3] as string) ?? '';
         const calleeLine = (row[4] as number) ?? 0;
 
-        if (callerName === calleeName) continue;
+        if (callerName === calleeName && callerFile === calleeFile) continue;
         if (isTestPath(calleeFile)) continue;
         if (!frontier.has(`${callerName}@${callerFile}`)) continue;
         if (!this.isTrustedCallEdge(callerFile, calleeFile, calleeName)) continue;
@@ -863,9 +1011,10 @@ export class WikiContextBuilder {
 
         edges.push({ caller: callerName, callee: calleeName, calleeFile, calleeLine });
 
-        if (!visited.has(calleeName)) {
-          visited.add(calleeName);
-          nextFrontier.add(`${calleeName}@${calleeFile}`);
+        const calleeKey = `${calleeName}@${calleeFile}`;
+        if (!visited.has(calleeKey)) {
+          visited.add(calleeKey);
+          nextFrontier.add(calleeKey);
         }
       }
       frontier = nextFrontier;
@@ -1285,15 +1434,16 @@ export class WikiContextBuilder {
     };
   }
 
-  /** 扫描源码 import，返回 依赖名 → import 它的文件列表（仅生产代码）。
+  /** 扫描源码 import，返回 依赖名 → import 它的文件列表。
+   *  scope：'prod' 仅生产代码（默认）；'test' 仅测试文件（测试型工具的使用证据）。
    *  覆盖 .vue SFC 的 <script> import、动态 import() 与 .css 的 @import（与 FileScanner 同口径） */
-  private collectImportFiles(declaredDeps: Set<string>): Map<string, string[]> {
+  private collectImportFiles(declaredDeps: Set<string>, scope: 'prod' | 'test' = 'prod'): Map<string, string[]> {
     const map = new Map<string, string[]>();
     const importRegex = /(?:import\s+(?:[^\n'";]*?\s+from\s+)?|import\s*\(\s*|require\s*\(\s*)['"]([^'"]+)['"]/g;
     const cssImportRegex = /@import\s+(?:url\(\s*)?['"]([^'"./][^'"]*)['"]/g;
     for (const file of this.scanResult.files) {
       if (!file.extension.match(/^\.(ts|tsx|js|jsx|mjs|cjs|vue|css)$/)) continue;
-      if (isTestPath(file.relativePath)) continue;
+      if (scope === 'prod' ? isTestPath(file.relativePath) : !isTestPath(file.relativePath)) continue;
       try {
         const source = readFileSync(file.absolutePath, 'utf-8');
         const regex = file.extension === '.css' ? cssImportRegex : importRegex;

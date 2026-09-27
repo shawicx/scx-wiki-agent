@@ -122,7 +122,9 @@ function checkSecrets(text: string, issues: QualityIssue[]): void {
   }
 }
 
-/** R1 事后核验：file:line 锚点是否可追溯到扫描文件清单 */
+/** R1 事后核验：file:line 锚点是否可追溯到扫描文件清单。
+ *  LLM 常写短文件名（如 signing.rs）：basename 在扫描清单内唯一可解析时视为有效锚点
+ *  （指向无歧义），仅多义/全无命中才告警。 */
 function checkAnchors(
   text: string,
   opts: ValidateOptions,
@@ -132,6 +134,11 @@ function checkAnchors(
   let valid = 0;
   const zeroLine = new Set<string>();
   const unknown = new Set<string>();
+  const byBasename = new Map<string, number>();
+  for (const f of opts.knownFiles) {
+    const base = f.slice(f.lastIndexOf('/') + 1);
+    byBasename.set(base, (byBasename.get(base) ?? 0) + 1);
+  }
 
   for (const m of text.matchAll(ANCHOR_RE)) {
     total++;
@@ -140,6 +147,8 @@ function checkAnchors(
       zeroLine.add(`${path}:0`);
     } else if (opts.knownFiles.has(path)) {
       valid++;
+    } else if (path.includes('/') === false && byBasename.get(path) === 1) {
+      valid++; // 短文件名唯一可解析（无歧义指向真实文件）
     } else {
       unknown.add(path);
     }

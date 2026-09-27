@@ -444,8 +444,22 @@ describe('WikiService', () => {
     expect(client.searchCode).toHaveBeenCalledWith('ghostThing');
   });
 
-  it('should not flag declared dependency names as unverified claims', async () => {
-    mockStreamText.mockImplementation((() => ({
+  it('章节树规划 LLM 异常不阻断构建（fail-open，按无章节页继续）', async () => {
+    mockStreamText.mockImplementation((() => { throw new Error('Insufficient Balance'); }) as any);
+    const client = createMockClient();
+    const wikiDir = join(tmpDir, 'wiki-planfail');
+    const agentDir = join(tmpDir, '.scx-wiki-agent');
+    rmSync(join(agentDir, 'outline.json'), { force: true });
+
+    const service = new WikiService(client as any, makeBackendScanResult());
+    const generated = await service.buildWiki(wikiDir, { model: 'test-model' });
+
+    expect(generated.length).toBeGreaterThan(0);
+    expect(existsSync(join(wikiDir, '01-overview', 'overview.md'))).toBe(true);
+    expect(existsSync(join(wikiDir, '09-chapters'))).toBe(false);
+  });
+
+  it('should not flag declared dependency names as unverified claims', async () => {    mockStreamText.mockImplementation((() => ({
       fullStream: (async function* () {
         yield {
           type: 'text-delta',

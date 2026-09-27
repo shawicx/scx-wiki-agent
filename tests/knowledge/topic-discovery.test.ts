@@ -68,8 +68,8 @@ describe('TopicDiscovery', () => {
     const topics = new TopicDiscovery(client as any, makeScanResult(prodFiles)).discover();
 
     expect(topics.length).toBe(1);
-    // id 用主导符号 slug（可读且跨构建稳定），不再用图谱数字 id
-    expect(topics[0].id).toBe('buildwiki');
+    // 无语义 label 时用模块复合命名（目录段频次），id 用模块 slug
+    expect(topics[0].id).toBe('services-knowledge-core');
     // label 为语义文本（非路径）时直接用作标题
     expect(topics[0].title).toBe('质量闸门');
     // fixtures 文件被过滤，只保留生产文件（按查询行序）
@@ -107,7 +107,7 @@ describe('TopicDiscovery', () => {
     expect(topics).toEqual([]);
   });
 
-  it('label 为目录路径时改用主导符号命名标题；通用/过短符号不配命名（退回模块联合）；文件数不足 3 不立题', () => {
+  it('label 无语义时用模块目录段复合命名（不再用单个主导符号命名）；文件数不足 3 不立题', () => {
     const queryResults = new Map<string, QueryResult>([
       [symbolsCypher(['buildWidget', 'b', 'c']), {
         columns: ['name', 'file'],
@@ -151,12 +151,13 @@ describe('TopicDiscovery', () => {
     ])).discover();
 
     expect(topics.length).toBe(1);
-    expect(topics[0].title).toBe('buildWidget 协作面');
-    expect(topics[0].id).toBe('buildwidget');
+    // 模块复合命名：目录段按频次排名合成（单个符号名不描述跨模块协作面）
+    expect(topics[0].title).toBe('services · knowledge · core 跨模块协作');
+    expect(topics[0].id).toBe('services-knowledge-core');
     expect(topics[0].files.length).toBe(3);
   });
 
-  it('主导符号全部为通用名（constructor 等）时退回跨模块联合命名；高度重叠的簇不重复立题', () => {
+  it('通用名/无语义目录段时仍可命名；高度重叠的簇不重复立题', () => {
     const queryResults = new Map<string, QueryResult>([
       [symbolsCypher(['constructor', 'init', 'run']), {
         columns: ['name', 'file'],
@@ -190,7 +191,7 @@ describe('TopicDiscovery', () => {
     ])).discover();
 
     expect(topics.length).toBe(1);
-    expect(topics[0].title).toBe('services ↔ knowledge 协作');
+    expect(topics[0].title).toBe('services · knowledge · core 跨模块协作');
     expect(topics[0].id).toBe('services-knowledge-core');
   });
 

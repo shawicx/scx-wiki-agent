@@ -13,6 +13,16 @@ export interface SupplementalSymbol {
   signature?: string | null;
 }
 
+/** 依赖使用证据（overview/troubleshooting 等元数据页）：用途锚点分生产 import / 测试 import / scripts 命令 */
+export interface DepUsage {
+  name: string;
+  /** 使用它的文件（usageKind=import/test 时非空，≤5 个） */
+  importFiles: string[];
+  importCount: number;
+  /** import=生产代码 import；test=仅测试文件 import；script=仅 scripts 命令引用；none=查无使用 */
+  usageKind: 'import' | 'test' | 'script' | 'none';
+}
+
 /** Context for overview page */
 export interface OverviewContext {
   projectType: string;
@@ -20,8 +30,9 @@ export interface OverviewContext {
   fileCount: number;
   techStack: string[];
   sourceDirs: string[];
-  /** 源码语言分布（来自 MCP get_architecture；多语言项目如 Tauri 须说明各语言职责域） */
-  languages?: Array<{ language: string; fileCount: number }>;
+  /** 源码语言分布（来自 MCP get_architecture；多语言项目如 Tauri 须说明各语言职责域）
+   *  exampleFiles：该语言在扫描清单内的真实文件样本（职责描述的锚点） */
+  languages?: Array<{ language: string; fileCount: number; exampleFiles?: string[] }>;
   /** 根 README.md 摘录（前 ~2000 字符；项目自述的既有事实源） */
   readmeExcerpt?: string;
   /** docs/ 下的 markdown 清单（≤10，延伸阅读） */
@@ -31,8 +42,8 @@ export interface OverviewContext {
   packageDescription?: string;
   entryFiles: Array<{ name: string; path: string }>;
   topSymbols: Array<{ name: string; type: SymbolType; docstring?: string | null; complexity?: number }>;
-  /** 技术栈依赖的 import 调用点证据（防 R5 把真实依赖标成待确认） */
-  depUsage?: Array<{ name: string; importFiles: string[]; importCount: number }>;
+  /** 技术栈依赖的使用证据（防 R5 把真实依赖标成待确认/声明未用） */
+  depUsage?: DepUsage[];
   supplementalSymbols?: SupplementalSymbol[];
 }
 
@@ -312,6 +323,10 @@ export interface OnboardingContext {
   scripts: Record<string, string>;
   /** 源码 process.env 引用（env 清单，敏感标记） */
   envVars?: Array<{ name: string; sensitive: boolean }>;
+  /** 技术栈依赖的使用证据（依赖用途叙述的锚点） */
+  depUsage?: DepUsage[];
+  /** 各源码目录的真实文件样本（结构描述的锚点，防止「目录内容未提供」类待确认） */
+  sourceDirFiles?: Array<{ dir: string; files: string[] }>;
   firstRunExample: string;
 }
 
@@ -329,8 +344,8 @@ export interface TroubleshootingContext {
   constants?: Array<{ name: string; value: string; filePath: string }>;
   /** 入口文件（排障起点） */
   entryFiles?: string[];
-  /** 技术栈依赖的 import 调用点证据（排障叙述依赖用途时的锚点） */
-  depUsage?: Array<{ name: string; importFiles: string[]; importCount: number }>;
+  /** 技术栈依赖的使用证据（排障叙述依赖用途时的锚点） */
+  depUsage?: DepUsage[];
 }
 
 /** Context for topic pages（仓库专属主题，图谱推导） */

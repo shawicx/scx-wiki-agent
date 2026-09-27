@@ -34,14 +34,10 @@ const MAX_TOPIC_FILES = 12;
 /** 主题间文件重叠率上限（超过视为同一协作面，后者不立题） */
 const MAX_TOPIC_OVERLAP = 0.5;
 
-/**
- * 语言级通用符号名，不配作为主题标题与 id 来源
- * （图谱聚类的 top_nodes 常被 constructor 等通用名占据，据此命名会产出「constructor 协作面」这类无语义主题）
- */
-const GENERIC_SYMBOLS = new Set([
-  'constructor', 'main', 'init', 'run', 'new', 'dispose', 'setup', 'teardown',
-  'execute', 'handle', 'update', 'render', 'create', 'destroy', 'close', 'open',
-  'start', 'stop', 'get', 'set', 'from', 'value',
+/** 目录级通用段（无语义，不配作为主题名来源；连同 sourceDirs 一并剔除） */
+const GENERIC_DIR_SEGMENTS = new Set([
+  'src', 'lib', 'app', 'root', 'node_modules', 'test', 'tests', '__tests__',
+  'shared', 'common', 'internal',
 ]);
 
 /** ascii 标识符 → kebab-case slug（空结果返回 null） */
@@ -99,11 +95,13 @@ export class TopicDiscovery {
   }
 
   /**
-   * 主题命名：label 为语义文本（非路径、不在 sourceDirs）时直接用作标题；
-   * 否则主导符号取首个非通用名 top_node（constructor 等语言级符号无区分度）；
-   * 再退回跨模块名联合。id 用符号/模块的 kebab slug（可读、跨构建稳定），
-   * 冲突时追加序号。命名符号所在的文件强制置首（不被 MAX_TOPIC_FILES 截断挤掉，
-   * 否则会出现标题讲某符号、文件清单却不含其宿主文件的跑偏主题页）。
+   * 主题命名（语义优先级）：
+   * 1. cluster.label 为语义文本时直接用作标题；
+   * 2. 模块复合命名：主题文件目录段（剔通用段）按频次取前几个合成
+   *    「A · B · C 跨模块协作」——单个主导符号（如 refreshMirror）不描述
+   *    跨模块协作面，且可能与上下文符号清单脱节；模块名才是稳定语义锚；
+   * 3. 跨包名联合（packages 粒度更粗时的兑底）。
+   * id 用命名源的 kebab slug（可读、跨构建稳定），冲突时追加序号。
    */
   private topicDefinition(
     cluster: ArchitectureData['clusters'][number],
@@ -116,18 +114,49 @@ export class TopicDiscovery {
       && !this.scanResult.sourceDirs.includes(cluster.label)
       ? cluster.label
       : null;
-    const lead = cluster.top_nodes.find(n => !GENERIC_SYMBOLS.has(n) && n.length >= 4 && kebab(n) !== null);
+    const moduleTokens = this.moduleTokensForFiles(files);
     const title = semanticLabel
-      ?? (lead ? `${lead} 协作面` : `${pkgs.slice(0, 2).join(' ↔ ')} 协作`);
-    const baseId = (lead ? kebab(lead) : kebab(pkgs.join('-'))) ?? `topic-${cluster.id}`;
+      ?? (moduleTokens.length >= 2 ? `${moduleTokens.join(' · ')} 跨模块协作` : null)
+      ?? (pkgs.length >= 2 ? `${pkgs.slice(0, 2).join(' ↔ ')} 协作` : null);
+    if (!title) return null;
+    const baseId = (moduleTokens.length >= 2 ? kebab(moduleTokens.join('-')) : kebab(pkgs.join('-')))
+      ?? `topic-${cluster.id}`;
     let id = baseId;
     for (let n = 2; usedIds.has(id); n++) id = `${baseId}-${n}`;
     usedIds.add(id);
-    const leadFile = lead ? this.filesForSymbols([lead])[0] : undefined;
-    const orderedFiles = leadFile && !files.includes(leadFile)
-      ? [leadFile, ...files]
-      : files;
-    return { id, title, files: orderedFiles.slice(0, MAX_TOPIC_FILES) };
+    return { id, title, files: files.slice(0, MAX_TOPIC_FILES) };
+  }
+
+  /**
+   * 从主题文件提取模块语义段：剔除通用目录段与 sourceDirs 后，按文件频次排名；
+   * 与已选段同链共现的祖先/后代段跳过（frontends 与其子目录 xterm 只取其一）。
+   */
+  private moduleTokensForFiles(files: string[]): string[] {
+    const generics = new Set([...GENERIC_DIR_SEGMENTS, ...this.scanResult.sourceDirs.map(d => d.toLowerCase())]);
+    const chains: string[][] = [];
+    for (const file of files) {
+      const segs = file.split('/').slice(0, -1)
+        .filter(seg => !generics.has(seg.toLowerCase()) && !/^\d/.test(seg));
+      if (segs.length > 0) chains.push(segs);
+    }
+    const freq = new Map<string, number>();
+    const firstSeen = new Map<string, number>();
+    for (const chain of chains) {
+      for (const seg of new Set(chain)) {
+        freq.set(seg, (freq.get(seg) ?? 0) + 1);
+        if (!firstSeen.has(seg)) firstSeen.set(seg, firstSeen.size);
+      }
+    }
+    const ranked = [...freq.entries()].sort((a, b) =>
+      b[1] - a[1] || (firstSeen.get(a[0]) ?? 0) - (firstSeen.get(b[0]) ?? 0));
+    const picked: string[] = [];
+    for (const [seg] of ranked) {
+      if (picked.length >= 3) break;
+      const coOccurs = chains.some(chain => chain.includes(seg) && picked.some(p => chain.includes(p)));
+      if (coOccurs) continue;
+      picked.push(seg);
+    }
+    return picked;
   }
 
   private fromBoundaries(arch: ArchitectureData): TopicDefinition | null {

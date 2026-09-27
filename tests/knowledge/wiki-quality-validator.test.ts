@@ -64,6 +64,24 @@ describe('validatePageContent', () => {
     expect(r.issues.some(i => i.rule === 'broken-anchor')).toBe(false);
   });
 
+  it('短文件名锚点：basename 唯一可解析时有效，多义或无命中才告警', () => {
+    const opts: ValidateOptions = {
+      ...baseOpts,
+      knownFiles: new Set(['src/index.ts', 'src/main.rs', 'docs/main.rs']),
+    };
+    const unique = validatePageContent('# A\n\n见 `index.ts:5`', opts);
+    expect(unique.anchors.valid).toBe(1);
+    expect(unique.issues.some(i => i.rule === 'broken-anchor')).toBe(false);
+
+    // main.rs 有两个同 basename 文件（src/main.rs / docs/main.rs）→ 多义，告警
+    const ambiguous = validatePageContent('# A\n\n见 `main.rs:5`', opts);
+    expect(ambiguous.issues.some(i => i.rule === 'broken-anchor' && i.message.includes('main.rs'))).toBe(true);
+
+    // 无命中
+    const missing = validatePageContent('# A\n\n见 `ghost.rs:5`', opts);
+    expect(missing.issues.some(i => i.rule === 'broken-anchor' && i.message.includes('ghost.rs'))).toBe(true);
+  });
+
   it('指向本次未产出页面的链接产生 dead-link 告警（warn，不拦截）', () => {
     const content = '# Readme\n\n参见 [api](api.md)。';
     const r = validatePageContent(content, baseOpts);

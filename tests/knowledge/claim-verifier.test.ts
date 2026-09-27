@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractClaims, verifyAndAnnotateClaims } from '../../src/knowledge/claim-verifier.js';
+import { extractClaims, verifyAndAnnotateClaims, collectContextKeys } from '../../src/knowledge/claim-verifier.js';
 import type { ClaimVerifyContext } from '../../src/knowledge/claim-verifier.js';
 import { WIKI_MAX_GREP_PROBES } from '../../src/shared/constants.js';
 
@@ -84,5 +84,56 @@ describe('verifyAndAnnotateClaims', () => {
     const { content, stats } = verifyAndAnnotateClaims('`anything`', ctx);
     expect(content).toBe('`anything`');
     expect(stats.unverified).toBe(0);
+  });
+});
+
+describe('collectContextKeys', () => {
+  it('递归收集 context 数据字段名（深度≤3，数组采样首元素）', () => {
+    const keys = collectContextKeys({
+      projectType: 'cli',
+      nodeVersion: '',
+      depUsage: [{ name: 'x', importFiles: ['a.ts'], importCount: 1, usageKind: 'import' }],
+      groups: [{ entry: 'main', entryFile: 'src/main.ts', edges: [{ caller: 'main' }] }],
+      deep: { level2: { level3: { level4: 'too deep' } } },
+    });
+
+    expect(keys.has('projectType')).toBe(true);
+    expect(keys.has('nodeVersion')).toBe(true);
+    expect(keys.has('depUsage')).toBe(true);
+    expect(keys.has('importFiles')).toBe(true);
+    expect(keys.has('usageKind')).toBe(true);
+    expect(keys.has('entryFile')).toBe(true);
+    // 深度 3 截断：level3 收集，level4 不收集
+    expect(keys.has('level2')).toBe(true);
+    expect(keys.has('level3')).toBe(true);
+    expect(keys.has('level4')).toBe(false);
+  });
+
+  it('同时收集标识符形字符串值（如 .editorconfig 规则键），路径与短语不收集', () => {
+    const keys = collectContextKeys({
+      editorConfig: [
+        { rule: 'insert_final_newline', value: 'true' },
+        { rule: 'indent_style', value: 'space' },
+      ],
+      somePath: 'src/lib/a.ts',
+      somePhrase: '高扇入热点锚定（非应用入口）',
+    });
+
+    expect(keys.has('insert_final_newline')).toBe(true);
+    expect(keys.has('indent_style')).toBe(true);
+    expect(keys.has('src/lib/a.ts')).toBe(false);
+    expect(keys.has('高扇入热点锚定（非应用入口）')).toBe(false);
+  });
+
+  it('字段名并入 universe 后，LLM 引用的数据字段不再被标待确认', () => {
+    const pageCtx = { projectType: 'frontend', packageManager: 'bun', nodeVersion: '' };
+    const symbols = new Set<string>(['realSymbol']);
+    for (const k of collectContextKeys(pageCtx)) symbols.add(k);
+    const ctx = makeCtx({ symbols, grep: () => 0 });
+    const { content } = verifyAndAnnotateClaims(
+      '包管理器 `packageManager`，另有 `ghostThing`。', ctx,
+    );
+    expect(content).toContain('`ghostThing`（待确认）');
+    expect(content).not.toContain('`packageManager`（待确认）');
   });
 });

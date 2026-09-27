@@ -8,7 +8,7 @@ import { WikiPageGenerator } from '../knowledge/wiki-page-generator.js';
 import { sanitizeWikiOutput } from '../knowledge/wiki-output-sanitizer.js';
 import { validatePageContent } from '../knowledge/wiki-quality-validator.js';
 import type { PageQualityReport } from '../knowledge/wiki-quality-validator.js';
-import { verifyAndAnnotateClaims } from '../knowledge/claim-verifier.js';
+import { verifyAndAnnotateClaims, collectContextKeys } from '../knowledge/claim-verifier.js';
 import type { ClaimStats } from '../knowledge/claim-verifier.js';
 import { extractDefinedSymbolNames } from '../knowledge/source-fallback.js';
 import { collectEvidenceFiles, buildEvidenceBlock, injectEvidenceBlock } from '../knowledge/wiki-evidence.js';
@@ -43,12 +43,10 @@ export class WikiService {
   ) {}
 
   async buildWiki(wikiDir: string, options?: WikiBuildOptions): Promise<string[]> {
-    // .wiki 为工具独占目录：full 模式整目录先删后建（无陈旧残留、无外来目录，也不告警）。
-    // update 模式保留存量以便内容一致时跳过重写，陈旧产物由下方逐路径清理负责。
+    // .wiki 为工具独占目录：full 模式在写盘前整目录重建（无陈旧残留、无外来目录，也不告警）。
+    // wipe 安排在规划/预检之后：规划期异常直接中止时旧 .wiki 保持原样，不留下空目录。
+    // update 模式保留存量以便内容一致时跳过重写，陈旧产物由逐路径清理负责。
     const mode = options?.mode ?? 'full';
-    if (mode === 'full') {
-      rmSync(wikiDir, { recursive: true, force: true });
-    }
     mkdirSync(wikiDir, { recursive: true });
 
     // 确保图谱已索引（替代旧的 index 阶段）
@@ -92,7 +90,13 @@ export class WikiService {
     const knownFiles = new Set(this.scanResult.files.map(f => f.relativePath));
     let outlineRaw: unknown | null = options?.refreshOutline ? null : loadOutline(agentDir);
     if (outlineRaw === null && !noLlm && pageGenerator.hasModel()) {
-      const proposed = await this.planOutline(pageGenerator, topics, knownFiles);
+      // LLM 故障（限流/欠费/断网）不阻断构建：规划失败按无章节页继续（fail-open）
+      let proposed: OutlineFileData | null = null;
+      try {
+        proposed = await this.planOutline(pageGenerator, topics, knownFiles);
+      } catch (err) {
+        console.warn(`[wiki] 章节树规划异常（LLM 不可用，按无章节页继续）：${(err as Error).message}`);
+      }
       if (proposed !== null) {
         saveOutline(agentDir, proposed);
         outlineRaw = proposed;
@@ -149,22 +153,30 @@ export class WikiService {
       }
     }
 
-    // 接管式清理（update 模式路径；full 模式整目录已重建，以下均为空操作）：
-    // 旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页/章节页/编号目录残留
-    this.cleanupStaleNumberedDirFiles(wikiDir, pages);
-    legacyRemoved.push(
-      ...this.cleanupLegacyFlatFiles(wikiDir, pages),
-      ...this.cleanupRetiredPages(wikiDir),
-      ...this.cleanupStaleTopicPages(wikiDir, pages),
-      ...this.cleanupStaleChapterPages(wikiDir, pages),
-      ...this.removeEmptyOwnedDirs(wikiDir),
-    );
+    // 接管式清理（update 模式路径；full 模式写盘前整目录重建，跳过）：
+    // 旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页/章节页/编号目录残留 + 空目录
+    if (mode !== 'full') {
+      this.cleanupStaleNumberedDirFiles(wikiDir, pages);
+      legacyRemoved.push(
+        ...this.cleanupLegacyFlatFiles(wikiDir, pages),
+        ...this.cleanupRetiredPages(wikiDir),
+        ...this.cleanupStaleTopicPages(wikiDir, pages),
+        ...this.cleanupStaleChapterPages(wikiDir, pages),
+        ...this.removeEmptyOwnedDirs(wikiDir),
+      );
+    }
 
     // 质量闸门输入：本次计划写入的页面路径 + 仓库真实文件清单
     const plannedPaths = new Set(pages.map(p => pageRelPath(p)));
 
     const qualityReports: PageQualityReport[] = [];
     const claimStats: Array<{ page: string } & ClaimStats> = [];
+
+    // full 模式：写盘前整目录重建（此刻规划已全部成功，后续任意页失败也有逐页降级兑底）
+    if (mode === 'full') {
+      rmSync(wikiDir, { recursive: true, force: true });
+      mkdirSync(wikiDir, { recursive: true });
+    }
 
     for (const page of pages) {
       const relPath = pageRelPath(page);
@@ -187,11 +199,14 @@ export class WikiService {
         llmDropped.push({ page, reason: produced.llmDrop });
       }
 
-      // 正文断言校验（仅 LLM 页）：三级核验后，查无实据的标识符标注「待确认」
+      // 正文断言校验（仅 LLM 页）：三级核验后，查无实据的标识符标注「待确认」。
+      // universe 并入：源码回落符号 + 声明依赖名 + 本页 context 数据字段名
+      // （前两者防真实符号/依赖被误杀，后者防工具自家数据契约字段被误杀）
       let bodyContent = produced.content;
       if (produced.source === 'llm') {
         const universe = new Set(this.getSymbolUniverse(contextBuilder.getFallbackSymbolNames()));
         for (const dep of contextBuilder.getDepNames()) universe.add(dep);
+        for (const key of collectContextKeys(pageContext)) universe.add(key);
         const verified = verifyAndAnnotateClaims(bodyContent, {
           symbols: universe,
           knownFiles,

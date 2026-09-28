@@ -5,10 +5,11 @@
 ## 功能特性
 
 - **知识图谱数据源** — 通过子进程调用 `codebase-memory-mcp` 获取 LSP 级符号数据（docstring/signature/complexity/fan-in）与 CALLS 调用边
+- **意图证据层（Intent Evidence）** — 图谱只回答「是什么」，动机类叙述的证据由确定性提取器补充：源码注释（文件头/符号注释/TODO 标记/常量注释）、git 提交（首末提交/高频主题/依赖引入）、README 与 docs 小节、测试用例名（行为承诺）；每条证据带锚点（file:line / commit 哈希+日期 / 文档路径#标题），fail-open
 - **18 页固定注册表（PageRegistry）** — 三层页面模型（structure 结构层 / operations 运行规约层 / surface 表层，按项目类型激活），编号目录输出
-- **双路径生成** — 每页优先 LLM（Vercel AI SDK 流式）；无模型、`--no-llm` 或生成失败时逐页回退纯规则模板
-- **反幻觉铁律（R1-R6）** — 锚点强制、边表优于时序图、拒绝编造用途、结构化优先、待确认标记、图表真实性，注入每次 LLM 调用
-- **写盘前质量闸门** — 空壳页/密钥泄漏拦截（error 级），死链/残缺锚点/薄证据/幽灵图表节点告警（warn 级），附构建报告
+- **双路径生成** — 每页优先 LLM（Vercel AI SDK 流式）；无模型、`--no-llm` 或生成失败时逐页回退纯规则模板（规则路径同样渲染意图证据表，`--no-llm` 产物也有「为什么」）
+- **反幻觉铁律（R1-R7）** — 锚点强制、边表优于时序图、拒绝编造用途、结构化优先、待确认标记、图表真实性、动机锚定，注入每次 LLM 调用
+- **写盘前质量闸门** — 空壳页/密钥泄漏拦截（error 级），死链/残缺锚点/薄证据/幽灵图表节点/无锚动机小节告警（warn 级），附构建报告（含意图证据覆盖统计）
 - **页首证据锚定块** — 每页确定性注入 `<details>` 源文件清单（只列扫描清单内真实文件），LLM 无法伪造
 - **增量模式** — `build --mode update` 跳过内容未变化的页面
 
@@ -66,7 +67,7 @@ node dist/bin.js build --mode update
 
 ### 生成的 Wiki 页面
 
-`build` 在 `.wiki/` 下按编号目录生成 18 个固定页面（以 `PAGE_REGISTRY` 为准）：overview / tech-stack / environment / architecture / data-flow / modules / api / cli（按项目类型激活）/ decisions / onboarding / testing / troubleshooting / conventions / constraints / calls / classes / glossary + README 索引。
+`build` 在 `.wiki/` 下按编号目录生成 18 个固定页面（以 `PAGE_REGISTRY` 为准）：overview / tech-stack / environment / architecture / data-flow / modules / api / cli（按项目类型激活）/ decisions（git 提交 + 文档证据锚定的设计决策与演进页，证据全缺时诚实跳过）/ onboarding / testing / troubleshooting / conventions / constraints / calls / classes / glossary + README 索引。
 
 在此之外，还会从图谱聚类**确定性推导最多 4 个仓库专属主题页**（`08-topics/`，跨 ≥2 模块的协作面，如"MCP 子进程客户端"）：主题定义锁定在 `.scx-wiki-agent/topics.json`（可手工编辑删改，`--refresh-topics` 重新探测）；探测不出就一个不生成。每页页首含源文件锚定块，页底含 Related 导航。
 
@@ -79,11 +80,12 @@ src/
 ├── services/            # 编排层：ScanService、WikiService（质量闸门/构建报告/增量模式）
 ├── knowledge/           # Wiki 生成核心
 │   ├── page-registry.ts          # 页面描述符注册表（三层模型）
-│   ├── wiki-context-builder.ts   # 图谱 → 页面上下文（含薄证据补强）
-│   ├── wiki-page-generator.ts    # LLM 生成（反幻觉铁律注入）
-│   ├── wiki-fallback-builder.ts  # 纯规则模板
+│   ├── intent-evidence.ts        # 意图证据层：注释/git/文档/测试提取器（含磁盘缓存）
+│   ├── wiki-context-builder.ts   # 图谱 → 页面上下文（含薄证据补强 + 意图证据接线）
+│   ├── wiki-page-generator.ts    # LLM 生成（反幻觉铁律 R1-R7 注入）
+│   ├── wiki-fallback-builder.ts  # 纯规则模板（同样渲染意图证据表）
 │   ├── wiki-evidence.ts          # 页首证据锚定块
-│   ├── wiki-quality-validator.ts # 写盘前质量闸门
+│   ├── wiki-quality-validator.ts # 写盘前质量闸门（含 R7 无锚动机告警）
 │   └── wiki-output-sanitizer.ts  # LLM 输出清理
 ├── mcp/                 # codebase-memory-mcp 子进程客户端（唯一数据源）
 ├── core/                # FileScanner（扫描/技术栈检测）+ 领域类型

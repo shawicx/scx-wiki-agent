@@ -1,9 +1,11 @@
 // src/knowledge/types.ts
 
 import type { SymbolType, RelationType } from '../core/types.js';
+import type { IntentEvidence, GitCommitRef } from './intent-evidence.js';
 
 /** Hotspot 补强符号：structure 页证据不足时从图谱补充的真实符号（二次扩展检索）。
- *  startLine/signature 在源码回落（source-fallback）路径下携带定义行信息。 */
+ *  startLine/signature 在源码回落（source-fallback）路径下携带定义行信息。
+ *  docstring 来自图谱富化属性（证据最薄处恰不能丢「为什么」）。 */
 export interface SupplementalSymbol {
   name: string;
   type: SymbolType;
@@ -11,6 +13,7 @@ export interface SupplementalSymbol {
   startLine?: number;
   complexity?: number;
   signature?: string | null;
+  docstring?: string | null;
 }
 
 /** 依赖使用证据（overview/troubleshooting 等元数据页）：用途锚点分生产 import / 测试 import / scripts 命令 */
@@ -41,10 +44,12 @@ export interface OverviewContext {
   packageName?: string;
   packageDescription?: string;
   entryFiles: Array<{ name: string; path: string }>;
-  topSymbols: Array<{ name: string; type: SymbolType; docstring?: string | null; complexity?: number }>;
+  topSymbols: Array<{ name: string; type: SymbolType; qualifiedName?: string; docstring?: string | null; complexity?: number }>;
   /** 技术栈依赖的使用证据（防 R5 把真实依赖标成待确认/声明未用） */
   depUsage?: DepUsage[];
   supplementalSymbols?: SupplementalSymbol[];
+  /** 意图证据（注释/git/文档小节/测试行为，「为什么」叙述的锚点源） */
+  intent?: IntentEvidence[];
 }
 
 /** Module summary for architecture and modules pages */
@@ -58,6 +63,11 @@ export interface ModuleSummary {
   codeSnippets: Array<{ symbolName: string; content: string; startLine: number }>;
   /** 模块内文件的语言分布（多语言模块须分别说明各语言职责域） */
   languages?: Array<{ language: string; fileCount: number }>;
+  /** 图谱包级扇入/扇出（模块重要性与分层判据的叙事锚点） */
+  fanIn?: number;
+  fanOut?: number;
+  /** 模块级意图证据（文件头自述 + 首提交 + 高频主题 + 测试行为承诺） */
+  intent?: IntentEvidence[];
 }
 
 /** Context for architecture page */
@@ -68,12 +78,12 @@ export interface ArchitectureContext {
     target: string;
     type: RelationType;
   }>;
-  /** 分层信息（来自 MCP get_architecture） */
+  /** 分层信息（来自 MCP get_architecture，消费侧过滤后） */
   layers?: Array<{ name: string; layer: string; reason: string }>;
   /** 模块间调用边界（来自 MCP get_architecture） */
   boundaries?: Array<{ from: string; to: string; callCount: number }>;
-  /** 聚类（来自 MCP get_architecture） */
-  clusters?: Array<{ label: string; members: number; topNodes: string[] }>;
+  /** 聚类（来自 MCP get_architecture，cohesion = 聚类凝聚度） */
+  clusters?: Array<{ label: string; members: number; topNodes: string[]; cohesion?: number }>;
   supplementalSymbols?: SupplementalSymbol[];
 }
 
@@ -113,6 +123,8 @@ export interface ModulesContext {
   /** 模块数超过详述上限时的概要聚合（其余模块只列名称与规模） */
   otherModules?: Array<{ name: string; fileCount: number; symbolCount: number }>;
   supplementalSymbols?: SupplementalSymbol[];
+  /** 页级意图证据（文档小节等模块无关证据） */
+  intent?: IntentEvidence[];
 }
 
 /** IPC 调用点（Tauri 项目的真正 API 边界） */
@@ -193,12 +205,14 @@ export interface CallsContext {
     edges: Array<{
       caller: string;
       callee: string;
+      /** 被调方所属类（图谱 parent_class；同名符号的归属语境） */
+      calleeParent?: string | null;
       calleeFile: string;
       calleeLine: number;
     }>;
   }>;
   /** 全局扇入表（被调用次数最多的符号） */
-  fanIn: Array<{ symbol: string; file: string; inDegree: number }>;
+  fanIn: Array<{ symbol: string; file: string; qualifiedName?: string; inDegree: number }>;
   /** Tauri IPC 命令对表（前端 invoke → Rust 命令的真实跨语言执行边；非 Tauri 项目缺省） */
   ipc?: IpcSurface;
 }
@@ -254,6 +268,8 @@ export interface TechStackContext {
   runtime: string;
   buildTool: string;
   packageManager: string;
+  /** 依赖相关提交主题（选型/引入动机的 git 证据） */
+  intent?: IntentEvidence[];
 }
 
 /** Context for environment page (运行态) */
@@ -291,6 +307,8 @@ export interface ConstraintsContext {
   constants: Array<{ name: string; value: string; filePath: string }>;
   /** 高复杂度函数（MCP complexity > 阈值） */
   hotFunctions: Array<{ name: string; filePath: string; complexity: number; loopDepth: number }>;
+  /** 常量注释证据（每个限制「防什么失控场景」的直接叙述源） */
+  intent?: IntentEvidence[];
 }
 
 /** Context for cli page (CLI 命令参考) */
@@ -346,6 +364,8 @@ export interface TroubleshootingContext {
   entryFiles?: string[];
   /** 技术栈依赖的使用证据（排障叙述依赖用途时的锚点） */
   depUsage?: DepUsage[];
+  /** 意图证据：源码 why-marker（TODO/FIXME 真实风险信号）+ git 高频变更 */
+  intent?: IntentEvidence[];
 }
 
 /** Context for topic pages（仓库专属主题，图谱推导） */
@@ -367,6 +387,8 @@ export interface TopicContext {
   edges: Array<{ caller: string; callee: string; file: string; line: number }>;
   /** 主题涉及的跨包调用边界 */
   boundaries: Array<{ from: string; to: string; callCount: number }>;
+  /** 意图证据（注释/首提交/测试行为，「设计动机」的锚点源） */
+  intent?: IntentEvidence[];
 }
 
 /** Context for outline chapter pages（章节页：outline.json 锁定，brief 驱动） */
@@ -382,6 +404,27 @@ export interface ChapterPageContext {
   symbols: TopicContext['symbols'];
   edges: TopicContext['edges'];
   boundaries: TopicContext['boundaries'];
+  /** 意图证据（注释/首提交/测试行为） */
+  intent?: IntentEvidence[];
+}
+
+/** Context for decisions page（设计决策与演进，git + 文档证据锚定）
+ *  只承载真实证据：模块级 git 聚合、文档小节、高频变更；无证据时整页剔除 */
+export interface DecisionsContext {
+  /** 模块级演进聚合（首末提交/提交数/高频主题） */
+  gitTimeline: Array<{
+    module: string;
+    commitCount: number;
+    first: GitCommitRef | null;
+    last: GitCommitRef | null;
+    themes: string[];
+  }>;
+  /** 设计文档小节证据（README/docs 切节） */
+  docDecisions: IntentEvidence[];
+  /** 高频变更文件（维护风险热点） */
+  hotFileChurn: Array<{ file: string; commitCount: number; last: GitCommitRef | null }>;
+  /** 依赖引入相关提交（dep 名 → 佐证主题） */
+  depCommits?: IntentEvidence[];
 }
 
 /** Build options for wiki generation */

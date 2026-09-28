@@ -163,4 +163,49 @@ describe('证据锚定与图表规则', () => {
     const calls = validatePageContent(content, { ...baseOpts, page: 'calls' });
     expect(calls.issues.some(i => i.rule === 'diagram-misuse')).toBe(false);
   });
+
+  describe('unanchored-rationale（R7 事后核验）', () => {
+    it('动机类小节零锚点产生告警（warn，不拦截）', () => {
+      const content = '# Overview\n\n## 设计思路\n\n该项目采用了分层架构，因为这样最合理。\n\n## 技术栈\n\n- vue\n';
+      const r = validatePageContent(content, baseOpts);
+      expect(r.passed).toBe(true);
+      const issue = r.issues.find(i => i.rule === 'unanchored-rationale');
+      expect(issue?.severity).toBe('warn');
+      expect(issue?.message).toContain('设计思路');
+      // 非动机类小节不告警
+      expect(r.issues.filter(i => i.rule === 'unanchored-rationale')).toHaveLength(1);
+    });
+
+    it('file:line / commit 锚点均可满足 R7，不产生告警', () => {
+      const fileAnchor = '# A\n\n## 设计思路\n\n见 `src/index.ts:12` 的注释。\n';
+      expect(validatePageContent(fileAnchor, baseOpts).issues.some(i => i.rule === 'unanchored-rationale')).toBe(false);
+
+      const commitAnchor = '# A\n\n## 演进脉络\n\n引入于 commit:abc12345 (2026-06-24)。\n';
+      expect(validatePageContent(commitAnchor, baseOpts).issues.some(i => i.rule === 'unanchored-rationale')).toBe(false);
+
+      const commitAnchor2 = '# A\n\n## 演进脉络\n\n引入于 `abc12345`（2026-06-24）。\n';
+      expect(validatePageContent(commitAnchor2, baseOpts).issues.some(i => i.rule === 'unanchored-rationale')).toBe(false);
+
+      const docAnchor = '# A\n\n## 文档记录的决策\n\n摘录自 docs/design/adr.md#决策。\n';
+      expect(validatePageContent(docAnchor, baseOpts).issues.some(i => i.rule === 'unanchored-rationale')).toBe(false);
+    });
+
+    it('空小节与非动机类标题不参与核验；锚点在小节正文即可', () => {
+      const content = [
+        '# Decisions',
+        '',
+        '## 演进时间线（按模块）',
+        '',
+        '| 模块 | 提交 |',
+        '| --- | --- |',
+        '| core | commit:abc12345 (2026-01-01) |',
+        '',
+        '## 未分类条目',
+        '',
+        '一些普通描述。',
+      ].join('\n');
+      const r = validatePageContent(content, baseOpts);
+      expect(r.issues.some(i => i.rule === 'unanchored-rationale')).toBe(false);
+    });
+  });
 });

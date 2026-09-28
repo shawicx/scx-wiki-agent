@@ -43,6 +43,7 @@ export const PAGE_REGISTRY: PageDescriptor[] = [
   { name: 'modules', tier: 'structure', dir: '02-architecture', answer: '每个模块的文件、符号、职责' },
   { name: 'api', tier: 'structure', dir: '03-interface', answer: '导出函数与 CLI 命令（带 file:line）' },
   { name: 'cli', tier: 'surface', dir: '03-interface', answer: 'CLI 命令、参数、退出码' },
+  { name: 'decisions', tier: 'structure', dir: '04-design', answer: '设计决策与演进依据（git 提交 + 文档证据锚定）' },
   { name: 'onboarding', tier: 'operations', dir: '05-guides', answer: '上手指南：环境准备、安装、首次运行、脚本' },
   { name: 'testing', tier: 'operations', dir: '05-guides', answer: '框架、测试目录、覆盖率、夹具' },
   { name: 'troubleshooting', tier: 'operations', dir: '05-guides', answer: '排障手册：错误分类、诊断步骤、常见陷阱' },
@@ -121,7 +122,6 @@ export const RETIRED_WIKI_PATHS: string[] = [
   '03-interface/cli-commands.md',      // → cli
   '04-design/page-registry.md',        // 注册表机制并入源码注释与 README
   '06-constraints/limitations.md',     // → constraints
-  '04-design/decisions.md',            // 页面下线：无真实 ADR 数据源，自动推导条目会伪装成决策记录
 ];
 
 /**

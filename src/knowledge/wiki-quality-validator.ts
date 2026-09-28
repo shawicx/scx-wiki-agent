@@ -12,6 +12,8 @@
  *   （readme 索引页与 operations 配置驱动页豁免）。
  * - mermaid-ghost  (warn) ：Mermaid 图中引用扫描清单外的文件路径（防幽灵节点）。
  * - diagram-misuse (warn) ：sequenceDiagram 出现在 calls 页之外（R2 边表优于时序图）。
+ * - unanchored-rationale (warn)：动机/设计/演进类小节零证据锚点（R7 事后核验：
+ *   file:line 与 commit 哈希+日期均无）。
  *
  * error 拒绝写盘；warn 记入构建报告。纯函数，不做 I/O。
  */
@@ -28,7 +30,8 @@ export type QualityRule =
   | 'broken-anchor'
   | 'thin-evidence'
   | 'mermaid-ghost'
-  | 'diagram-misuse';
+  | 'diagram-misuse'
+  | 'unanchored-rationale';
 
 export interface QualityIssue {
   rule: QualityRule;
@@ -88,6 +91,7 @@ export function validatePageContent(content: string, opts: ValidateOptions): Pag
   checkDeadLinks(text, opts, issues);
   const evidence = checkThinEvidence(text, opts, issues);
   checkMermaid(text, opts, issues);
+  checkUnanchoredRationale(text, issues);
 
   return {
     page: opts.page,
@@ -223,5 +227,41 @@ function checkMermaid(text: string, opts: ValidateOptions, issues: QualityIssue[
         issues.push({ rule: 'mermaid-ghost', severity: 'warn', message: `Mermaid 图引用未知文件: ${f[0]}` });
       }
     }
+  }
+}
+
+/** commit 证据锚点：`commit:abc12345 (2026-06-24)` / `\`abc12345\`（2026-06-24）` 等变体 */
+const COMMIT_ANCHOR_RE = /commit[:：]?\s*[0-9a-f]{7,40}\b|\b[0-9a-f]{7,40}\b`?\s*[（(]\s*\d{4}-\d{2}-\d{2}/;
+
+/** 文档小节证据锚点：`docs/design/adr.md#决策`（文件路径 + # 标题） */
+const DOC_ANCHOR_RE = /[\w.@-]+(?:\/[\w.@-]+)*\.[a-z0-9]+#[^\s|，。)）]+/i;
+
+/** 无 g 标志的锚点探测副本（test 不留 lastIndex 状态，避免跨小节误判） */
+const ANCHOR_TEST_RE = new RegExp(ANCHOR_RE.source);
+
+/** 动机类小节标题特征（R7 事后核验的作用域） */
+const RATIONALE_SECTION_RE = /设计|动机|理由|缘由|演进|决策|依据|由来/;
+
+/** R7 事后核验：动机/设计/演进类小节内须至少出现一个 file:line 或 commit 锚点。
+ *  只对 LLM 页面有约束意义，但对规则页同样无害（规则页的意图证据表自带锚点）。 */
+function checkUnanchoredRationale(text: string, issues: QualityIssue[]): void {
+  const lines = text.split('\n');
+  const sectionStarts: Array<{ title: string; from: number }> = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^##\s+(.{1,60})/);
+    if (m) sectionStarts.push({ title: m[1].trim(), from: i });
+  }
+  for (let s = 0; s < sectionStarts.length; s++) {
+    const { title, from } = sectionStarts[s];
+    if (!RATIONALE_SECTION_RE.test(title)) continue;
+    const end = s + 1 < sectionStarts.length ? sectionStarts[s + 1].from : lines.length;
+    const body = lines.slice(from + 1, end).join('\n');
+    if (body.trim() === '') continue;
+    if (ANCHOR_TEST_RE.test(body) || COMMIT_ANCHOR_RE.test(body) || DOC_ANCHOR_RE.test(body)) continue;
+    issues.push({
+      rule: 'unanchored-rationale',
+      severity: 'warn',
+      message: `动机类小节「${title}」未引用任何 file:line 或 commit 证据（R7），叙述可能为无据推断`,
+    });
   }
 }

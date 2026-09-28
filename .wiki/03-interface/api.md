@@ -8,7 +8,7 @@
 - src/cli/commands/scan.ts
 - src/cli/index.ts
 - src/knowledge/claim-verifier.ts
-- src/knowledge/outline.ts
+- src/knowledge/intent-evidence.ts
 - src/knowledge/wiki-builder.ts
 - src/knowledge/wiki-context-builder.ts
 - src/knowledge/wiki-continuation.ts
@@ -45,8 +45,8 @@
 | createProgram |  | src/cli/index.ts |
 | extractClaims |  | src/knowledge/claim-verifier.ts |
 | verifyAndAnnotateClaims |  | src/knowledge/claim-verifier.ts |
-| loadOutline |  | src/knowledge/outline.ts |
-| saveOutline |  | src/knowledge/outline.ts |
+| collectContextKeys |  | src/knowledge/claim-verifier.ts |
+| countIntentEvidence |  | src/knowledge/intent-evidence.ts |
 ## Related
 
 - 同目录：[cli.md](cli.md)

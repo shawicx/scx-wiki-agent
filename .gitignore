@@ -31,3 +31,6 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+
+# Intent evidence runtime cache (HEAD-keyed, machine-specific)
+.scx-wiki-agent/cache/

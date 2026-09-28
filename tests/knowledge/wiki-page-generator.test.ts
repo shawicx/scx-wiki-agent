@@ -143,10 +143,13 @@ describe('WikiPageGenerator', () => {
     callArgs = mockStreamText.mock.calls[0][0] as any;
     expect(callArgs.prompt).toContain('src/cli/build.ts');
 
-    // decisions 已下线：不派发 LLM
+    // decisions 已复活（git + 文档证据锚定）：派发 LLM，空 ctx 防御性降级为空表
     mockStreamText.mockClear();
     await generator.generateByName('decisions', {}, vi.fn());
-    expect(streamText).not.toHaveBeenCalled();
+    expect(streamText).toHaveBeenCalledOnce();
+    callArgs = mockStreamText.mock.calls[0][0] as any;
+    expect(callArgs.system).toContain('每条决策必须携带证据锚点');
+    expect(callArgs.system).toContain('R7');
   });
 
   it('generateByName 派发 testing 并注入探测事实', async () => {

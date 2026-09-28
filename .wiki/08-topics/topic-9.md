@@ -38,7 +38,6 @@
 | `tableToObjects` | function | `(table: unknown)` | /** 列式表 {cols, rows} → 对象数组（v0.10.x format=json 的结构） */ | src/mcp/codebase-memory-client.ts:27 |
 | `toProjectName` | method | `(repoPath: string)` | /** 仓库绝对路径 → MCP 项目标识符（`/` 和 `:` → `-`） */ | src/mcp/codebase-memory-client.ts:246 |
 | `tracePath` | method | `(\n    functionName: string,\n    direction: 'inbound' | 'outbound' | 'both' = 'both',\n    depth = 6,\n  )` | /** 双向调用链追踪 */ | src/mcp/codebase-memory-client.ts:150 |
-| `workspaceHasPackages` | method | `(relPath: string)` | /** pnpm-workspace.yaml 是否声明了 packages（无该字段的审批型配置不算 workspace） */ | src/core/scanner.ts:225 |
 
 ## 协作边表（文件间调用）
 
@@ -71,18 +70,28 @@
 | searchCode | exec | src/mcp/codebase-memory-client.ts:207 |
 | tracePath | exec | src/mcp/codebase-memory-client.ts:207 |
 | tracePath | adaptTrace | src/mcp/codebase-memory-client.ts:92 |
-| walkDirectory | shouldSkipDir | src/core/scanner.ts:129 |
-| walkDirectory | isIgnored | src/core/scanner.ts:59 |
 
 ## 跨模块边界
 
 | From | To | 调用次数 |
 | --- | --- | --- |
-| knowledge | cli | 3 |
 | cli | shared | 3 |
 | core | shared | 3 |
+| knowledge | cli | 3 |
 | cli | services | 2 |
-| services | cli | 1 |
+| services | core | 1 |
+
+## 设计动机（意图证据）
+
+| 证据 | 类型 | 目标 | 锚点 |
+| --- | --- | --- | --- |
+| 列式表 {cols, rows} → 对象数组（v0.10.x format=json 的结构） | 符号注释 | tableToObjects | src/mcp/codebase-memory-client.ts:27 |
+| 兼容两种形态：旧版对象数组 / 新版列式表 | 符号注释 | asObjects | src/mcp/codebase-memory-client.ts:35 |
+| qualified_name 末段 → 简名（列式表里 entry_points/hotspots 只提供 qn） | 符号注释 | lastSegment | src/mcp/codebase-memory-client.ts:42 |
+| src/mcp/codebase-memory-client.ts 首次提交：refactor: 重构为基于 codebase-memory-mcp 知识图谱生成 wiki | 提交记录 | src/mcp/codebase-memory-client.ts | commit:9ef4fd6f (2026-06-24) |
+| src/core/scanner.ts 首次提交：feat: 功能基本可用 | 提交记录 | src/core/scanner.ts | commit:76565d14 (2026-06-02) |
+| 行为承诺（tests/core/scanner.test.ts）：FileScanner；should scan all source files；should not include node_modules files；should detect correct language for each file；should detect tech stack from package.json；should detect project type；仅含 allowBuilds 的 pnpm-workspace.yaml 不判为 monorepo（审批配置 ≠ workspace）；扫描 .vue/.rs/.css 文件；import 提取覆盖 Vue SFC 与 CSS @import（不再误报死依赖）；动态 import()、副作用导入（后跟 from 行）、node_modules 相对引用均可提取包名 | 行为承诺 | src/core/scanner.ts | tests/core/scanner.test.ts:9 |
+| 行为承诺（tests/mcp/codebase-memory-client.test.ts）：CodebaseMemoryClient；项目名转义：路径 → MCP 标识符；getArchitecture 解析 JSON 输出；跳过 stderr 日志行解析 JSON；二进制不存在时抛友好错误；queryGraph 透传 Cypher | 行为承诺 | src/mcp/codebase-memory-client.ts | tests/mcp/codebase-memory-client.test.ts:9 |
 ## Related
 
 - 同目录：[topic-6.md](topic-6.md)

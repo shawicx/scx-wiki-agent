@@ -11,7 +11,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | 0.1.3 |
+| 版本 | 0.1.5 |
 | 许可证 | ISC |
 | 运行时 | ESM |
 
@@ -44,6 +44,12 @@
 | --- | --- | --- |
 | [03-interface/api.md](03-interface/api.md) | structure | 导出函数与 CLI 命令（带 file:line） |
 | [03-interface/cli.md](03-interface/cli.md) | surface | CLI 命令、参数、退出码 |
+
+## 04-design/
+
+| 文档 | 层级 | 回答的问题 |
+| --- | --- | --- |
+| [04-design/decisions.md](04-design/decisions.md) | structure | 设计决策与演进依据（git 提交 + 文档证据锚定） |
 
 ## 05-guides/
 

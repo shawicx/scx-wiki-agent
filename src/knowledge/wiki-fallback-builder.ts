@@ -1,6 +1,7 @@
 import { WikiBuilder } from './wiki-builder.js';
 import { UNCONFIRMED_CELL, unconfirmedNote } from './wiki-markers.js';
 import { isTopicPage, isChapterPage } from './page-registry.js';
+import type { IntentEvidence } from './intent-evidence.js';
 import type {
   OverviewContext,
   ArchitectureContext,
@@ -21,10 +22,37 @@ import type {
   TechStackContext,
   TopicContext,
   ChapterPageContext,
+  DecisionsContext,
 } from './types.js';
 
 function sanitizeMermaid(name: string): string {
   return name.replace(/[^a-zA-Z0-9_]/g, '_');
+}
+
+const INTENT_KIND_LABELS: Record<string, string> = {
+  'file-header': '文件头自述',
+  'symbol-comment': '符号注释',
+  'why-marker': '风险标记',
+  'const-comment': '常量注释',
+  'git-commit': '提交记录',
+  'git-theme': '高频主题',
+  'doc-section': '文档小节',
+  'test-spec': '行为承诺',
+  'git-churn': '变更热点',
+};
+
+/** 意图证据表（证据 | 类型 | 目标 | 锚点）：纯规则路径的「为什么」主载体 */
+function intentTable(items: IntentEvidence[] | undefined): string[][] {
+  return (items ?? []).map(e => [
+    e.text,
+    INTENT_KIND_LABELS[e.kind] ?? e.kind,
+    e.target.symbol ?? e.target.module ?? e.target.file ?? '-',
+    e.anchor,
+  ]);
+}
+
+function hasIntent(items: IntentEvidence[] | undefined): boolean {
+  return (items ?? []).length > 0;
 }
 
 export class WikiFallbackBuilder {
@@ -48,6 +76,7 @@ export class WikiFallbackBuilder {
       case 'testing': return this.buildTesting(ctx);
       case 'conventions': return this.buildConventions(ctx);
       case 'constraints': return this.buildConstraints(ctx);
+      case 'decisions': return this.buildDecisions(ctx);
       case 'cli': return this.buildCli(ctx);
       case 'tech-stack': return this.buildTechStack(ctx);
       default: return '';
@@ -83,6 +112,11 @@ export class WikiFallbackBuilder {
       );
     }
 
+    if (hasIntent(ctx.intent)) {
+      builder.addSection('设计依据（意图证据）', '从源码注释、git 提交与仓库文档确定性提取（每条带锚点，可回溯验证）');
+      builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.intent));
+    }
+
     return builder.build();
   }
 
@@ -101,7 +135,14 @@ export class WikiFallbackBuilder {
       builder.addSection(mod.name, desc);
     }
 
-    // 分层信息（来自 MCP get_architecture）
+    // 模块级意图证据（文件头自述/首提交/高频主题/行为承诺）
+    for (const mod of ctx.modules) {
+      if (!hasIntent(mod.intent)) continue;
+      builder.addSection(`设计依据：${mod.name}`, '');
+      builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(mod.intent));
+    }
+
+    // 分层信息（来自 MCP get_architecture，消费侧过滤后）
     if (ctx.layers && ctx.layers.length > 0) {
       builder.addSection('Layers', '').addTable(
         ['Package', 'Layer', 'Reason'],
@@ -183,8 +224,16 @@ export class WikiFallbackBuilder {
       if (topExports) parts.push(`Key exports: ${topExports}`);
       if (dependsOn.length > 0) parts.push(`Depends on: ${dependsOn.map(d => `\`${d}\``).join(', ')}`);
       if (usedBy.length > 0) parts.push(`Used by: ${usedBy.map(u => `\`${u}\``).join(', ')}`);
+      if (mod.fanIn !== undefined || mod.fanOut !== undefined) {
+        parts.push(`Fan-in/out: ${mod.fanIn ?? 0} / ${mod.fanOut ?? 0}`);
+      }
 
       builder.addSection(mod.name, parts.length > 0 ? parts.join('\n\n') : 'No details available.');
+
+      if (hasIntent(mod.intent)) {
+        builder.addSubSection('设计依据（意图证据）', '');
+        builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(mod.intent));
+      }
 
       if (mod.fileSymbols.length > 0) {
         builder.addSubSection('File Structure', '');
@@ -372,6 +421,12 @@ export class WikiFallbackBuilder {
       );
     }
 
+    // 意图证据：源码 TODO/FIXME 风险标记 + git 高频变更热点（作者自认的真实风险）
+    if (hasIntent(ctx.intent)) {
+      builder.addSection('风险信号（源码标记 + 变更热点）', '');
+      builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.intent));
+    }
+
     if (ctx.envVars && ctx.envVars.length > 0) {
       builder.addSection('环境变量', '从源码 process.env 引用提取');
       builder.addTable(
@@ -396,6 +451,9 @@ export class WikiFallbackBuilder {
     const builder = new WikiBuilder()
       .addTitle('Calls')
       .addParagraph('调用关系边表（按入口/热点分组）。每条边可被 trace_path / CALLS 查询复现。');
+
+    const calleeLabel = (e: { callee: string; calleeParent?: string | null }) =>
+      e.calleeParent ? `${e.calleeParent}.${e.callee}` : e.callee;
 
     if (ctx.groups.length === 0 && ctx.fanIn.length === 0 && !ctx.ipc) {
       builder.addParagraph('No call edges traced.');
@@ -436,7 +494,7 @@ export class WikiFallbackBuilder {
         ['调用方', '被调用方', '源文件:行号'],
         group.edges.map(e => [
           e.caller,
-          e.callee,
+          calleeLabel(e),
           e.calleeLine > 0 ? `${e.calleeFile}:${e.calleeLine}` : e.calleeFile,
         ]),
       );
@@ -670,6 +728,12 @@ export class WikiFallbackBuilder {
       );
     }
 
+    // 常量注释证据：每个限制「防什么」的作者亲述（有则逐条对上常量表）
+    if (hasIntent(ctx.intent)) {
+      builder.addSection('限制由来（源码注释证据）', '');
+      builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.intent));
+    }
+
     if (ctx.hotFunctions.length > 0) {
       builder.addSection('高复杂度函数（complexity > 3）', '关注圈复杂度高的函数，考虑重构');
       builder.addTable(
@@ -772,6 +836,12 @@ export class WikiFallbackBuilder {
       );
     }
 
+    // 依赖引入动机（git 提交佐证，R7 锚点保留）
+    if (hasIntent(ctx.intent)) {
+      builder.addSection('引入动机（提交佐证）', '');
+      builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.intent));
+    }
+
     builder.addSection('运行时与构建', '');
     builder.addTable(
       ['项', '值'],
@@ -827,6 +897,11 @@ export class WikiFallbackBuilder {
       );
     }
 
+    if (hasIntent(ctx.intent)) {
+      builder.addSection('设计动机（意图证据）', '');
+      builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.intent));
+    }
+
     return builder.build();
   }
 
@@ -866,6 +941,59 @@ export class WikiFallbackBuilder {
       builder.addTable(
         ['From', 'To', '调用次数'],
         ctx.boundaries.map(b => [b.from, b.to, String(b.callCount)]),
+      );
+    }
+
+    if (hasIntent(ctx.intent)) {
+      builder.addSection('设计动机（意图证据）', '');
+      builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.intent));
+    }
+
+    return builder.build();
+  }
+
+  /**
+   * decisions.md：设计决策与演进（git 提交 + 文档证据锚定）。
+   * 纯规则生成：只渲染真实证据（提交对表/文档摘录/变更热点），
+   * 每条带 commit 哈希+日期 或 文档路径锚点，规避「推导伪装成决策」。
+   */
+  buildDecisions(ctx: DecisionsContext): string {
+    const builder = new WikiBuilder()
+      .addTitle('Design Decisions & Evolution')
+      .addParagraph('基于 git 提交历史与仓库设计文档确定性提取，每条决策带证据锚点（commit 哈希+日期 / 文档路径），可回溯验证。');
+
+    const commitCell = (c: { hash: string; date: string; subject: string } | null) =>
+      c ? `\`${c.hash.slice(0, 8)}\`（${c.date}）${c.subject}` : '-';
+
+    if (ctx.gitTimeline.length > 0) {
+      builder.addSection('演进时间线（按模块）', '首次提交主题是模块「诞生动机」的最直接证据。');
+      builder.addTable(
+        ['模块', '提交数', '首次提交', '最近提交', '高频主题'],
+        ctx.gitTimeline.map(t => [
+          t.module,
+          String(t.commitCount),
+          commitCell(t.first),
+          commitCell(t.last),
+          t.themes.length > 0 ? t.themes.join('、') : '-',
+        ]),
+      );
+    }
+
+    if (ctx.docDecisions.length > 0) {
+      builder.addSection('文档记录的决策', '仓库 README / docs 的设计文档小节摘录（锚点 = 文档路径#标题）。');
+      builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.docDecisions));
+    }
+
+    if (ctx.depCommits && ctx.depCommits.length > 0) {
+      builder.addSection('依赖引入决策（提交佐证）', '');
+      builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.depCommits));
+    }
+
+    if (ctx.hotFileChurn.length > 0) {
+      builder.addSection('高频变更热点（维护风险）', '提交次数最多的文件，变更越频繁维护风险越高。');
+      builder.addTable(
+        ['文件', '提交数', '最近提交'],
+        ctx.hotFileChurn.map(c => [c.file, String(c.commitCount), commitCell(c.last)]),
       );
     }
 

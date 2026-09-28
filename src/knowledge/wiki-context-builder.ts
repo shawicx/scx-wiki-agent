@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
-import type { SnippetData } from '../mcp/types.js';
+import type { SnippetData, ArchitectureData } from '../mcp/types.js';
 import type { ScanResult } from '../core/scanner.js';
 import type { SymbolType, RelationType } from '../core/types.js';
 import { isTestPath, languageDomainOf, matchPackageForFile, importedPackageName } from '../shared/utils.js';
@@ -9,6 +9,7 @@ import { PAGE_REGISTRY, pageRelPath, isTopicPage, topicIdFromPage, TOPIC_DIR, TO
 import { ConfigDetector } from './config-detector.js';
 import { collectEvidenceFiles, toKnownRelativePath, EVIDENCE_MIN_FILES } from './wiki-evidence.js';
 import { findSymbolDefinitions } from './source-fallback.js';
+import { IntentEvidenceProvider } from './intent-evidence.js';
 import { isTauriProject, scanIpcSurface } from './tauri-ipc.js';
 import type { TopicDefinition } from './topic-discovery.js';
 import type { OutlineChapter } from './outline.js';
@@ -34,6 +35,7 @@ import type {
   TechStackContext,
   TopicContext,
   ChapterPageContext,
+  DecisionsContext,
   SupplementalSymbol,
   DepUsage,
 } from './types.js';
@@ -73,6 +75,13 @@ export class WikiContextBuilder {
   private outlineChapters: OutlineChapter[] = [];
   /** 声明依赖名全集（package.json + techStack；断言校验 universe 回填用，构建内缓存） */
   private depNames: Set<string> | null = null;
+  /** 意图证据提供器（「为什么」证据源；由 WikiService 注入，缺省时各页 intent 字段省略） */
+  private intentProvider: IntentEvidenceProvider | null = null;
+  private intentModulesReady = false;
+
+  setIntentProvider(provider: IntentEvidenceProvider): void {
+    this.intentProvider = provider;
+  }
 
   setTopics(topics: TopicDefinition[]): void {
     this.topics = topics;
@@ -108,6 +117,7 @@ export class WikiContextBuilder {
       case 'testing': return this.buildTestingContext();
       case 'conventions': return this.buildConventionsContext();
       case 'constraints': return this.buildConstraintsContext();
+      case 'decisions': return this.buildDecisionsContext();
       case 'cli': return this.buildCliContext();
       case 'tech-stack': return this.buildTechStackContext();
       default: return null;
@@ -130,7 +140,7 @@ export class WikiContextBuilder {
       `MATCH (n) WHERE n.is_test = false AND n.file_path IS NOT NULL
          AND n.label IN ['Class', 'Method', 'Function']
        RETURN n.name AS name, n.label AS label, n.file_path AS file,
-              n.complexity AS cx, n.signature AS sig
+              n.complexity AS cx, n.signature AS sig, n.docstring AS doc
        ORDER BY n.complexity DESC LIMIT 8`,
     );
     const supplementalSymbols: SupplementalSymbol[] = q.rows
@@ -140,6 +150,7 @@ export class WikiContextBuilder {
         file: row[2] as string,
         complexity: row[3] as number | undefined,
         signature: (row[4] as string | null) ?? null,
+        docstring: (row[5] as string | null) ?? null,
       }))
       .map(s => ({ ...s, file: toKnownRelativePath(s.file, known, this.scanResult.rootDir) ?? '' }))
       .filter(s => s.file !== '' && !isTestPath(s.file));
@@ -175,6 +186,18 @@ export class WikiContextBuilder {
     return this.knownFiles;
   }
 
+  /** 模块级意图证据预聚合（构建内幂等）：候选文件按体积降序作重要性代理，
+ *  提供方内部截 GIT_FILE_CAP 控住子进程成本 */
+  private prepareIntentModules(pkgNames: string[]): void {
+    if (!this.intentProvider || this.intentModulesReady) return;
+    this.intentModulesReady = true;
+    const candidates = this.scanResult.files
+      .filter(f => !isTestPath(f.relativePath))
+      .sort((a, b) => b.size - a.size)
+      .map(f => f.relativePath);
+    this.intentProvider.prepareModules(pkgNames, candidates);
+  }
+
   buildOverviewContext(): OverviewContext {
     const arch = this.client.getArchitecture();
     // 入口文件只认生产代码（tests/fixtures 下的同名文件不算项目入口）
@@ -183,10 +206,11 @@ export class WikiContextBuilder {
       .filter(f => ENTRY_FILE_NAMES.some(e => f.relativePath.endsWith('/' + e) || f.relativePath === e))
       .map(f => ({ name: f.relativePath.split('/').pop()!, path: f.relativePath }));
 
-    // hotspots 即高扇入符号，用作 topSymbols，体现项目核心
+    // hotspots 即高扇入符号，用作 topSymbols，体现项目核心（qn 供锚点与 trace 复用）
     const topSymbols = arch.hotspots.slice(0, 10).map(h => ({
       name: h.name,
       type: 'function' as SymbolType,
+      qualifiedName: h.qualified_name,
       complexity: h.fan_in,
     }));
 
@@ -214,6 +238,7 @@ export class WikiContextBuilder {
       entryFiles,
       topSymbols,
       depUsage: this.buildDepUsage(),
+      ...(this.intentProvider ? { intent: this.intentProvider.overviewIntent(entryFiles.map(f => f.path)) } : {}),
     };
   }
 
@@ -325,10 +350,13 @@ export class WikiContextBuilder {
   buildArchitectureContext(): ArchitectureContext {
     const arch = this.client.getArchitecture();
     const pkgNames = arch.packages.map(p => p.name);
+    this.prepareIntentModules(pkgNames);
 
-    // 为每个 package 查核心符号（按复杂度，有 docstring 优先），填充 symbols
+    // 为每个 package 查核心符号（按复杂度，docstring 优先但非硬门槛：
+    // 无注释的高复杂度符号同样是模块职责证据，旧版 `docstring IS NOT NULL`
+    // 会把它们整批丢弃）
     const symQ = this.client.queryGraph(
-      `MATCH (n) WHERE n.is_test = false AND n.docstring IS NOT NULL
+      `MATCH (n) WHERE n.is_test = false AND (n.docstring IS NOT NULL OR n.complexity > 5)
          AND n.label IN ['Class', 'Function', 'Method']
        RETURN n.name AS name, n.label AS label, n.docstring AS doc,
               n.signature AS sig, n.complexity AS cx, n.file_path AS file
@@ -387,6 +415,11 @@ export class WikiContextBuilder {
       incomingRelations: incoming.get(pkg.name) ?? [],
       codeSnippets: [],
       languages: toLanguages(pkg.name),
+      fanIn: pkg.fan_in,
+      fanOut: pkg.fan_out,
+      ...(this.intentProvider?.moduleIntent(pkg.name)
+        ? { intent: this.intentProvider.moduleIntent(pkg.name) }
+        : {}),
     }));
 
     const interModuleRelations = arch.boundaries.map(b => ({
@@ -398,10 +431,28 @@ export class WikiContextBuilder {
     return {
       modules,
       interModuleRelations,
-      layers: arch.layers,
+      layers: this.filterLayers(arch.layers, pkgNames),
       boundaries: arch.boundaries.map(b => ({ from: b.from, to: b.to, callCount: b.call_count })),
-      clusters: arch.clusters.map(c => ({ label: c.label, members: c.members, topNodes: c.top_nodes })),
+      clusters: arch.clusters.map(c => ({
+        label: c.label,
+        members: c.members,
+        topNodes: c.top_nodes,
+        cohesion: c.cohesion,
+      })),
     };
+  }
+
+  /** 分层表消费侧过滤（延续「图谱边不可信」防线）：只保留锚定到真实包的行，
+ *  拦上游把 .d.ts/空包名误判为 api 层的脏行；技术栈无 HTTP 框架时拦「HTTP route」误判 */
+  private filterLayers(layers: ArchitectureData['layers'], pkgNames: string[]): ArchitectureData['layers'] {
+    const known = new Set(pkgNames);
+    const hasHttpFramework = this.scanResult.projectType === 'backend'
+      || this.scanResult.techStack.some(t => /express|fastify|nest|koa|hono|apollo|restify/i.test(t));
+    return layers.filter(l => {
+      if (!l.name || !known.has(l.name)) return false;
+      if (!hasHttpFramework && /HTTP route/i.test(l.reason)) return false;
+      return true;
+    });
   }
 
   buildDataFlowContext(): DataFlowContext {
@@ -584,6 +635,8 @@ export class WikiContextBuilder {
 
   buildModulesContext(): ModulesContext {
     const arch = this.client.getArchitecture();
+    const pkgNames = arch.packages.map(p => p.name);
+    this.prepareIntentModules(pkgNames);
 
     // 用 Cypher 查每个文件的核心符号（按复杂度排序，有 docstring 优先）
     const q = this.client.queryGraph(
@@ -634,12 +687,17 @@ export class WikiContextBuilder {
         incomingRelations: inOf.get(pkg.name) ?? [],
         codeSnippets: [],
         languages: this.languagesForFiles(pkgFiles),
+        fanIn: pkg.fan_in,
+        fanOut: pkg.fan_out,
+        ...(this.intentProvider?.moduleIntent(pkg.name)
+          ? { intent: this.intentProvider.moduleIntent(pkg.name) }
+          : {}),
       };
     });
 
     // 大仓库防超限：模块数超过详述上限时，按符号数取前 N 详述，其余聚合为概要
     if (modules.length <= MODULE_DETAIL_LIMIT) {
-      return { modules };
+      return { modules, ...(this.moduleIntentPageExtra()) };
     }
     const sorted = [...modules].sort(
       (a, b) => (b.symbols.length - a.symbols.length) || (b.files.length - a.files.length),
@@ -650,7 +708,14 @@ export class WikiContextBuilder {
       fileCount: m.files.length,
       symbolCount: m.symbols.length,
     }));
-    return { modules: detailed, otherModules };
+    return { modules: detailed, otherModules, ...this.moduleIntentPageExtra() };
+  }
+
+  /** modules 页的页级意图证据：仓库级文档小节（模块无关的「为什么」） */
+  private moduleIntentPageExtra(): Pick<ModulesContext, 'intent'> {
+    if (!this.intentProvider) return {};
+    const docs = this.intentProvider.docEvidence().slice(0, 6);
+    return docs.length > 0 ? { intent: docs } : {};
   }
 
   buildApiContext(): ApiContext {
@@ -832,6 +897,7 @@ export class WikiContextBuilder {
 
   buildTroubleshootingContext(): TroubleshootingContext {
     const arch = this.client.getArchitecture();
+    this.prepareIntentModules(arch.packages.map(p => p.name));
 
     // 运行态与常量数据补强：排障页最常缺的就是"实际命令、env、边界常量"
     const env = this.detector.detectEnvironment();
@@ -840,6 +906,11 @@ export class WikiContextBuilder {
       .filter(f => !isTestPath(f.relativePath))
       .filter(f => ENTRY_FILE_NAMES.some(e => f.relativePath.endsWith('/' + e) || f.relativePath === e))
       .map(f => f.relativePath);
+
+    // 意图证据：源码 why-marker（TODO/FIXME 是真实风险信号）+ git 高频变更热点
+    const intent = this.intentProvider
+      ? [...this.intentProvider.whyMarkers(8), ...this.intentProvider.churnEvidence(5)]
+      : undefined;
 
     return {
       projectType: this.scanResult.projectType,
@@ -852,6 +923,7 @@ export class WikiContextBuilder {
       constants,
       entryFiles,
       depUsage: this.buildDepUsage(),
+      ...(intent && intent.length > 0 ? { intent } : {}),
     };
   }
 
@@ -920,6 +992,7 @@ export class WikiContextBuilder {
     const fanIn: CallsContext['fanIn'] = hotspotSlice.map(h => ({
       symbol: h.name,
       file: fileBySymbol.get(h.name) ?? '',
+      qualifiedName: h.qualified_name,
       inDegree: h.fan_in,
     }));
 
@@ -999,6 +1072,7 @@ export class WikiContextBuilder {
         const calleeName = row[2] as string;
         const calleeFile = (row[3] as string) ?? '';
         const calleeLine = (row[4] as number) ?? 0;
+        const calleeParent = (row[5] as string | null) ?? null;
 
         if (callerName === calleeName && callerFile === calleeFile) continue;
         if (isTestPath(calleeFile)) continue;
@@ -1009,7 +1083,7 @@ export class WikiContextBuilder {
         if (seen.has(edgeKey)) continue;
         seen.add(edgeKey);
 
-        edges.push({ caller: callerName, callee: calleeName, calleeFile, calleeLine });
+        edges.push({ caller: callerName, callee: calleeName, calleeParent, calleeFile, calleeLine });
 
         const calleeKey = `${calleeName}@${calleeFile}`;
         if (!visited.has(calleeKey)) {
@@ -1078,7 +1152,15 @@ export class WikiContextBuilder {
     if (!def) return null;
 
     const { symbols, edges, boundaries } = this.fileEvidence(def.files);
-    return { id: def.id, title: def.title, files: def.files, symbols, edges, boundaries };
+    return {
+      id: def.id,
+      title: def.title,
+      files: def.files,
+      symbols,
+      edges,
+      boundaries,
+      ...(this.intentProvider ? { intent: this.intentProvider.intentForFiles(def.files) } : {}),
+    };
   }
 
   /**
@@ -1103,6 +1185,7 @@ export class WikiContextBuilder {
       brief: pg.brief,
       files: pg.files,
       symbols, edges, boundaries,
+      ...(this.intentProvider ? { intent: this.intentProvider.intentForFiles(pg.files) } : {}),
     };
   }
 
@@ -1111,7 +1194,7 @@ export class WikiContextBuilder {
     const fileList = files.map(f => `"${f.replace(/"/g, '\\"')}"`).join(',');
     const symQ = this.client.queryGraph(
       `MATCH (n) WHERE n.file_path IN [${fileList}] AND n.is_test = false
-         AND n.docstring IS NOT NULL AND n.label IN ['Class', 'Method', 'Function']
+         AND (n.docstring IS NOT NULL OR n.complexity > 5) AND n.label IN ['Class', 'Method', 'Function']
        RETURN n.name AS name, n.label AS label, n.file_path AS file, n.start_line AS line,
               n.docstring AS doc, n.signature AS sig, n.complexity AS cx
        ORDER BY n.complexity DESC LIMIT 25`,
@@ -1302,7 +1385,42 @@ export class WikiContextBuilder {
       loopDepth: (row[3] as number) ?? 0,
     }));
 
-    return { constants, hotFunctions };
+    // 常量注释证据：每个限制「防什么失控场景」的直接叙述源（源码同行/上邻注释）
+    const constFiles = [...new Set(constants.map(c => c.filePath))].slice(0, 12);
+    const intent = this.intentProvider ? this.intentProvider.constComments(constFiles) : undefined;
+
+    return {
+      constants,
+      hotFunctions,
+      ...(intent && intent.length > 0 ? { intent } : {}),
+    };
+  }
+
+  /**
+   * decisions.md 数据源：设计决策与演进（git 提交 + 文档小节证据锚定）。
+   * 只承载真实证据，无任何证据时返回 null（WikiService 剔除页面并给出原因），
+   * 规避旧版「自动推导条目伪装成决策记录」的失败模式。
+   */
+  buildDecisionsContext(): DecisionsContext | null {
+    if (!this.intentProvider) return null;
+    const arch = this.client.getArchitecture();
+    const pkgNames = arch.packages.map(p => p.name);
+    this.prepareIntentModules(pkgNames);
+
+    const gitTimeline = this.intentProvider.gitTimeline();
+    const docDecisions = this.intentProvider.docEvidence();
+    const hotFileChurn = this.intentProvider.hotFileChurn(10);
+    if (gitTimeline.length === 0 && docDecisions.length === 0 && hotFileChurn.length === 0) {
+      return null;
+    }
+    const depCommits = this.intentProvider.depCommitEvidence([...this.getDepNames()].slice(0, 20));
+
+    return {
+      gitTimeline,
+      docDecisions,
+      hotFileChurn,
+      ...(depCommits.length > 0 ? { depCommits } : {}),
+    };
   }
 
   /**
@@ -1424,6 +1542,10 @@ export class WikiContextBuilder {
       .filter(name => !usedDeps.has(name))
       .map(name => ({ name, version: deps[name] ?? devDeps[name] ?? '' }));
 
+    // 依赖引入动机：提交主题中点名依赖的记录（选型理由的 git 佐证）
+    const depNames = [...new Set([...coreDeps, ...devDepsUsed].map(d => d.name))];
+    const intent = this.intentProvider?.depCommitEvidence(depNames);
+
     return {
       coreDeps,
       devDeps: devDepsUsed,
@@ -1431,6 +1553,7 @@ export class WikiContextBuilder {
       runtime: pkg.type === 'module' ? 'ESM' : 'CJS',
       buildTool: this.detectBuildTool(devDeps),
       packageManager: this.detector.detectEnvironment().packageManager,
+      ...(intent && intent.length > 0 ? { intent } : {}),
     };
   }
 

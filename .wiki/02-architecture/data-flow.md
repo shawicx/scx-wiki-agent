@@ -29,7 +29,7 @@
 | registerBuildCommand | globalConfigPath | src/shared/config.ts:32 |
 | registerBuildCommand | FileScanner | src/core/scanner.ts:37 |
 | registerBuildCommand | CodebaseMemoryClient | src/mcp/codebase-memory-client.ts:119 |
-| registerBuildCommand | WikiService | src/services/wiki-service.ts:39 |
+| registerBuildCommand | WikiService | src/services/wiki-service.ts:40 |
 | loadGlobalConfig | globalConfigPath | src/shared/config.ts:32 |
 | loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:61 |
 | parseGlobalConfig | expandEnvRefs | src/shared/config.ts:46 |
@@ -70,7 +70,7 @@
 | registerBuildCommand | globalConfigPath | src/shared/config.ts:32 |
 | registerBuildCommand | FileScanner | src/core/scanner.ts:37 |
 | registerBuildCommand | CodebaseMemoryClient | src/mcp/codebase-memory-client.ts:119 |
-| registerBuildCommand | WikiService | src/services/wiki-service.ts:39 |
+| registerBuildCommand | WikiService | src/services/wiki-service.ts:40 |
 | registerInitCommand | globalConfigPath | src/shared/config.ts:32 |
 | registerScanCommand | ScanService | src/services/scan-service.ts:3 |
 | loadGlobalConfig | globalConfigPath | src/shared/config.ts:32 |
@@ -84,7 +84,7 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:70 |
+| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:73 |
 
 ## verifyAndAnnotateClaims
 
@@ -94,10 +94,10 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| verifyAndAnnotateClaims | extractClaims | src/knowledge/claim-verifier.ts:47 |
-| verifyAndAnnotateClaims | fileStems | src/knowledge/claim-verifier.ts:137 |
-| verifyAndAnnotateClaims | locallyVerified | src/knowledge/claim-verifier.ts:87 |
-| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:70 |
+| verifyAndAnnotateClaims | extractClaims | src/knowledge/claim-verifier.ts:50 |
+| verifyAndAnnotateClaims | fileStems | src/knowledge/claim-verifier.ts:140 |
+| verifyAndAnnotateClaims | locallyVerified | src/knowledge/claim-verifier.ts:90 |
+| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:73 |
 ## Related
 
 - 同目录：[architecture.md](architecture.md) · [modules.md](modules.md)

@@ -35,8 +35,9 @@ The core workflow is 3 commands:
 2. **Scan** (`scx-wiki-agent scan`) → `FileScanner` walks the project (gitignore-aware), detects tech stack (dead-dependency filtered) and project type
 3. **Build** (`scx-wiki-agent build`) → `WikiService` orchestrates:
    - `CodebaseMemoryClient.ensureIndexed` (subprocess to codebase-memory-mcp)
-   - `WikiContextBuilder` → per-page context from graph queries (getArchitecture / queryGraph / getCodeSnippet), with hotspot-based enrichment for thin-evidence pages
-   - `WikiPageGenerator` (LLM via Vercel AI SDK `streamText`) or `WikiFallbackBuilder` (pure rules)
+   - `IntentEvidenceProvider` (deterministic "why" evidence: comments/git/docs/tests, fail-open)
+   - `WikiContextBuilder` → per-page context from graph queries (getArchitecture / queryGraph / getCodeSnippet), with hotspot-based enrichment for thin-evidence pages and intent-evidence wiring
+   - `WikiPageGenerator` (LLM via Vercel AI SDK `streamText`) or `WikiFallbackBuilder` (pure rules, also renders intent evidence)
    - Deterministic page-header evidence block (`wiki-evidence.ts`) + page-bottom Related section
    - `validatePageContent` quality gate (error rules block writing, warn rules go to the build report)
 
@@ -54,10 +55,11 @@ shared/           → Constants and utilities
 ### Key Design Decisions
 
 - **No self-built index** — the old tree-sitter + SQLite/FTS5 pipeline was removed (ADR-001, 2026-06). All code-structure data comes from codebase-memory-mcp subprocess calls. Do not reintroduce local parsing/indexing.
-- **PageRegistry (18 pages, three tiers)** — structure / operations / surface. Directory structure is deterministic (numbered dirs), NOT LLM-generated.
+- **PageRegistry (18 pages, three tiers)** — structure / operations / surface. Directory structure is deterministic (numbered dirs), NOT LLM-generated. The `decisions` page renders only git/doc-anchored evidence and is skipped when both channels are empty.
 - **Dual-path generation** — every page tries LLM first, falls back per-page to rule templates on `--no-llm` / no model / empty output / error / gate failure.
-- **Anti-hallucination rules R1-R6** are injected into every LLM system prompt (`ANTI_HALLUCINATION` in `src/knowledge/wiki-page-generator.ts`): anchor enforcement, edge tables over sequence diagrams, no fabricated usage, structured output, 待确认 markers, diagram truthfulness.
-- **Quality gate is pure-function** (`wiki-quality-validator.ts`): empty-shell & secret are errors; dead-link / broken-anchor / thin-evidence / mermaid-ghost / diagram-misuse are warnings surfaced in the build report.
+- **Anti-hallucination rules R1-R7** are injected into every LLM system prompt (`ANTI_HALLUCINATION` in `src/knowledge/wiki-page-generator.ts`): anchor enforcement, edge tables over sequence diagrams, no fabricated usage, structured output, 待确认 markers, diagram truthfulness, rationale anchoring (motive claims need comment/commit/doc anchors or explicit 「推断」 marking).
+- **Quality gate is pure-function** (`wiki-quality-validator.ts`): empty-shell & secret are errors; dead-link / broken-anchor / thin-evidence / mermaid-ghost / diagram-misuse / unanchored-rationale are warnings surfaced in the build report.
+- **Intent evidence layer** (`intent-evidence.ts`) — deterministic "why" evidence (comments, git first/last commits & themes, doc sections, test titles) with anchors, budgets, fail-open git, disk cache in `.scx-wiki-agent/cache/intent.json`; consumed by both LLM and rule paths.
 - **Evidence anchoring is deterministic** — the `<details>` source-file block is injected by the tool from scanned file lists; LLMs never generate it.
 - **Adaptive topic pages** — up to 4 repo-specific cross-module topics (08-topics/) are derived deterministically from graph clusters (boundaries as fallback; skip when none qualify). Definitions are locked in `.scx-wiki-agent/topics.json` (hand-editable; `--refresh-topics` re-detects). Topic page names use the `topic:<id>` form throughout the pipeline.
 - **LLM prompts and all wiki output are in Chinese.** AI SDK v6 uses `maxOutputTokens` (not `maxTokens`).

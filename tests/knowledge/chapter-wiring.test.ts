@@ -82,7 +82,7 @@ describe('buildChapterPageContext（章节页）', () => {
   const files = ['src/a.ts', 'src/b.ts', 'src/c.ts'];
   const fileList = files.map(f => `"${f}"`).join(',');
   const symCypher = `MATCH (n) WHERE n.file_path IN [${fileList}] AND n.is_test = false
-         AND n.docstring IS NOT NULL AND n.label IN ['Class', 'Method', 'Function']
+         AND (n.docstring IS NOT NULL OR n.complexity > 5) AND n.label IN ['Class', 'Method', 'Function']
        RETURN n.name AS name, n.label AS label, n.file_path AS file, n.start_line AS line,
               n.docstring AS doc, n.signature AS sig, n.complexity AS cx
        ORDER BY n.complexity DESC LIMIT 25`;

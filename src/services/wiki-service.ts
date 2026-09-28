@@ -11,6 +11,7 @@ import type { PageQualityReport } from '../knowledge/wiki-quality-validator.js';
 import { verifyAndAnnotateClaims, collectContextKeys } from '../knowledge/claim-verifier.js';
 import type { ClaimStats } from '../knowledge/claim-verifier.js';
 import { extractDefinedSymbolNames } from '../knowledge/source-fallback.js';
+import { IntentEvidenceProvider, countIntentEvidence } from '../knowledge/intent-evidence.js';
 import { collectEvidenceFiles, buildEvidenceBlock, injectEvidenceBlock } from '../knowledge/wiki-evidence.js';
 import { ConfigDetector } from '../knowledge/config-detector.js';
 import { TopicDiscovery, loadTopics, saveTopics } from '../knowledge/topic-discovery.js';
@@ -121,8 +122,13 @@ export class WikiService {
     const detector = new ConfigDetector(this.scanResult.rootDir);
     detector.setSourceFiles(this.scanResult.files.map(f => f.absolutePath));
 
+    // 意图证据层：「为什么」的确定性证据源（注释/git/文档/测试），
+    // fail-open——无 git/无注释时各页 intent 字段缺省，绝不阻断构建
+    const intentProvider = new IntentEvidenceProvider(this.scanResult, { agentDir });
+
     const contextBuilder = new WikiContextBuilder(this.client, this.scanResult, detector);
     contextBuilder.setTopics(topics);
+    contextBuilder.setIntentProvider(intentProvider);
     if (outlineReport) contextBuilder.setOutlineChapters(outlineReport.chapters);
     const fallbackBuilder = new WikiFallbackBuilder();
     const onChunk = options?.onChunk ?? (() => {});
@@ -153,6 +159,24 @@ export class WikiService {
       }
     }
 
+    // decisions 预检：git 演进/文档决策证据全缺时整页剔除（复用 data-flow 同款模式，
+    // 避免规划表与 Related 出现死链；预检 context 复用避免重复探测）
+    if (pages.includes('decisions')) {
+      const decContext = contextBuilder.buildByName('decisions', pages);
+      if (decContext !== null && decContext !== undefined) {
+        prebuiltContexts.set('decisions', decContext);
+      } else {
+        pages = pages.filter(p => p !== 'decisions');
+        const oldRel = pageRelPath('decisions');
+        const oldPath = join(wikiDir, oldRel);
+        if (existsSync(oldPath)) {
+          rmSync(oldPath);
+          legacyRemoved.push(oldRel);
+        }
+        skippedPages.push({ page: 'decisions', reason: '无决策证据（git 历史/设计文档均不可用），跳过空壳页生成' });
+      }
+    }
+
     // 接管式清理（update 模式路径；full 模式写盘前整目录重建，跳过）：
     // 旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页/章节页/编号目录残留 + 空目录
     if (mode !== 'full') {
@@ -171,6 +195,7 @@ export class WikiService {
 
     const qualityReports: PageQualityReport[] = [];
     const claimStats: Array<{ page: string } & ClaimStats> = [];
+    const intentCoverage: Array<{ page: string; counts: Record<string, number> }> = [];
 
     // full 模式：写盘前整目录重建（此刻规划已全部成功，后续任意页失败也有逐页降级兑底）
     if (mode === 'full') {
@@ -186,6 +211,12 @@ export class WikiService {
       if (pageContext === null || pageContext === undefined) {
         skippedPages.push({ page, reason: '页面 context 未实现，跳过写盘' });
         continue;
+      }
+
+      // 意图证据覆盖统计（构建报告「为什么」含量度量）
+      const intentCounts = countIntentEvidence(pageContext);
+      if (Object.keys(intentCounts).length > 0) {
+        intentCoverage.push({ page, counts: intentCounts });
       }
 
       // LLM 输出在生成阶段过闸：error 级违规直接降级规则路径
@@ -255,7 +286,7 @@ export class WikiService {
       writtenPages.push({ page, relPath, source: produced.source, status: existed ? 'updated' : 'created' });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport, claimStats);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport, claimStats, intentCoverage);
     return filenames;
   }
 
@@ -565,6 +596,7 @@ export class WikiService {
     llmDropped: Array<{ page: string; reason: string }>,
     outline: OutlineReport | null,
     claimStats: Array<{ page: string } & ClaimStats>,
+    intentCoverage: Array<{ page: string; counts: Record<string, number> }>,
   ): void {
     const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -655,6 +687,16 @@ export class WikiService {
     const evidenceCovered = reports.filter(r => r.evidence > 0).length;
     if (reports.length > 0) {
       lines.push(`  证据锚定：${evidenceCovered}/${reports.length} 页含源文件锚定块`);
+    }
+
+    // 意图证据覆盖（「为什么」含量度量：注释/git/文档/测试四通道）
+    if (intentCoverage.length > 0) {
+      const totals: Record<string, number> = {};
+      for (const { counts } of intentCoverage) {
+        for (const [kind, n] of Object.entries(counts)) totals[kind] = (totals[kind] ?? 0) + n;
+      }
+      const detail = Object.entries(totals).sort().map(([k, n]) => `${k} ${n}`).join(' / ');
+      lines.push(`  意图证据：${intentCoverage.length} 页携带（${detail}）`);
     }
 
     const warns = reports.flatMap(r => r.issues.filter(i => i.severity === 'warn'));

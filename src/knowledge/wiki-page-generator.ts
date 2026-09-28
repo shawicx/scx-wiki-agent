@@ -18,7 +18,9 @@ import type {
   CliContext,
   TopicContext,
   ChapterPageContext,
+  DecisionsContext,
 } from './types.js';
+import type { IntentEvidence } from './intent-evidence.js';
 import { isTopicPage, isChapterPage } from './page-registry.js';
 import { sanitizeWikiOutput } from './wiki-output-sanitizer.js';
 import { assembleSections, findSafeCut, isAbnormalFinish } from './wiki-continuation.js';
@@ -54,7 +56,7 @@ const CONTINUE_INSTRUCTION = [
   '请从中断处直接继续，严格遵守：',
   '- 禁止重复或改写已输出的内容，禁止重新开始',
   '- 禁止任何开场白、说明或寒暄，直接续写 Markdown 正文',
-  '- 保持既有章节编号、表格与图表规范，反幻觉规则 R1-R6 继续生效',
+  '- 保持既有章节编号、表格与图表规范，反幻觉规则 R1-R7 继续生效',
   '- 一次性写完剩余全部章节',
 ].join('\n');
 
@@ -71,6 +73,16 @@ function moduleKeyOf(filePath: string): string {
   const srcIdx = parts.indexOf('src');
   if (srcIdx >= 0 && srcIdx + 1 < parts.length) return parts[srcIdx + 1];
   return parts.length > 1 ? parts[0] : filePath;
+}
+
+/** 意图证据 → 紧凑 prompt 形态（kind/text/anchor/target 摘要，预算内原样引用） */
+function intentToPrompt(items: IntentEvidence[] | undefined): Array<{ kind: string; text: string; anchor: string; target: string }> {
+  return (items ?? []).map(e => ({
+    kind: e.kind,
+    text: e.text,
+    anchor: e.anchor,
+    target: e.target.symbol ?? e.target.module ?? e.target.file ?? '',
+  }));
 }
 
 /** 分节作用域约束：告知本页节清单与本节职责，防止跨节越界或重复 */
@@ -143,6 +155,7 @@ export class WikiPageGenerator {
       case 'glossary': return this.generateGlossary(ctx, onChunk);
       case 'testing': return this.generateTesting(ctx, onChunk);
       case 'constraints': return this.generateConstraints(ctx, onChunk);
+      case 'decisions': return this.generateDecisions(ctx, onChunk);
       case 'environment': return this.generateEnvironment(ctx, onChunk);
       case 'tech-stack': return this.generateTechStack(ctx, onChunk);
       case 'conventions': return this.generateConventions(ctx, onChunk);
@@ -160,7 +173,7 @@ export class WikiPageGenerator {
 - 第一段用3-5句话说明项目是什么、解决什么问题、面向什么场景；如提供 readmeExcerpt（仓库 README 自述），须吸收其项目定位与功能描述（冲突处以代码证据为准并标「待确认」）
 - 如 languages 显示多语言（如 TypeScript + Rust），必须在概述中说明各语言的职责域（前端/后端划分），不得遗漏任一语言的存在；各语言的 exampleFiles 是扫描清单内的真实文件，职责描述必须锚定这些完整路径，严禁以「未提供该语言文件路径」为由标「待确认」
 - 如提供 docsFiles，在概述末尾列出延伸阅读清单（相对路径原样保留）
-- "核心设计思路"章节：用2-3段自然语言描述项目的架构理念、关键设计决策、技术选型理由（结合技术栈）
+- "核心设计思路"章节：用2-3段自然语言描述项目的架构理念、关键设计决策、技术选型理由（结合技术栈）；如提供 intent（意图证据：注释/提交/文档小节/测试行为），每条动机叙述必须引用其原文并携带证据锚点（file:line / commit 哈希+日期 / 文档路径#标题），无证据支撑的设计判断标注「推断」并写明依据（R7）
 - "技术栈"章节：用表格列出每项技术及用途，并在表格后用1-2段分析技术选型的合理性；如提供 depUsage（依赖使用证据），用途陈述必须锚定其证据——usageKind=import 锚定 importFiles、test 锚定测试文件、script 锚定 scripts 命令；usageKind ≠ none 的依赖严禁标「待确认」或「声明未用」，仅 none 可标「声明未用」
 - "项目结构"章节：逐一描述每个源代码目录的职责（至少覆盖所有 sourceDirs），说明目录间的关系；多语言项目的 sourceDirs 含各语言的源码目录（如 src 与 src-tauri）
 - "入口文件"章节：列出每个入口点，说明其启动流程和职责
@@ -190,6 +203,7 @@ export class WikiPageGenerator {
           })),
         supplementalSymbols: ctx.supplementalSymbols ?? [],
         depUsage: ctx.depUsage ?? [],
+        intent: intentToPrompt(ctx.intent),
       }, null, 2),
     });
   }
@@ -204,6 +218,8 @@ export class WikiPageGenerator {
       name: m.name,
       symbolCount: m.symbols.length,
       languages: m.languages ?? [],
+      fanIn: m.fanIn,
+      fanOut: m.fanOut,
       topSymbols: m.symbols
         .filter((s, i, a) => a.findIndex(t => t.name === s.name) === i)
         .slice(0, 6)
@@ -215,6 +231,7 @@ export class WikiPageGenerator {
         })),
       dependsOn: [...new Set(m.outgoingRelations.map(r => r.target))].slice(0, 5),
       usedBy: [...new Set(m.incomingRelations.map(r => r.source))].slice(0, 5),
+      intent: intentToPrompt(m.intent),
     });
     const relations = ctx.interModuleRelations
       .filter((r, i, a) => a.findIndex(t => t.source === r.source && t.target === r.target) === i)
@@ -250,7 +267,7 @@ export class WikiPageGenerator {
 
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- 对本批每个模块，用1-2段详细描述其职责、核心符号的作用（引用 docstring 和 signature）、设计意图
+- 对本批每个模块，用1-2段详细描述其职责、核心符号的作用（引用 docstring 和 signature）、设计意图；如模块携带 intent（文件头自述/首提交/高频提交主题/测试行为承诺），设计意图必须优先引用这些证据原文并携带锚点（file:line / commit 哈希+日期），无证据的意图叙述标注「推断」并写明依据（R7）；fanIn/fanOut 是模块重要性的量化依据，可引用
 - 模块的 languages 显示多语言时，必须分别说明各语言的职责域（如该模块同时含 TypeScript 与 Rust 代码）
 - 如果模块有 topSymbols，必须逐一说明其用途
 - 只描述本批数据中的模块，禁止描述其他批次的模块`,
@@ -325,6 +342,8 @@ export class WikiPageGenerator {
       name: m.name,
       files: m.files.slice(0, 10),
       languages: m.languages ?? [],
+      fanIn: m.fanIn,
+      fanOut: m.fanOut,
       topSymbols: m.symbols
         .filter((s, i, a) => a.findIndex(t => t.name === s.name) === i)
         .slice(0, 6)
@@ -340,6 +359,7 @@ export class WikiPageGenerator {
       })),
       dependsOn: [...new Set(m.outgoingRelations.map(r => r.target))].slice(0, 5),
       usedBy: [...new Set(m.incomingRelations.map(r => r.source))].slice(0, 5),
+      intent: intentToPrompt(m.intent),
     });
 
     const hasOther = (ctx.otherModules ?? []).length > 0;
@@ -376,7 +396,7 @@ export class WikiPageGenerator {
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - 对本批的每个模块，包含：
   - "职责"：该模块承担的职责（基于符号的 docstring 和 signature 详细说明）
-  - "设计意图"：设计这个模块的原因，它在整体架构中的角色
+  - "设计意图"：设计这个模块的原因，它在整体架构中的角色；如模块携带 intent（文件头自述/首提交/高频提交主题/测试行为承诺），必须优先引用证据原文并携带锚点（file:line / commit 哈希+日期，R7），无证据时标注「推断」并写明依据（命名/签名/依赖方向）
   - "交互方式"：与其他模块的协作方式（基于 dependsOn 和 usedBy）
   - "文件结构"：用表格列出该模块的文件及其关键符号和职责（文件名 | 关键符号 | 职责）
   - "核心符号"：对每个 topSymbol，用1-2句说明其用途（基于 docstring/signature）
@@ -506,7 +526,7 @@ ${hasIpc ? `
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - "环境问题"章节：详细列出与项目技术栈相关的环境配置问题、版本冲突、依赖安装问题及解决方案（nodeVersion/envVars/packageManager 数据直接引用）
 - "构建问题"章节：详细列出可能的构建失败场景（如 TypeScript 编译错误、打包问题、ESM/CJS 兼容）及解决方案（scripts.build 等实际命令直接引用）
-- "运行时问题"章节：详细列出可能的运行时问题（如模块解析、路径问题、权限问题、外部依赖缺失如 codebase-memory-mcp 未安装）及解决方案；constants 中的限制常量（超时/上限）是排障的关键边界，必须逐个说明触界时的典型症状
+- "运行时问题"章节：详细列出可能的运行时问题（如模块解析、路径问题、权限问题、外部依赖缺失如 codebase-memory-mcp 未安装）及解决方案；constants 中的限制常量（超时/上限）是排障的关键边界，必须逐个说明触界时的典型症状；如提供 intent 中的 why-marker（源码 TODO/FIXME/HACK 标记）与 git-churn（高频变更）证据，它们是作者自认的真实风险点与维护热点，按锚点引用并纳入对应问题条目（R7）
 - "调试技巧"章节：列出针对该项目的调试方法（如 watch 构建、单文件测试调试、如何查看日志；入口文件 entryFiles 是排障起点）
 - 每个问题用"问题描述 → 原因分析 → 解决方案"的详细格式，解决方案要具体可操作（给出实际命令）
 - 只描述与项目技术栈相关的问题，不要编造不相关的场景；如提供 depUsage（依赖使用证据），技术相关问题的叙述按 usageKind 锚定（import 锚定 importFiles、test 锚定测试文件、script 锚定 scripts 命令），usageKind ≠ none 的依赖严禁标「待确认」或「声明未用」
@@ -523,6 +543,7 @@ ${hasIpc ? `
         constants: ctx.constants ?? [],
         entryFiles: ctx.entryFiles ?? [],
         depUsage: ctx.depUsage ?? [],
+        intent: intentToPrompt(ctx.intent),
       }, null, 2),
     });
   }
@@ -614,7 +635,7 @@ ${hasIpc ? `
 - "关键符号"：对每个核心符号，用1-2段说明其用途与在主题中的角色（基于 docstring/signature，锚点用 file:line）
 - "协作方式"：基于 edges 边表分析文件间如何配合（调用方向、数据流），用表格呈现调用边（R2 严禁时序图）
 - "跨模块边界"：基于 boundaries 分析该主题与外部的耦合点及修改代价
-- "设计动机"：基于符号命名与协作模式推断该主题的设计意图，推断处须标注为推断
+- "设计动机"：如提供 intent（文件头自述/符号注释/首提交/测试行为承诺），必须优先引用证据原文并携带锚点（file:line / commit 哈希+日期，R7）；无证据的动机推断须显式标注「推断」并写明推断依据（命名/协作模式）
 - 描述运行机制（生命周期、时序、等待/释放语义等）时，必须有数据中调用边或符号的 file:line 锚点佐证；无锚点佐证的机制描述必须显式标注「推断」，禁止以确定语气叙述
 - 严禁编造数据外的方法、参数或行为（R1/R3）`,
       userPrompt: JSON.stringify({
@@ -635,6 +656,7 @@ ${hasIpc ? `
           location: e.line > 0 ? `${e.file}:${e.line}` : e.file,
         })),
         boundaries: ctx.boundaries,
+        intent: intentToPrompt(ctx.intent),
       }, null, 2),
     });
   }
@@ -652,6 +674,7 @@ ${ctx.brief}
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - 开头用一两句话说明本页职责与所属章节
 - 按写作简报的要点组织小节；简报未覆盖但数据支持的内容可补充
+- 如提供 intent（文件头自述/符号注释/首提交/测试行为承诺），动机类叙述必须优先引用证据原文并携带锚点（file:line / commit 哈希+日期，R7）；无证据的推断标注「推断」并写明依据
 - 每条事实声明必须带 file:line 或函数名锚点（R1）
 - 调用关系用表格（调用方→被调用方→file:line），严禁时序图（R2）
 - 描述运行机制（生命周期、时序、等待/释放语义等）时，必须有数据中调用边或符号的 file:line 锚点佐证；无锚点佐证的机制描述必须显式标注「推断」，禁止以确定语气叙述
@@ -674,6 +697,7 @@ ${ctx.brief}
           location: e.line > 0 ? `${e.file}:${e.line}` : e.file,
         })),
         boundaries: ctx.boundaries,
+        intent: intentToPrompt(ctx.intent),
       }, null, 2),
     });
   }
@@ -699,7 +723,7 @@ ${ctx.brief}
 
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- "限制常量"：用表格列出（常量 | 值 | 源文件），并逐个解读该常量防止的是什么失控场景（超时/内存/规模上限等）
+- "限制常量"：用表格列出（常量 | 值 | 源文件），并逐个解读该常量防止的是什么失控场景（超时/内存/规模上限等）；如 intent 携带 const-comment（常量的源码注释），解读必须优先引用注释原文并携带 file:line 锚点（R7）——这是作者亲写的「为什么有这个限制」
 - "复杂度热点"：用表格列出（函数 | 源文件 | 复杂度 | 循环深度），对复杂度最高的前几个函数深入分析潜在风险与重构方向
 - "已知边界"：总结上述数据反映出的项目边界（哪些地方最脆弱、改动代价在哪）
 - 无数据的分类诚实标注「未检测到」，严禁编造阈值或性能数字（R5）
@@ -739,7 +763,7 @@ ${ctx.brief}
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - 开头用1-2段概述项目的技术选型全貌（运行时/构建工具/包管理器/核心框架）
-- "核心依赖"章节：用表格列出（依赖 | 版本 | 首个 import 点），按职责分组（框架/UI/状态/工具等），对每组用1-2段说明选型理由与协作关系（基于依赖职责与 import 分布，不得编造调用细节）
+- "核心依赖"章节：用表格列出（依赖 | 版本 | 首个 import 点），按职责分组（框架/UI/状态/工具等），对每组用1-2段说明选型理由与协作关系（基于依赖职责与 import 分布，不得编造调用细节）；如提供 intent（依赖相关提交主题 git-commit 证据），选型/引入动机必须优先引用提交主题并携带 commit 哈希+日期锚点（R7），无提交佐证的动机分析标注「推断」
 - "开发依赖"章节：用表格列出（依赖 | 版本 | 首个 import 点），说明各自的开发场景用途
 - "声明未用依赖"章节：仅当 unusedDeps 非空时输出表格，且必须在其前写明：「下表由源码 import 扫描推导（覆盖 .ts/.js/.vue/.css），存在动态加载、字符串引用等扫描盲区，清理前请人工复核」——严禁断言这些依赖一定无用
 - 每条 import 点锚点必须原样保留（R1/R3）
@@ -751,6 +775,7 @@ ${ctx.brief}
         runtime: ctx.runtime,
         buildTool: ctx.buildTool,
         packageManager: ctx.packageManager,
+        intent: intentToPrompt(ctx.intent),
       }, null, 2),
     });
   }
@@ -795,6 +820,41 @@ ${ctx.brief}
     });
   }
 
+  async generateDecisions(ctx: DecisionsContext, onChunk: (text: string) => void): Promise<string> {
+    const commitRef = (c: { hash: string; date: string; subject: string } | null) =>
+      c ? `commit:${c.hash.slice(0, 8)} (${c.date})「${c.subject}」` : '-';
+    return this.generate(onChunk, {
+      systemPrompt: `你是一个资深软件架构师。请基于 git 提交历史与仓库设计文档证据，生成「设计决策与演进」页面（Markdown格式）。
+
+本页的职责是从真实证据中还原项目的演进动机与关键决策。每条决策必须携带证据锚点（commit 短哈希+日期 或 文档路径#标题），无锚点的内容不得写成决策（R7）。
+
+要求：
+- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
+- "演进时间线"：基于 gitTimeline 用表格（模块 | 提交数 | 首次提交 | 最近提交 | 高频主题）梳理演进脉络，并用2-3段分析各模块的演进重心与节奏；首次提交主题是模块「诞生动机」的最直接证据，必须引用
+- "文档记录的决策"：基于 docDecisions 逐条引用文档小节（标题+摘录+锚点），说明其记录的设计决策与动机；摘录须忠实于原文
+- "依赖引入决策"：如提供 depCommits，逐条说明依赖引入时的提交主题佐证（保留 commit 锚点）
+- "高频变更热点"：基于 hotFileChurn 说明哪些文件变更最频繁，结合最近提交主题分析维护风险与稳定性
+- 提交主题为英文时保留原文，用中文解释其含义
+- 严禁把证据没有支撑的内容写成决策；严禁编造提交、文档或动机（R1/R3/R7）`,
+      userPrompt: JSON.stringify({
+        gitTimeline: (ctx.gitTimeline ?? []).map(t => ({
+          module: t.module,
+          commitCount: t.commitCount,
+          first: commitRef(t.first),
+          last: commitRef(t.last),
+          themes: t.themes,
+        })),
+        docDecisions: intentToPrompt(ctx.docDecisions),
+        hotFileChurn: (ctx.hotFileChurn ?? []).map(c => ({
+          file: c.file,
+          commitCount: c.commitCount,
+          last: commitRef(c.last),
+        })),
+        depCommits: intentToPrompt(ctx.depCommits),
+      }, null, 2),
+    });
+  }
+
   // --- Core generation ---
   private static readonly ANTI_HALLUCINATION = [
     '绝对规则：只能基于提供的JSON数据描述项目，严禁编造不存在的模块、服务、功能或业务场景。',
@@ -808,6 +868,7 @@ ${ctx.brief}
     'R4 结构化优先：用表格/列表而非散文；签名用代码块。',
     'R5 待确认标记：数据不足以描述的关键方面，写「待确认」并简述缺什么证据，禁止猜测或编造合理化解释；单页「待确认」总数控制在 5 处以内，只保留影响读者决策的关键缺口，次要缺口直接省略不提。',
     'R6 图表真实性：Mermaid 图中的节点/标签必须来自数据中的真实模块名、符号名或文件路径；无继承数据时严禁编造 classDiagram 继承边。',
+    'R7 动机锚定：动机/设计依据/演进类叙述必须锚定证据——注释引用（file:line）、提交信息（commit 短哈希+日期）、文档小节（路径#标题）、测试用例名（测试文件:行号）；数据中的 intent 数组即证据源，引用时保留锚点；无锚点的动机段必须显式标注「推断」并写明推断依据（命名/签名/结构特征），单页「推断」段不超过 2 处。',
     '',
     '图表选型指引：模块依赖→graph TD；调用关系→表格（R2）；数据流→阶段表；类层次→仅当数据含继承关系时用 classDiagram；状态变迁→仅当数据含状态枚举与转换证据时用 stateDiagram。',
     '',

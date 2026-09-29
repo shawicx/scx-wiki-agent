@@ -56,9 +56,19 @@ export interface OverviewContext {
 /** Module summary for architecture and modules pages */
 export interface ModuleSummary {
   name: string;
+  /** 该包映射到的全部生产文件数；files 仅是 prompt 用的代表文件子集 */
+  fileCount?: number;
   files: string[];
-  symbols: Array<{ name: string; type: SymbolType; docstring?: string | null; signature?: string | null; complexity?: number }>;
-  fileSymbols: Array<{ file: string; symbols: Array<{ name: string; type: SymbolType }> }>;
+  symbols: Array<{
+    name: string;
+    type: SymbolType;
+    file?: string;
+    startLine?: number;
+    docstring?: string | null;
+    signature?: string | null;
+    complexity?: number;
+  }>;
+  fileSymbols: Array<{ file: string; symbols: Array<{ name: string; type: SymbolType; file?: string; startLine?: number }> }>;
   outgoingRelations: Array<{ target: string; type: RelationType }>;
   incomingRelations: Array<{ source: string; type: RelationType }>;
   codeSnippets: Array<{ symbolName: string; content: string; startLine: number }>;

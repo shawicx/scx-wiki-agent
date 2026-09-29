@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WikiPageGenerator } from '../../src/knowledge/wiki-page-generator.js';
-import type { OverviewContext, ArchitectureContext } from '../../src/knowledge/types.js';
+import type { OverviewContext, ArchitectureContext, ModulesContext } from '../../src/knowledge/types.js';
 import type { SymbolType } from '../../src/core/types.js';
 
 // Mock the ai module
@@ -60,10 +60,16 @@ describe('WikiPageGenerator', () => {
       modules: [{
         name: 'services',
         files: ['src/services'],
-        symbols: [{ name: 'IndexService', type: 'class' as SymbolType }],
+        symbols: [{
+          name: 'IndexService',
+          type: 'class' as SymbolType,
+          file: 'src/services/index.ts',
+          startLine: 12,
+        }],
         outgoingRelations: [],
         incomingRelations: [],
         codeSnippets: [],
+        fileCount: 7,
       }],
       interModuleRelations: [],
     };
@@ -74,7 +80,53 @@ describe('WikiPageGenerator', () => {
     const prompts = mockStreamText.mock.calls.map(c => (c[0] as any).prompt as string);
     expect(prompts.length).toBe(3);
     expect(prompts[0]).toContain('services');
+    expect(prompts[0]).toContain('"fileCount": 7');
     expect(prompts.join('\n')).toContain('IndexService');
+    expect(prompts.join('\n')).toContain('src/services/index.ts:12');
+  });
+
+  it('should preserve module symbol file anchors and real file counts in modules prompt', async () => {
+    mockStreamText.mockImplementation((() => ({
+      fullStream: (async function* () {
+        yield { type: 'text-delta', text: '# Modules' };
+      })(),
+    })) as any);
+
+    const generator = new WikiPageGenerator('gpt-4o-mini');
+    const symbols = Array.from({ length: 10 }, (_, i) => ({
+      name: `moduleSymbol${i}`,
+      type: 'function' as SymbolType,
+      file: `src/knowledge/module-${i}.ts`,
+      startLine: i + 1,
+    }));
+    const ctx: ModulesContext = {
+      modules: [{
+        name: 'knowledge',
+        files: ['src/knowledge/representative.ts'],
+        fileCount: 18,
+        symbols,
+        fileSymbols: [{
+          file: 'src/knowledge/wiki-context-builder.ts',
+          symbols: [{
+            name: 'buildArchitectureContext',
+            type: 'method' as SymbolType,
+            file: 'src/knowledge/wiki-context-builder.ts',
+            startLine: 350,
+          }],
+        }],
+        outgoingRelations: [],
+        incomingRelations: [],
+        codeSnippets: [],
+      }],
+    };
+
+    await generator.generateModules(ctx, vi.fn());
+    const prompts = mockStreamText.mock.calls.map(c => (c[0] as any).prompt as string);
+    expect(prompts.join('\n')).toContain('"fileCount": 18');
+    expect(prompts.join('\n')).toContain('src/knowledge/wiki-context-builder.ts:350');
+    for (let i = 0; i < 10; i++) {
+      expect(prompts.join('\n')).toContain(`moduleSymbol${i}`);
+    }
   });
 
   it('should return empty string when model is not configured', async () => {

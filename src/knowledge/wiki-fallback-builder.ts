@@ -55,6 +55,17 @@ function hasIntent(items: IntentEvidence[] | undefined): boolean {
   return (items ?? []).length > 0;
 }
 
+function symbolAnchorText(symbol: { name: string; file?: string; startLine?: number }): string {
+  const anchor = symbol.file && symbol.startLine && symbol.startLine > 0
+    ? `${symbol.file}:${symbol.startLine}`
+    : symbol.file;
+  return anchor ? `\`${symbol.name}\`（${anchor}）` : `\`${symbol.name}\``;
+}
+
+function languageSummary(languages: Array<{ language: string; fileCount: number }> | undefined): string {
+  return (languages ?? []).map(l => `${l.language} × ${l.fileCount}`).join(' / ');
+}
+
 export class WikiFallbackBuilder {
   /** 按页面名派发规则生成（供 PageRegistry 调用） */
   buildByName(page: string, ctx: any): string {
@@ -127,12 +138,19 @@ export class WikiFallbackBuilder {
 
     for (const mod of ctx.modules) {
       const topExports = mod.symbols
-        .filter((s, i, a) => a.findIndex(t => t.name === s.name) === i)
+        .filter((s, i, a) => a.findIndex(t => t.name === s.name && t.file === s.file) === i)
         .slice(0, 5);
-      const desc = topExports.length > 0
-        ? `Key exports: ${topExports.map(s => `\`${s.name}\``).join(', ')}`
-        : 'No top-level symbols detected';
-      builder.addSection(mod.name, desc);
+      const facts: string[] = [];
+      if (mod.fileCount !== undefined || mod.files.length > 0) {
+        facts.push(`Files: ${mod.fileCount ?? mod.files.length}`);
+      }
+      const languages = languageSummary(mod.languages);
+      if (languages) facts.push(`Languages: ${languages}`);
+      if (mod.fanIn !== undefined || mod.fanOut !== undefined) {
+        facts.push(`Fan-in/out: ${mod.fanIn ?? 0} / ${mod.fanOut ?? 0}`);
+      }
+      if (topExports.length > 0) facts.push(`Key exports: ${topExports.map(symbolAnchorText).join(', ')}`);
+      builder.addSection(mod.name, facts.join('\n\n'));
     }
 
     // 模块级意图证据（文件头自述/首提交/高频主题/行为承诺）
@@ -212,15 +230,20 @@ export class WikiFallbackBuilder {
 
     for (const mod of ctx.modules) {
       const topExports = mod.symbols
-        .filter((s, i, a) => a.findIndex(t => t.name === s.name) === i)
+        .filter((s, i, a) => a.findIndex(t => t.name === s.name && t.file === s.file) === i)
         .slice(0, 5)
-        .map(s => `\`${s.name}\``)
+        .map(symbolAnchorText)
         .join(', ');
 
       const dependsOn = [...new Set(mod.outgoingRelations.map(r => r.target))].slice(0, 5);
       const usedBy = [...new Set(mod.incomingRelations.map(r => r.source))].slice(0, 5);
 
       const parts: string[] = [];
+      if (mod.fileCount !== undefined || mod.files.length > 0) {
+        parts.push(`Files: ${mod.fileCount ?? mod.files.length}`);
+      }
+      const languages = languageSummary(mod.languages);
+      if (languages) parts.push(`Languages: ${languages}`);
       if (topExports) parts.push(`Key exports: ${topExports}`);
       if (dependsOn.length > 0) parts.push(`Depends on: ${dependsOn.map(d => `\`${d}\``).join(', ')}`);
       if (usedBy.length > 0) parts.push(`Used by: ${usedBy.map(u => `\`${u}\``).join(', ')}`);
@@ -241,7 +264,7 @@ export class WikiFallbackBuilder {
           ['File', 'Key Symbols'],
           mod.fileSymbols.map(fs => [
             `\`${fs.file}\``,
-            fs.symbols.slice(0, 5).map(s => `\`${s.name}\``).join(', '),
+            fs.symbols.slice(0, 5).map(symbolAnchorText).join(', ') || '-',
           ]),
         );
       }
@@ -251,7 +274,7 @@ export class WikiFallbackBuilder {
     if (ctx.otherModules && ctx.otherModules.length > 0) {
       builder.addSection(
         `其他模块（${ctx.otherModules.length} 个，概要）`,
-        '模块数超过详述上限，以下仅列名称与规模（详述按符号数取前 12）。',
+        '模块数超过详述上限，以下仅列名称与规模（详述按扇入/扇出/节点数/生产文件数综合重要性取前 12）。',
       );
       builder.addTable(
         ['模块', '文件数', '符号数'],

@@ -49,6 +49,15 @@ const CALLS_EDGE_LIMIT = 40;
 
 /** modules 页详述上限：超过后其余模块聚合为概要（DeepWiki 目录分组分块的防超限映射） */
 const MODULE_DETAIL_LIMIT = 12;
+/** 每个生产包的图谱符号候选上限（分包查询，避免全局 Top N 挤占小模块） */
+const MODULE_SYMBOL_CANDIDATE_LIMIT = 60;
+/** Architecture 页每模块代表符号上限 */
+const ARCHITECTURE_SYMBOL_LIMIT = 6;
+/** Modules 页每模块代表符号 / 代表文件上限 */
+const MODULES_SYMBOL_LIMIT = 10;
+/** Modules 页单个文件最多贡献的符号数（防单文件垄断） */
+const MODULES_SYMBOLS_PER_FILE_LIMIT = 5;
+const MODULES_REPRESENTATIVE_FILE_LIMIT = 12;
 
 /** 走 LLM 路径且证据可能偏薄的 structure 页，触发 hotspot 补强 */
 const EVIDENCE_ENRICH_PAGES = [
@@ -78,6 +87,10 @@ export class WikiContextBuilder {
   /** 意图证据提供器（「为什么」证据源；由 WikiService 注入，缺省时各页 intent 字段省略） */
   private intentProvider: IntentEvidenceProvider | null = null;
   private intentModulesReady = false;
+  /** 生产包索引与分包符号证据缓存（同一构建内 Architecture / Modules 复用） */
+  private architectureSnapshotCache: ArchitectureData | null = null;
+  private productionModulesCache: Array<{ pkg: ArchitectureData['packages'][number]; files: string[]; index: number }> | null = null;
+  private moduleEvidenceCache = new Map<string, ModuleSummary['symbols']>();
 
   setIntentProvider(provider: IntentEvidenceProvider): void {
     this.intentProvider = provider;
@@ -347,57 +360,142 @@ export class WikiContextBuilder {
     }
   }
 
-  buildArchitectureContext(): ArchitectureContext {
-    const arch = this.client.getArchitecture();
-    const pkgNames = arch.packages.map(p => p.name);
-    this.prepareIntentModules(pkgNames);
+  /**
+   * 生产包索引：graph package 必须能映射到至少一个非测试扫描文件。
+   * tests/fixtures/helpers 等无生产文件支撑的图谱包不进入 Architecture / Modules 主叙事。
+   */
+  private productionModules(): Array<{ pkg: ArchitectureData['packages'][number]; files: string[]; index: number }> {
+    if (this.productionModulesCache !== null) return this.productionModulesCache;
 
-    // 为每个 package 查核心符号（按复杂度，docstring 优先但非硬门槛：
-    // 无注释的高复杂度符号同样是模块职责证据，旧版 `docstring IS NOT NULL`
-    // 会把它们整批丢弃）
-    const symQ = this.client.queryGraph(
-      `MATCH (n) WHERE n.is_test = false AND (n.docstring IS NOT NULL OR n.complexity > 5)
-         AND n.label IN ['Class', 'Function', 'Method']
-       RETURN n.name AS name, n.label AS label, n.docstring AS doc,
-              n.signature AS sig, n.complexity AS cx, n.file_path AS file
-       ORDER BY n.complexity DESC LIMIT 50`,
-    );
-    // 按 package 聚合（路径段精确匹配归属；跳过测试路径），同时统计模块语言分布
-    const symbolsByPkg = new Map<string, ModuleSummary['symbols']>();
-    const langCountByPkg = new Map<string, Map<string, number>>();
-    for (const row of symQ.rows) {
-      const file = (row[5] as string) ?? '';
-      if (isTestPath(file)) continue;
-      const pkg = matchPackageForFile(file, pkgNames);
+    const arch = this.getArchitectureSnapshot();
+    const pkgNames = arch.packages.map(p => p.name);
+    const filesByPackage = new Map<string, string[]>();
+    for (const file of this.scanResult.files) {
+      if (isTestPath(file.relativePath)) continue;
+      const pkg = matchPackageForFile(file.relativePath, pkgNames);
       if (!pkg) continue;
-      if (!symbolsByPkg.has(pkg)) symbolsByPkg.set(pkg, []);
-      const syms = symbolsByPkg.get(pkg)!;
-      if (syms.length < 6) {
-        syms.push({
-          name: row[0] as string,
-          type: this.labelToSymbolType(row[1] as string),
-          docstring: (row[2] as string | null) ?? null,
-          signature: (row[3] as string | null) ?? null,
-          complexity: row[4] as number | undefined,
-        });
-      }
-      const domain = languageDomainOf(file) ?? 'other';
-      const counts = langCountByPkg.get(pkg) ?? new Map<string, number>();
-      counts.set(domain, (counts.get(domain) ?? 0) + 1);
-      langCountByPkg.set(pkg, counts);
+      const files = filesByPackage.get(pkg) ?? [];
+      files.push(file.relativePath);
+      filesByPackage.set(pkg, files);
     }
 
-    const toLanguages = (pkg: string) =>
-      [...(langCountByPkg.get(pkg) ?? new Map<string, number>())]
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3)
-        .map(([language, fileCount]) => ({ language, fileCount }));
+    this.productionModulesCache = arch.packages
+      .map((pkg, index) => ({ pkg, files: filesByPackage.get(pkg.name) ?? [], index }))
+      .filter(({ pkg, files }) => pkg.name.length > 0 && files.length > 0);
+    return this.productionModulesCache;
+  }
+
+  /** 分包查询 + 文件级 round-robin 公平采样，避免单个高复杂度文件垄断模块代表符号 */
+  private moduleEvidence(pkgName: string, files: string[], hotspotNames: ReadonlySet<string>): ModuleSummary['symbols'] {
+    if (this.moduleEvidenceCache.has(pkgName)) {
+      return this.moduleEvidenceCache.get(pkgName)!;
+    }
+    const fileList = files.map(f => `"${f.replace(/"/g, '\\"')}"`).join(',');
+    const q = this.client.queryGraph(
+      `MATCH (n) WHERE n.file_path IN [${fileList}] AND n.is_test = false
+       AND (n.docstring IS NOT NULL OR n.complexity > 0) AND n.label IN ['Class', 'Function', 'Method']
+       RETURN n.name AS name, n.label AS label, n.docstring AS doc, n.signature AS sig,
+              n.complexity AS cx, n.file_path AS file, n.start_line AS line
+       ORDER BY n.complexity DESC, n.file_path ASC, n.start_line ASC LIMIT ${MODULE_SYMBOL_CANDIDATE_LIMIT}`,
+      MODULE_SYMBOL_CANDIDATE_LIMIT,
+    );
+
+    const seen = new Set<string>();
+    const byFile = new Map<string, ModuleSummary['symbols']>();
+    for (const row of q.rows) {
+      const file = (row[5] as string) ?? '';
+      if (!file || isTestPath(file) || !files.includes(file)) continue;
+      const name = String(row[0] ?? '');
+      if (!name) continue;
+      const startLine = Number(row[6] ?? 0) || undefined;
+      const identity = `${name}@${file}:${startLine ?? 0}`;
+      if (seen.has(identity)) continue;
+      seen.add(identity);
+
+      const symbols = byFile.get(file) ?? [];
+      symbols.push({
+        name,
+        type: this.labelToSymbolType(row[1] as string),
+        file,
+        ...(startLine !== undefined ? { startLine } : {}),
+        docstring: (row[2] as string | null) ?? null,
+        signature: (row[3] as string | null) ?? null,
+        complexity: Number(row[4] ?? 0) || 0,
+      });
+      byFile.set(file, symbols);
+    }
+
+    const score = (symbol: { name: string; docstring?: string | null; complexity?: number } | undefined) =>
+      symbol === undefined
+        ? Number.NEGATIVE_INFINITY
+        : (symbol.complexity ?? 0) + (symbol.docstring ? 4 : 0) + (hotspotNames.has(symbol.name) ? 8 : 0);
+    const groups = [...byFile.entries()]
+      .map(([file, symbols]) => ({
+        file,
+        symbols: [...symbols].sort((a, b) =>
+          score(b) - score(a) || a.name.localeCompare(b.name) || (a.startLine ?? 0) - (b.startLine ?? 0)),
+      }))
+      .sort((a, b) => score(b.symbols[0]) - score(a.symbols[0]) || a.file.localeCompare(b.file));
+
+    const ordered: ModuleSummary['symbols'] = [];
+    const usedByFile = new Map<string, number>();
+    while (ordered.length < MODULES_SYMBOL_LIMIT && groups.length > 0) {
+      const group = groups[0];
+      if ((usedByFile.get(group.file) ?? 0) >= MODULES_SYMBOLS_PER_FILE_LIMIT) {
+        groups.shift();
+        continue;
+      }
+      const symbol = group.symbols.shift();
+      if (symbol) {
+        ordered.push(symbol);
+        usedByFile.set(group.file, (usedByFile.get(group.file) ?? 0) + 1);
+      }
+      if (group.symbols.length === 0) groups.shift();
+      else groups.push(groups.shift()!);
+    }
+
+    this.moduleEvidenceCache.set(pkgName, ordered);
+    return ordered;
+  }
+
+  /** Architecture / Modules 共用同一架构快照，避免分包索引与页面边界数据来自不同响应 */
+  private getArchitectureSnapshot(): ArchitectureData {
+    if (this.architectureSnapshotCache === null) {
+      this.architectureSnapshotCache = this.client.getArchitecture();
+    }
+    return this.architectureSnapshotCache;
+  }
+
+  private representativeFiles(files: string[], symbols: ModuleSummary['symbols']): string[] {
+    const symbolFiles = [...new Set(symbols.map(s => s.file).filter((f): f is string => !!f))];
+    const remaining = files.filter(f => !symbolFiles.includes(f));
+    return [...symbolFiles, ...remaining].slice(0, MODULES_REPRESENTATIVE_FILE_LIMIT);
+  }
+
+  private buildFileSymbols(files: string[], symbols: ModuleSummary['symbols']): ModuleSummary['fileSymbols'] {
+    const byFile = new Map<string, ModuleSummary['symbols']>();
+    for (const symbol of symbols) {
+      if (!symbol.file) continue;
+      const group = byFile.get(symbol.file) ?? [];
+      group.push(symbol);
+      byFile.set(symbol.file, group);
+    }
+    return files.map(file => ({ file, symbols: (byFile.get(file) ?? []).slice(0, 5) }));
+  }
+
+  buildArchitectureContext(): ArchitectureContext {
+    const arch = this.getArchitectureSnapshot();
+    const production = this.productionModules();
+    const productionNames = production.map(m => m.pkg.name);
+    const hotspotNames = new Set(arch.hotspots.map(h => h.name));
+    this.prepareIntentModules(productionNames);
 
     // 模块间依赖从 boundaries 回填：detail 分节按模块读 outgoing/incoming，
     // 空数组会让 LLM 如实写出「无依赖证据」并成页标注待确认
     const outgoing = new Map<string, ModuleSummary['outgoingRelations']>();
     const incoming = new Map<string, ModuleSummary['incomingRelations']>();
     for (const b of arch.boundaries) {
+      if (!productionNames.includes(b.from) || !productionNames.includes(b.to)) continue;
       const out = outgoing.get(b.from) ?? [];
       out.push({ target: b.to, type: 'calls' as RelationType });
       outgoing.set(b.from, out);
@@ -406,33 +504,39 @@ export class WikiContextBuilder {
       incoming.set(b.to, inc);
     }
 
-    const modules: ModuleSummary[] = arch.packages.map(pkg => ({
-      name: pkg.name,
-      files: [],
-      symbols: symbolsByPkg.get(pkg.name) ?? [],
-      fileSymbols: [],
-      outgoingRelations: outgoing.get(pkg.name) ?? [],
-      incomingRelations: incoming.get(pkg.name) ?? [],
-      codeSnippets: [],
-      languages: toLanguages(pkg.name),
-      fanIn: pkg.fan_in,
-      fanOut: pkg.fan_out,
-      ...(this.intentProvider?.moduleIntent(pkg.name)
-        ? { intent: this.intentProvider.moduleIntent(pkg.name) }
-        : {}),
-    }));
+    const modules: ModuleSummary[] = production.map(({ pkg, files }) => {
+      const symbols = this.moduleEvidence(pkg.name, files, hotspotNames).slice(0, ARCHITECTURE_SYMBOL_LIMIT);
+      return {
+        name: pkg.name,
+        fileCount: files.length,
+        files: this.representativeFiles(files, symbols),
+        symbols,
+        fileSymbols: [],
+        outgoingRelations: outgoing.get(pkg.name) ?? [],
+        incomingRelations: incoming.get(pkg.name) ?? [],
+        codeSnippets: [],
+        languages: this.languagesForFiles(files),
+        fanIn: pkg.fan_in,
+        fanOut: pkg.fan_out,
+        ...(this.intentProvider?.moduleIntent(pkg.name)
+          ? { intent: this.intentProvider.moduleIntent(pkg.name) }
+          : {}),
+      };
+    });
 
     const interModuleRelations = arch.boundaries.map(b => ({
       source: b.from,
       target: b.to,
       type: 'calls' as RelationType,
-    }));
+    })).filter(b => productionNames.includes(b.source) && productionNames.includes(b.target));
 
     return {
       modules,
       interModuleRelations,
-      layers: this.filterLayers(arch.layers, pkgNames),
-      boundaries: arch.boundaries.map(b => ({ from: b.from, to: b.to, callCount: b.call_count })),
+      layers: this.filterLayers(arch.layers, productionNames),
+      boundaries: arch.boundaries
+        .filter(b => productionNames.includes(b.from) && productionNames.includes(b.to))
+        .map(b => ({ from: b.from, to: b.to, callCount: b.call_count })),
       clusters: arch.clusters.map(c => ({
         label: c.label,
         members: c.members,
@@ -634,38 +738,17 @@ export class WikiContextBuilder {
   }
 
   buildModulesContext(): ModulesContext {
-    const arch = this.client.getArchitecture();
-    const pkgNames = arch.packages.map(p => p.name);
-    this.prepareIntentModules(pkgNames);
+    const arch = this.getArchitectureSnapshot();
+    const production = this.productionModules();
+    const productionNames = production.map(m => m.pkg.name);
+    const hotspotNames = new Set(arch.hotspots.map(h => h.name));
+    this.prepareIntentModules(productionNames);
 
-    // 用 Cypher 查每个文件的核心符号（按复杂度排序，有 docstring 优先）
-    const q = this.client.queryGraph(
-      `MATCH (n) WHERE n.is_test = false AND (n.docstring IS NOT NULL OR n.complexity > 0)
-       RETURN n.name AS name, n.label AS label, n.docstring AS doc, n.signature AS sig,
-              n.complexity AS cx, n.file_path AS file
-       ORDER BY n.file_path, n.complexity DESC LIMIT 60`,
-    );
-
-    // 按文件聚合符号（跳过测试路径的文件）
-    const symbolsByFile = new Map<string, Array<{ name: string; type: SymbolType; docstring?: string | null; signature?: string | null; complexity?: number }>>();
-    for (const row of q.rows) {
-      const file = row[5] as string;
-      if (!file || isTestPath(file)) continue;
-      if (!symbolsByFile.has(file)) symbolsByFile.set(file, []);
-      symbolsByFile.get(file)!.push({
-        name: row[0] as string,
-        type: this.labelToSymbolType(row[1] as string),
-        docstring: (row[2] as string | null) ?? null,
-        signature: (row[3] as string | null) ?? null,
-        complexity: row[4] as number | undefined,
-      });
-    }
-
-    // 把文件符号归属到对应的 package（路径段精确匹配，多段包名取最长）；
     // 模块间依赖从 boundaries 回填（detail 分节依赖此数据，空数组=成页「无依赖证据」待确认）
     const outOf = new Map<string, ModuleSummary['outgoingRelations']>();
     const inOf = new Map<string, ModuleSummary['incomingRelations']>();
     for (const b of arch.boundaries) {
+      if (!productionNames.includes(b.from) || !productionNames.includes(b.to)) continue;
       const out = outOf.get(b.from) ?? [];
       out.push({ target: b.to, type: 'calls' as RelationType });
       outOf.set(b.from, out);
@@ -673,20 +756,19 @@ export class WikiContextBuilder {
       inc.push({ source: b.from, type: 'calls' as RelationType });
       inOf.set(b.to, inc);
     }
-    const modules: ModuleSummary[] = arch.packages.map(pkg => {
-      const pkgFiles = Array.from(symbolsByFile.keys()).filter(f => matchPackageForFile(f, [pkg.name]) !== null);
+    const modules = production.map(({ pkg, files, index }) => {
+      const symbols = this.moduleEvidence(pkg.name, files, hotspotNames).slice(0, MODULES_SYMBOL_LIMIT);
+      const representativeFiles = this.representativeFiles(files, symbols);
       return {
         name: pkg.name,
-        files: pkgFiles,
-        symbols: pkgFiles.flatMap(f => symbolsByFile.get(f) ?? []).slice(0, 10),
-        fileSymbols: pkgFiles.map(f => ({
-          file: f,
-          symbols: (symbolsByFile.get(f) ?? []).slice(0, 5).map(s => ({ name: s.name, type: s.type })),
-        })),
+        fileCount: files.length,
+        files: representativeFiles,
+        symbols,
+        fileSymbols: this.buildFileSymbols(representativeFiles, symbols),
         outgoingRelations: outOf.get(pkg.name) ?? [],
         incomingRelations: inOf.get(pkg.name) ?? [],
         codeSnippets: [],
-        languages: this.languagesForFiles(pkgFiles),
+        languages: this.languagesForFiles(files),
         fanIn: pkg.fan_in,
         fanOut: pkg.fan_out,
         ...(this.intentProvider?.moduleIntent(pkg.name)
@@ -695,18 +777,26 @@ export class WikiContextBuilder {
       };
     });
 
-    // 大仓库防超限：模块数超过详述上限时，按符号数取前 N 详述，其余聚合为概要
+    // 大仓库防超限：按扇入/扇出/节点数/生产文件数综合重要性取前 N 详述，其余聚合为概要
     if (modules.length <= MODULE_DETAIL_LIMIT) {
       return { modules, ...(this.moduleIntentPageExtra()) };
     }
-    const sorted = [...modules].sort(
-      (a, b) => (b.symbols.length - a.symbols.length) || (b.files.length - a.files.length),
-    );
-    const detailed = sorted.slice(0, MODULE_DETAIL_LIMIT);
-    const otherModules = sorted.slice(MODULE_DETAIL_LIMIT).map(m => ({
-      name: m.name,
-      fileCount: m.files.length,
-      symbolCount: m.symbols.length,
+    const metadataByName = new Map(production.map(({ pkg, files, index }) => [pkg.name, { pkg, files, index }]));
+    const ranked = modules
+      .map(module => {
+        const meta = metadataByName.get(module.name)!;
+        const importance = meta.pkg.fan_in * 2
+          + meta.pkg.fan_out
+          + meta.pkg.node_count
+          + (module.fileCount ?? module.files.length);
+        return { module, meta, importance };
+      })
+      .sort((a, b) => b.importance - a.importance || a.meta.index - b.meta.index);
+    const detailed = ranked.slice(0, MODULE_DETAIL_LIMIT).map(r => r.module);
+    const otherModules = ranked.slice(MODULE_DETAIL_LIMIT).map(({ module, meta }) => ({
+      name: module.name,
+      fileCount: meta.files.length,
+      symbolCount: meta.pkg.node_count,
     }));
     return { modules: detailed, otherModules, ...this.moduleIntentPageExtra() };
   }

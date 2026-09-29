@@ -214,18 +214,26 @@ export class WikiPageGenerator {
 
   /** 架构页确定性节表：整体思路+架构图 → 核心模块详解（≤6 个/批）→ 依赖分析+横切关注点 */
   private buildArchitectureSections(ctx: ArchitectureContext): PageConfig[] {
+    const symbolAnchor = (s: { file?: string; startLine?: number }) =>
+      s.file && s.startLine && s.startLine > 0
+        ? `${s.file}:${s.startLine}`
+        : s.file ?? '';
     const toDetail = (m: ModuleSummary) => ({
       name: m.name,
+      fileCount: m.fileCount ?? m.files.length,
       symbolCount: m.symbols.length,
       languages: m.languages ?? [],
       fanIn: m.fanIn,
       fanOut: m.fanOut,
       topSymbols: m.symbols
-        .filter((s, i, a) => a.findIndex(t => t.name === s.name) === i)
+        .filter((s, i, a) => a.findIndex(t => t.name === s.name && t.file === s.file) === i)
         .slice(0, 6)
         .map(s => ({
           name: s.name,
           type: s.type,
+          file: s.file,
+          startLine: s.startLine,
+          anchor: symbolAnchor(s),
           docstring: s.docstring,
           signature: s.signature,
         })),
@@ -253,7 +261,11 @@ export class WikiPageGenerator {
 - "架构图"：用 Mermaid graph TD 展示完整的模块依赖关系图（节点用模块名，边表示依赖方向），Mermaid 图中的节点名必须与数据中的实际模块名一致
 - 不要展开单个模块的符号细节（详解由其他节负责）`,
         userPrompt: JSON.stringify({
-          modules: ctx.modules.map(m => ({ name: m.name, symbolCount: m.symbols.length })),
+          modules: ctx.modules.map(m => ({
+            name: m.name,
+            fileCount: m.fileCount ?? m.files.length,
+            symbolCount: m.symbols.length,
+          })),
           relations,
           layers: ctx.layers,
           clusters: ctx.clusters,
@@ -269,7 +281,7 @@ export class WikiPageGenerator {
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - 对本批每个模块，用1-2段详细描述其职责、核心符号的作用（引用 docstring 和 signature）、设计意图；如模块携带 intent（文件头自述/首提交/高频提交主题/测试行为承诺），设计意图必须优先引用这些证据原文并携带锚点（file:line / commit 哈希+日期），无证据的意图叙述标注「推断」并写明依据（R7）；fanIn/fanOut 是模块重要性的量化依据，可引用
 - 模块的 languages 显示多语言时，必须分别说明各语言的职责域（如该模块同时含 TypeScript 与 Rust 代码）
-- 如果模块有 topSymbols，必须逐一说明其用途
+- 如果模块有 topSymbols，必须逐一说明其用途；topSymbols 的 anchor 是提供的 file:line 证据，引用时必须原样保留
 - 只描述本批数据中的模块，禁止描述其他批次的模块`,
         userPrompt: JSON.stringify({
           modules: batch,
@@ -338,24 +350,38 @@ export class WikiPageGenerator {
 
   /** 模块页确定性节表：组织方式概述 → 模块详解（≤4 个/批）→ 其他模块汇总 */
   private buildModulesSections(ctx: ModulesContext): PageConfig[] {
+    const symbolAnchor = (s: { file?: string; startLine?: number }) =>
+      s.file && s.startLine && s.startLine > 0
+        ? `${s.file}:${s.startLine}`
+        : s.file ?? '';
     const toDetail = (m: ModuleSummary) => ({
       name: m.name,
+      fileCount: m.fileCount ?? m.files.length,
       files: m.files.slice(0, 10),
       languages: m.languages ?? [],
       fanIn: m.fanIn,
       fanOut: m.fanOut,
       topSymbols: m.symbols
-        .filter((s, i, a) => a.findIndex(t => t.name === s.name) === i)
-        .slice(0, 6)
+        .filter((s, i, a) => a.findIndex(t => t.name === s.name && t.file === s.file) === i)
+        .slice(0, 10)
         .map(s => ({
           name: s.name,
           type: s.type,
+          file: s.file,
+          startLine: s.startLine,
+          anchor: symbolAnchor(s),
           docstring: s.docstring,
           signature: s.signature,
         })),
       fileSymbols: m.fileSymbols.map(fs => ({
         file: fs.file,
-        symbols: fs.symbols.map(s => `${s.name}(${s.type})`),
+        symbols: fs.symbols.map(s => ({
+          name: s.name,
+          type: s.type,
+          file: s.file,
+          startLine: s.startLine,
+          anchor: symbolAnchor(s),
+        })),
       })),
       dependsOn: [...new Set(m.outgoingRelations.map(r => r.target))].slice(0, 5),
       usedBy: [...new Set(m.incomingRelations.map(r => r.source))].slice(0, 5),
@@ -381,7 +407,7 @@ export class WikiPageGenerator {
         userPrompt: JSON.stringify({
           modules: ctx.modules.map(m => ({
             name: m.name,
-            fileCount: m.files.length,
+            fileCount: m.fileCount ?? m.files.length,
             symbolCount: m.symbols.length,
           })),
         }, null, 2),
@@ -399,7 +425,7 @@ export class WikiPageGenerator {
   - "设计意图"：设计这个模块的原因，它在整体架构中的角色；如模块携带 intent（文件头自述/首提交/高频提交主题/测试行为承诺），必须优先引用证据原文并携带锚点（file:line / commit 哈希+日期，R7），无证据时标注「推断」并写明依据（命名/签名/依赖方向）
   - "交互方式"：与其他模块的协作方式（基于 dependsOn 和 usedBy）
   - "文件结构"：用表格列出该模块的文件及其关键符号和职责（文件名 | 关键符号 | 职责）
-  - "核心符号"：对每个 topSymbol，用1-2句说明其用途（基于 docstring/signature）
+  - "核心符号"：对每个 topSymbol，用1-2句说明其用途（基于 docstring/signature）；anchor 是工具提供的 file:line 证据，引用时必须原样保留
 - 模块的 languages 显示多语言时，必须分别说明各语言的职责域
 - 按模块重要性排序（保持数据顺序）
 - 只描述本批数据中的模块，禁止描述其他批次的模块

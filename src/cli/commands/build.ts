@@ -5,6 +5,7 @@ import { WikiService } from '../../services/wiki-service.js';
 import { CodebaseMemoryClient } from '../../mcp/codebase-memory-client.js';
 import { WIKI_DIR } from '../../shared/constants.js';
 import { loadGlobalConfig, globalConfigPath } from '../../shared/config.js';
+import { runConfirmationSession } from '../confirm-interaction.js';
 import type { WikiBuildOptions } from '../../knowledge/types.js';
 
 export function registerBuildCommand(program: Command) {
@@ -21,6 +22,7 @@ export function registerBuildCommand(program: Command) {
     .option('--mode <mode>', 'Build mode: full (wipe and rewrite .wiki) or update (skip unchanged pages); default full, config-overridable')
     .option('--refresh-topics', 'Re-detect adaptive topic pages and overwrite topics.json')
     .option('--refresh-outline', 'Re-plan outline chapters via LLM and overwrite outline.json')
+    .option('--confirm', 'Interactive confirmation pass for 待确认 items (after generation, before writing; TTY only)')
     .action(async (options) => {
       const root = options.projectRoot ?? process.cwd();
       const wikiDir = join(root, WIKI_DIR);
@@ -50,6 +52,9 @@ export function registerBuildCommand(program: Command) {
           : (config?.build.mode ?? 'full'),
         refreshTopics: options.refreshTopics === true,
         refreshOutline: options.refreshOutline === true,
+        confirmSession: options.confirm === true || config?.build.confirm === true
+          ? runConfirmationSession
+          : undefined,
         timeoutSec: config?.provider.timeoutSec,
         maxOutputTokens: config?.build.maxOutputTokens,
         onChunk: (filename, text) => {

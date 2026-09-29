@@ -10,6 +10,7 @@
 - src/cli/commands/build.ts
 - src/cli/commands/init.ts
 - src/cli/commands/scan.ts
+- src/cli/confirm-interaction.ts
 - src/cli/index.ts
 - src/core/scanner.ts
 - src/knowledge/wiki-page-generator.ts
@@ -20,11 +21,12 @@
 
 从代码知识图谱生成结构化中文 Markdown Wiki 的 CLI 工具（LLM 增强叙述 + 纯规则回退）
 
-A cli project with 78 files.
+A cli project with 82 files.
 
 ## Tech Stack
 
 - @ai-sdk/openai
+- @clack/prompts
 - ai
 - commander
 - ignore
@@ -53,7 +55,7 @@ A cli project with 78 files.
 | hasIntent | function | 8 |
 | isTopicPage | function | 8 |
 | intentToPrompt | function | 7 |
-| labelToSymbolType | function | 6 |
+| dedupeByAnchor | function | 6 |
 
 ## 设计依据（意图证据）
 

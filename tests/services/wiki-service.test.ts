@@ -444,6 +444,87 @@ describe('WikiService', () => {
     expect(client.searchCode).toHaveBeenCalledWith('ghostThing');
   });
 
+  it('两阶段构建：confirmSession 在生成后写盘前收到聚合项，resolve 后写盘无标记并持久化白名单', async () => {
+    mockStreamText.mockImplementation((() => ({
+      fullStream: (async function* () {
+        yield {
+          type: 'text-delta',
+          text: '# 概览\n\n核心由 `ghostThing` 构成。',
+        };
+      })(),
+      finishReason: Promise.resolve('stop'),
+    })) as any);
+
+    const client = createMockClient(); // searchCode 默认 0 命中 → ghostThing 查无实据
+    const wikiDir = join(tmpDir, 'wiki-confirm');
+    const agentDir = join(tmpDir, '.scx-wiki-agent');
+    rmSync(join(agentDir, 'outline.json'), { force: true });
+    rmSync(join(agentDir, 'confirmations.json'), { force: true });
+
+    const sessionCalls: number[][] = [];
+    const confirmSession = vi.fn(async (items: Array<{ key: string }>) => {
+      sessionCalls.push(items.map(i => i.key));
+      // 全部确认为事实
+      return items
+        .filter(i => i.key === 'claim\nghostThing')
+        .map(i => ({ key: i.key, kind: 'claim' as const, action: 'resolve' as const }));
+    });
+
+    const service = new WikiService(client as any, makeBackendScanResult());
+    await service.buildWiki(wikiDir, { model: 'test-model', pages: ['overview'], confirmSession });
+
+    // 阶段二收到跨页聚合后的待确认项
+    expect(confirmSession).toHaveBeenCalledTimes(1);
+    expect(sessionCalls[0]).toContain('claim\nghostThing');
+
+    // resolve 应用后写盘：标记已移除
+    const overview = readFileSync(join(wikiDir, '01-overview', 'overview.md'), 'utf-8');
+    expect(overview).toContain('`ghostThing`');
+    expect(overview).not.toContain('`ghostThing`（待确认）');
+
+    // 确认的 claim 持久化
+    const store = JSON.parse(readFileSync(join(agentDir, 'confirmations.json'), 'utf-8'));
+    expect(store.confirmed).toContain('ghostThing');
+
+    // 第二次构建：白名单免标 → 无待确认项 → 会话不再触发
+    await service.buildWiki(wikiDir, { model: 'test-model', pages: ['overview'], confirmSession });
+    expect(confirmSession).toHaveBeenCalledTimes(1);
+    const rebuilt = readFileSync(join(wikiDir, '01-overview', 'overview.md'), 'utf-8');
+    expect(rebuilt).not.toContain('（待确认）');
+  });
+
+  it('两阶段构建：keep 决定保留待确认标记；未注入会话时不交互', async () => {
+    mockStreamText.mockImplementation((() => ({
+      fullStream: (async function* () {
+        yield {
+          type: 'text-delta',
+          text: '# 概览\n\n核心由 `ghostThing` 构成。',
+        };
+      })(),
+      finishReason: Promise.resolve('stop'),
+    })) as any);
+
+    const client = createMockClient();
+    const wikiDir = join(tmpDir, 'wiki-confirm-keep');
+    const agentDir = join(tmpDir, '.scx-wiki-agent');
+    rmSync(join(agentDir, 'outline.json'), { force: true });
+    rmSync(join(agentDir, 'confirmations.json'), { force: true });
+
+    // 未注入 confirmSession：行为与旧版一致，直接写盘
+    const service = new WikiService(client as any, makeBackendScanResult());
+    await service.buildWiki(wikiDir, { model: 'test-model', pages: ['overview'] });
+    let overview = readFileSync(join(wikiDir, '01-overview', 'overview.md'), 'utf-8');
+    expect(overview).toContain('`ghostThing`（待确认）');
+
+    // 注入会话但全部 keep：标记保留
+    const keepSession = vi.fn(async () => []);
+    rmSync(wikiDir, { recursive: true, force: true });
+    await service.buildWiki(wikiDir, { model: 'test-model', pages: ['overview'], confirmSession: keepSession });
+    expect(keepSession).toHaveBeenCalledTimes(1);
+    overview = readFileSync(join(wikiDir, '01-overview', 'overview.md'), 'utf-8');
+    expect(overview).toContain('`ghostThing`（待确认）');
+  });
+
   it('章节树规划 LLM 异常不阻断构建（fail-open，按无章节页继续）', async () => {
     mockStreamText.mockImplementation((() => { throw new Error('Insufficient Balance'); }) as any);
     const client = createMockClient();

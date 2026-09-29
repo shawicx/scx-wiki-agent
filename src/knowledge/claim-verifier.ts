@@ -35,6 +35,9 @@ export interface ClaimVerifyContext {
   knownFiles: ReadonlySet<string>;
   /** 词法存在性探测；返回 grep 命中数，抛错按有实据处理 */
   grepCount: (pattern: string) => number;
+  /** 人工确认白名单（claim 原文，confirmations.json）：命中即有实据，
+ *  不再标注也不占探测额度（待确认项交互裁决的持久化回写） */
+  confirmed?: ReadonlySet<string>;
 }
 
 /** 不参与核验的 JS 字面量/关键字与包清单通用词汇（末段或整词命中即跳过） */
@@ -91,10 +94,16 @@ export function verifyAndAnnotateClaims(
 
   const verdictByName = new Map<string, boolean>();
   const probedNames = new Set<string>();
+  const whitelistedNames = new Set<string>();
   let probes = 0;
   const badRaws = new Set<string>();
 
   for (const { raw, name } of claims) {
+    if (ctx.confirmed?.has(raw)) {
+      whitelistedNames.add(name);
+      verdictByName.set(name, true);
+      continue;
+    }
     let verdict = verdictByName.get(name);
     if (verdict === undefined) {
       if (locallyVerified(name)) {
@@ -117,6 +126,7 @@ export function verifyAndAnnotateClaims(
 
   let skipped = 0;
   for (const name of verdictByName.keys()) {
+    if (whitelistedNames.has(name)) continue;
     if (!locallyVerified(name) && !probedNames.has(name)) skipped++;
   }
 

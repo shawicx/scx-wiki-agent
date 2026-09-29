@@ -25,6 +25,8 @@ export interface GlobalConfig {
     mode?: 'full' | 'update';
     maxOutputTokens?: number;
     noLlm?: boolean;
+    /** 生成后对待确认项启动交互裁决（仅终端环境生效，CI/管道自动跳过） */
+    confirm?: boolean;
   };
 }
 
@@ -96,11 +98,12 @@ export function parseGlobalConfig(content: string): GlobalConfig | null {
     ? Math.floor(b.max_output_tokens)
     : undefined;
   const noLlm = b.no_llm === true;
+  const confirm = b.confirm === true;
 
   for (const w of warnings) console.warn(`[wiki] 全局配置：${w}`);
   return {
     provider: { name, model, apiKey, baseURL, timeoutSec },
-    build: { mode, maxOutputTokens, noLlm },
+    build: { mode, maxOutputTokens, noLlm, ...(confirm ? { confirm } : {}) },
   };
 }
 
@@ -140,4 +143,6 @@ build:
   max_output_tokens: 8000
   # 强制纯规则路径（不调用 LLM）
   no_llm: false
+  # 生成后对待确认项启动交互裁决（需终端环境；确认的断言持久化免标）
+  confirm: false
 `;

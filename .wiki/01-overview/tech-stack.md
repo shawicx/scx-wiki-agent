@@ -6,6 +6,7 @@
 - src/cli/commands/build.ts
 - src/cli/commands/init.ts
 - src/cli/commands/scan.ts
+- src/cli/confirm-interaction.ts
 - src/cli/index.ts
 - src/core/scanner.ts
 - src/knowledge/wiki-page-generator.ts
@@ -21,6 +22,7 @@
 | 依赖 | 版本 | 首个 import 点 |
 | --- | --- | --- |
 | `@ai-sdk/openai` | ^3.0.67 | `src/knowledge/wiki-page-generator.ts` |
+| `@clack/prompts` | ^1.8.1 | `src/cli/confirm-interaction.ts` |
 | `ai` | ^6.0.193 | `src/knowledge/wiki-page-generator.ts` |
 | `commander` | ^15.0.0 | `src/cli/commands/build.ts` |
 | `ignore` | ^7.0.5 | `src/core/scanner.ts` |

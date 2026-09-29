@@ -8,9 +8,9 @@
 - src/cli/commands/init.ts
 - src/cli/commands/scan.ts
 - src/cli/commands/types.ts
+- src/cli/confirm-interaction.ts
 - src/cli/index.ts
 - src/core/scanner.ts
-- src/core/types.ts
 - src/knowledge/wiki-page-generator.ts
 - src/shared/config.ts
 - tsup.config.ts

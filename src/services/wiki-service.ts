@@ -10,6 +10,13 @@ import { validatePageContent } from '../knowledge/wiki-quality-validator.js';
 import type { PageQualityReport } from '../knowledge/wiki-quality-validator.js';
 import { verifyAndAnnotateClaims, collectContextKeys } from '../knowledge/claim-verifier.js';
 import type { ClaimStats } from '../knowledge/claim-verifier.js';
+import {
+  collectPendingConfirmations,
+  applyConfirmations,
+  loadConfirmedClaims,
+  saveConfirmedClaims,
+} from '../knowledge/confirmation.js';
+import type { ConfirmationDecision } from '../knowledge/confirmation.js';
 import { extractDefinedSymbolNames } from '../knowledge/source-fallback.js';
 import { IntentEvidenceProvider, countIntentEvidence } from '../knowledge/intent-evidence.js';
 import { collectEvidenceFiles, buildEvidenceBlock, injectEvidenceBlock } from '../knowledge/wiki-evidence.js';
@@ -36,6 +43,24 @@ interface PageProduced {
 
 /** 页面写盘结果状态 */
 type PageStatus = 'created' | 'updated' | 'unchanged';
+
+/** 两阶段构建的内存页产物（生成完成、写盘前，可能还要过人工裁决改写） */
+interface ProducedEntry {
+  page: string;
+  relPath: string;
+  source: 'llm' | 'fallback';
+  /** 正文（已过断言校验标注，待裁决改写后注入锚定块写盘） */
+  content: string;
+  evidenceFiles: string[];
+}
+
+/** 人工裁决摘要（构建报告用；null = 本次未进入裁决阶段） */
+interface ConfirmSummary {
+  total: number;
+  resolved: number;
+  kept: number;
+  persisted: number;
+}
 
 export class WikiService {
   constructor(
@@ -197,11 +222,20 @@ export class WikiService {
     const claimStats: Array<{ page: string } & ClaimStats> = [];
     const intentCoverage: Array<{ page: string; counts: Record<string, number> }> = [];
 
+    // 持久化确认白名单（confirmations.json）：上次构建确认过的 claim 本次直接免标
+    const persistedConfirmed = loadConfirmedClaims(agentDir);
+
     // full 模式：写盘前整目录重建（此刻规划已全部成功，后续任意页失败也有逐页降级兑底）
     if (mode === 'full') {
       rmSync(wikiDir, { recursive: true, force: true });
       mkdirSync(wikiDir, { recursive: true });
     }
+
+    // ---- 阶段一：全部页面内存生成 + 断言校验（不写盘） ----
+    // 两阶段的目的：待确认项是生成与校验的产物，只能在生成后收集；而交互裁决
+    // 必须发生在写盘前——确认结果在内存改写最终内容，统一过闸写盘，update 模式
+    // 的内容比较也因此基于裁决后的终稿。
+    const producedEntries: ProducedEntry[] = [];
 
     for (const page of pages) {
       const relPath = pageRelPath(page);
@@ -232,7 +266,8 @@ export class WikiService {
 
       // 正文断言校验（仅 LLM 页）：三级核验后，查无实据的标识符标注「待确认」。
       // universe 并入：源码回落符号 + 声明依赖名 + 本页 context 数据字段名
-      // （前两者防真实符号/依赖被误杀，后者防工具自家数据契约字段被误杀）
+      // （前两者防真实符号/依赖被误杀，后者防工具自家数据契约字段被误杀）；
+      // confirmed 为人工确认白名单（confirmations.json），命中即免标。
       let bodyContent = produced.content;
       if (produced.source === 'llm') {
         const universe = new Set(this.getSymbolUniverse(contextBuilder.getFallbackSymbolNames()));
@@ -242,15 +277,56 @@ export class WikiService {
           symbols: universe,
           knownFiles,
           grepCount: pattern => this.client.searchCode(pattern).totalGrepMatches,
+          confirmed: persistedConfirmed,
         });
         bodyContent = verified.content;
         claimStats.push({ page, ...verified.stats });
       }
 
+      producedEntries.push({
+        page,
+        relPath,
+        source: produced.source,
+        content: bodyContent,
+        evidenceFiles: collectEvidenceFiles(pageContext, knownFiles, this.scanResult.rootDir),
+      });
+    }
+
+    // ---- 阶段二：待确认项人工裁决（生成后、写盘前，单次会话跨页去重） ----
+    let confirmSummary: ConfirmSummary | null = null;
+    if (options?.confirmSession) {
+      const items = collectPendingConfirmations(
+        producedEntries.map(e => ({ page: e.page, content: e.content })),
+      );
+      if (items.length > 0) {
+        const decisions = await options.confirmSession(items);
+        const byKey = new Map<string, ConfirmationDecision>(decisions.map(d => [d.key, d]));
+        for (const entry of producedEntries) {
+          entry.content = applyConfirmations(entry.content, byKey);
+        }
+        // 确认的 claim 持久化：后续构建经白名单自动免标，不再重复打扰
+        const resolvedClaims = decisions
+          .filter(d => d.action === 'resolve' && d.kind === 'claim')
+          .map(d => d.key.slice('claim\n'.length));
+        const persisted = resolvedClaims.length > 0
+          ? saveConfirmedClaims(agentDir, resolvedClaims)
+          : 0;
+        confirmSummary = {
+          total: items.length,
+          resolved: decisions.filter(d => d.action === 'resolve').length,
+          kept: items.length - decisions.filter(d => d.action === 'resolve').length,
+          persisted,
+        };
+      }
+    }
+
+    // ---- 阶段三：注入锚定块 + 写盘前闸门 + 写盘（update 模式在终稿上比较） ----
+    for (const entry of producedEntries) {
+      const { page, relPath, source } = entry;
+
       // 页首证据锚定块（确定性注入，LLM 无法伪造）+ 页底 Related 区块
-      const evidenceFiles = collectEvidenceFiles(pageContext, knownFiles, this.scanResult.rootDir);
       const content =
-        injectEvidenceBlock(bodyContent, buildEvidenceBlock(evidenceFiles)) +
+        injectEvidenceBlock(entry.content, buildEvidenceBlock(entry.evidenceFiles)) +
         buildRelatedSection(page, pages);
 
       // 写盘前质量闸门（LLM 与规则路径都过闸）
@@ -276,17 +352,17 @@ export class WikiService {
       // update 模式：内容与现有文件一致时跳过重写（project-wiki「只改过时部分」）
       if (mode === 'update' && existed && readFileSync(targetPath, 'utf-8') === content) {
         filenames.push(relPath);
-        writtenPages.push({ page, relPath, source: produced.source, status: 'unchanged' });
+        writtenPages.push({ page, relPath, source, status: 'unchanged' });
         continue;
       }
 
       mkdirSync(dirname(targetPath), { recursive: true });
       writeFileSync(targetPath, content, 'utf-8');
       filenames.push(relPath);
-      writtenPages.push({ page, relPath, source: produced.source, status: existed ? 'updated' : 'created' });
+      writtenPages.push({ page, relPath, source, status: existed ? 'updated' : 'created' });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport, claimStats, intentCoverage);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport, claimStats, intentCoverage, confirmSummary);
     return filenames;
   }
 
@@ -597,6 +673,7 @@ export class WikiService {
     outline: OutlineReport | null,
     claimStats: Array<{ page: string } & ClaimStats>,
     intentCoverage: Array<{ page: string; counts: Record<string, number> }>,
+    confirmSummary: ConfirmSummary | null,
   ): void {
     const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -657,6 +734,13 @@ export class WikiService {
         .join('、');
       lines.push(
         `  断言校验 ${claimStats.length} 页：${sum.total - sum.unverified - sum.skipped}/${sum.total} 有实据，待确认 ${sum.unverified}${flagged ? `（${flagged}）` : ''}${sum.skipped > 0 ? `，未核验 ${sum.skipped}（超探测上限）` : ''}`,
+      );
+    }
+
+    // 人工裁决摘要（两阶段构建的阶段二产物）
+    if (confirmSummary) {
+      lines.push(
+        `  人工裁决：${confirmSummary.total} 项待确认（确认 ${confirmSummary.resolved} / 保持 ${confirmSummary.kept}），新增持久化确认 ${confirmSummary.persisted} 条（confirmations.json，后续构建免标）`,
       );
     }
 

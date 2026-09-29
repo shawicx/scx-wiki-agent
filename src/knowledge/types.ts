@@ -2,6 +2,7 @@
 
 import type { SymbolType, RelationType } from '../core/types.js';
 import type { IntentEvidence, GitCommitRef } from './intent-evidence.js';
+import type { PendingConfirmation, ConfirmationDecision } from './confirmation.js';
 
 /** Hotspot 补强符号：structure 页证据不足时从图谱补充的真实符号（二次扩展检索）。
  *  startLine/signature 在源码回落（source-fallback）路径下携带定义行信息。
@@ -444,5 +445,8 @@ export interface WikiBuildOptions {
   timeoutSec?: number;
   /** 单轮流式生成的输出 token 预算（来自全局配置 build.max_output_tokens，默认 8000） */
   maxOutputTokens?: number;
+  /** 待确认项人工裁决会话（全部页面生成后、写盘前调用一次）；缺省不交互。
+ *  确认的 claim 持久化到 .scx-wiki-agent/confirmations.json，后续构建免标 */
+  confirmSession?: (items: PendingConfirmation[]) => Promise<ConfirmationDecision[]>;
   onChunk?: (filename: string, text: string) => void;
 }

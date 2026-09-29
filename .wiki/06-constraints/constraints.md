@@ -3,6 +3,8 @@
 <details>
 <summary>Relevant source files</summary>
 
+- src/cli/confirm-interaction.ts
+- src/knowledge/confirmation.ts
 - src/knowledge/intent-evidence.ts
 - src/knowledge/outline-planner.ts
 - src/knowledge/outline.ts
@@ -12,12 +14,10 @@
 - src/knowledge/wiki-continuation.ts
 - src/knowledge/wiki-evidence.ts
 - src/knowledge/wiki-fallback-builder.ts
-- src/knowledge/wiki-page-generator.ts
 - src/mcp/codebase-memory-client.ts
 - src/shared/constants.ts
 - tests/knowledge/config-detector.test.ts
 - tests/knowledge/intent-evidence.test.ts
-- tests/knowledge/source-fallback.test.ts
 </details>
 
 项目边界与代价：性能预算、复杂度上限、已知限制。
@@ -26,6 +26,7 @@
 
 | 常量 | 值 | 源文件 |
 | --- | --- | --- |
+| `BULK_THRESHOLD` | `15` | src/cli/confirm-interaction.ts |
 | `GIT_LOG_LIMIT` | `200` | src/knowledge/intent-evidence.ts |
 | `GIT_TIMEOUT_MS` | `15_000` | src/knowledge/intent-evidence.ts |
 | `REPO_LOG_LIMIT` | `400` | src/knowledge/intent-evidence.ts |
@@ -67,6 +68,7 @@
 
 | 证据 | 类型 | 目标 | 锚点 |
 | --- | --- | --- | --- |
+| 待确认项超过此数时先问一次「逐项 / 全部保持」（防 Marathon 会话） | 常量注释 | BULK_THRESHOLD | src/cli/confirm-interaction.ts:14 |
 | 每模块候选文件上限（锚点候选池规模控制） | 常量注释 | MAX_FILES_PER_MODULE | src/knowledge/outline-planner.ts:38 |
 | 全局候选文件上限 | 常量注释 | MAX_CANDIDATE_FILES | src/knowledge/outline-planner.ts:40 |
 | 与主题页 MIN_TOPIC_FILES 对齐：防章节页天然薄证据 | 常量注释 | MIN_PAGE_FILES | src/knowledge/outline.ts:84 |
@@ -92,6 +94,7 @@
 | --- | --- | --- | --- |
 | adaptSide | src/mcp/codebase-memory-client.ts | 4 | 2 |
 | adaptTrace | src/mcp/codebase-memory-client.ts | 4 | 2 |
+| applyConfirmations | src/knowledge/confirmation.ts | 6 | 1 |
 | assembleSections | src/knowledge/wiki-continuation.ts | 6 | 1 |
 | buildApi | src/knowledge/wiki-fallback-builder.ts | 6 | 0 |
 | buildApiContext | src/knowledge/wiki-context-builder.ts | 5 | 1 |
@@ -109,7 +112,6 @@
 | buildDataFlowContext | src/knowledge/wiki-context-builder.ts | 11 | 2 |
 | buildDecisions | src/knowledge/wiki-fallback-builder.ts | 4 | 0 |
 | buildDepUsage | src/knowledge/wiki-context-builder.ts | 5 | 0 |
-| buildGlossarySections | src/knowledge/wiki-page-generator.ts | 6 | 1 |
 ## Related
 
 - 同目录：[conventions.md](conventions.md)

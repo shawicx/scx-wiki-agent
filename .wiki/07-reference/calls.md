@@ -6,12 +6,12 @@
 - src/cli/commands/build.ts
 - src/cli/commands/init.ts
 - src/cli/commands/scan.ts
+- src/cli/confirm-interaction.ts
 - src/cli/index.ts
 - src/core/scanner.ts
 - src/knowledge/claim-verifier.ts
 - src/knowledge/intent-evidence.ts
 - src/knowledge/page-registry.ts
-- src/knowledge/wiki-context-builder.ts
 - src/knowledge/wiki-fallback-builder.ts
 - src/knowledge/wiki-page-generator.ts
 - src/mcp/codebase-memory-client.ts
@@ -35,7 +35,7 @@
 | hasIntent | src/knowledge/wiki-fallback-builder.ts | 8 |
 | isTopicPage | src/knowledge/page-registry.ts | 8 |
 | intentToPrompt | src/knowledge/wiki-page-generator.ts | 7 |
-| labelToSymbolType | src/knowledge/wiki-context-builder.ts | 6 |
+| dedupeByAnchor | src/knowledge/intent-evidence.ts | 6 |
 
 ## registerBuildCommand
 
@@ -43,14 +43,14 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| registerBuildCommand | loadGlobalConfig | src/shared/config.ts:108 |
-| registerBuildCommand | globalConfigPath | src/shared/config.ts:32 |
+| registerBuildCommand | loadGlobalConfig | src/shared/config.ts:111 |
+| registerBuildCommand | globalConfigPath | src/shared/config.ts:34 |
 | registerBuildCommand | FileScanner | src/core/scanner.ts:37 |
 | registerBuildCommand | CodebaseMemoryClient | src/mcp/codebase-memory-client.ts:119 |
-| registerBuildCommand | WikiService | src/services/wiki-service.ts:40 |
-| loadGlobalConfig | globalConfigPath | src/shared/config.ts:32 |
-| loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:61 |
-| parseGlobalConfig | expandEnvRefs | src/shared/config.ts:46 |
+| registerBuildCommand | WikiService | src/services/wiki-service.ts:65 |
+| loadGlobalConfig | globalConfigPath | src/shared/config.ts:34 |
+| loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:63 |
+| parseGlobalConfig | expandEnvRefs | src/shared/config.ts:48 |
 
 ## registerInitCommand
 
@@ -58,7 +58,7 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| registerInitCommand | globalConfigPath | src/shared/config.ts:32 |
+| registerInitCommand | globalConfigPath | src/shared/config.ts:34 |
 
 ## registerScanCommand
 
@@ -67,6 +67,15 @@
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
 | registerScanCommand | ScanService | src/services/scan-service.ts:3 |
+
+## runConfirmationSession
+
+入口文件：src/cli/confirm-interaction.ts
+
+| 调用方 | 被调用方 | 源文件:行号 |
+| --- | --- | --- |
+| runConfirmationSession | resolveLabel | src/cli/confirm-interaction.ts:92 |
+| runConfirmationSession | textPromptMessage | src/cli/confirm-interaction.ts:101 |
 
 ## createProgram
 
@@ -77,16 +86,16 @@
 | createProgram | getCliVersion | src/cli/index.ts:9 |
 | createProgram | registerInitCommand | src/cli/commands/init.ts:8 |
 | createProgram | registerScanCommand | src/cli/commands/scan.ts:4 |
-| createProgram | registerBuildCommand | src/cli/commands/build.ts:10 |
-| registerBuildCommand | loadGlobalConfig | src/shared/config.ts:108 |
-| registerBuildCommand | globalConfigPath | src/shared/config.ts:32 |
+| createProgram | registerBuildCommand | src/cli/commands/build.ts:11 |
+| registerScanCommand | ScanService | src/services/scan-service.ts:3 |
+| registerBuildCommand | loadGlobalConfig | src/shared/config.ts:111 |
+| registerBuildCommand | globalConfigPath | src/shared/config.ts:34 |
 | registerBuildCommand | FileScanner | src/core/scanner.ts:37 |
 | registerBuildCommand | CodebaseMemoryClient | src/mcp/codebase-memory-client.ts:119 |
-| registerBuildCommand | WikiService | src/services/wiki-service.ts:40 |
-| registerInitCommand | globalConfigPath | src/shared/config.ts:32 |
-| registerScanCommand | ScanService | src/services/scan-service.ts:3 |
-| loadGlobalConfig | globalConfigPath | src/shared/config.ts:32 |
-| loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:61 |
+| registerBuildCommand | WikiService | src/services/wiki-service.ts:65 |
+| registerInitCommand | globalConfigPath | src/shared/config.ts:34 |
+| loadGlobalConfig | globalConfigPath | src/shared/config.ts:34 |
+| loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:63 |
 
 ## extractClaims
 
@@ -94,7 +103,7 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:73 |
+| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:76 |
 
 ## verifyAndAnnotateClaims
 
@@ -102,10 +111,10 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| verifyAndAnnotateClaims | extractClaims | src/knowledge/claim-verifier.ts:50 |
-| verifyAndAnnotateClaims | fileStems | src/knowledge/claim-verifier.ts:140 |
-| verifyAndAnnotateClaims | locallyVerified | src/knowledge/claim-verifier.ts:90 |
-| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:73 |
+| verifyAndAnnotateClaims | extractClaims | src/knowledge/claim-verifier.ts:53 |
+| verifyAndAnnotateClaims | fileStems | src/knowledge/claim-verifier.ts:150 |
+| verifyAndAnnotateClaims | locallyVerified | src/knowledge/claim-verifier.ts:93 |
+| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:76 |
 
 ## collectContextKeys
 
@@ -113,15 +122,7 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| collectContextKeys | collectInto | src/knowledge/claim-verifier.ts:163 |
-
-## countIntentEvidence
-
-入口文件：src/knowledge/intent-evidence.ts
-
-| 调用方 | 被调用方 | 源文件:行号 |
-| --- | --- | --- |
-| countIntentEvidence | visit | src/knowledge/intent-evidence.ts:778 |
+| collectContextKeys | collectInto | src/knowledge/claim-verifier.ts:173 |
 ## Related
 
 - 同目录：[classes.md](classes.md) · [glossary.md](glossary.md)

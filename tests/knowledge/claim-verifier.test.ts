@@ -8,6 +8,7 @@ function makeCtx(overrides?: Partial<ClaimVerifyContext> & { grep?: (p: string) 
   return {
     symbols: overrides?.symbols ?? new Set<string>(),
     knownFiles: overrides?.knownFiles ?? new Set<string>(),
+    confirmed: overrides?.confirmed,
     grepCount: (p: string) => {
       probeLog.push(p);
       return overrides?.grep ? overrides.grep(p) : 0;
@@ -84,6 +85,21 @@ describe('verifyAndAnnotateClaims', () => {
     const { content, stats } = verifyAndAnnotateClaims('`anything`', ctx);
     expect(content).toBe('`anything`');
     expect(stats.unverified).toBe(0);
+  });
+
+  it('confirmed 白名单：命中即免标、不占探测额度、不计 skipped', () => {
+    const ctx = makeCtx({
+      confirmed: new Set(['ghostThing']),
+      grep: () => 0,
+    });
+    const { content, stats } = verifyAndAnnotateClaims(
+      '白名单 `ghostThing` 与未知 `otherGhost`。', ctx,
+    );
+    expect(content).toContain('`ghostThing`');
+    expect(content).not.toContain('`ghostThing`（待确认）');
+    expect(content).toContain('`otherGhost`（待确认）');
+    expect(ctx.probeLog).toEqual(['otherGhost']); // 白名单项不探测
+    expect(stats).toEqual({ total: 2, verified: 1, unverified: 1, skipped: 0 });
   });
 });
 

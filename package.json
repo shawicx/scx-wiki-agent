@@ -37,6 +37,7 @@
   },
   "dependencies": {
     "@ai-sdk/openai": "^3.0.67",
+    "@clack/prompts": "^1.8.1",
     "ai": "^6.0.193",
     "commander": "^15.0.0",
     "ignore": "^7.0.5",

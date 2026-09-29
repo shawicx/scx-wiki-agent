@@ -6,6 +6,7 @@
 - src/cli/commands/build.ts
 - src/cli/commands/init.ts
 - src/cli/commands/scan.ts
+- src/cli/confirm-interaction.ts
 - src/cli/index.ts
 - src/core/scanner.ts
 - src/knowledge/config-detector.ts
@@ -17,7 +18,6 @@
 - src/knowledge/types.ts
 - src/knowledge/wiki-context-builder.ts
 - src/knowledge/wiki-continuation.ts
-- src/knowledge/wiki-evidence.ts
 </details>
 
 > ⚠️ **待确认**：本页为规则模板生成，仅基于项目类型/技术栈/运行态探测，未采集项目真实错误日志与告警，具体条目（证据不足，禁止猜测；请人工补充后移除本标记）
@@ -49,6 +49,7 @@ Common runtime issues and their solutions.
 
 | 常量 | 值 | 源文件 |
 | --- | --- | --- |
+| `BULK_THRESHOLD` | `15` | src/cli/confirm-interaction.ts |
 | `GIT_LOG_LIMIT` | `200` | src/knowledge/intent-evidence.ts |
 | `GIT_TIMEOUT_MS` | `15_000` | src/knowledge/intent-evidence.ts |
 | `REPO_LOG_LIMIT` | `400` | src/knowledge/intent-evidence.ts |
@@ -93,14 +94,14 @@ Common runtime issues and their solutions.
 | XXX: 引用（跳过注释行） | 风险标记 | src/knowledge/config-detector.ts | src/knowledge/config-detector.ts:303 |
 | TODO: /FIXME/HACK/WHY | 风险标记 | src/knowledge/intent-evidence.ts | src/knowledge/intent-evidence.ts:7 |
 | TODO: /FIXME/HACK/... 标记（≤5 条/文件） | 风险标记 | src/knowledge/intent-evidence.ts | src/knowledge/intent-evidence.ts:321 |
-| TODO: /FIXME 真实风险信号）+ git 高频变更 | 风险标记 | src/knowledge/types.ts | src/knowledge/types.ts:367 |
+| TODO: /FIXME 真实风险信号）+ git 高频变更 | 风险标记 | src/knowledge/types.ts | src/knowledge/types.ts:368 |
 | TODO: /FIXME 是真实风险信号）+ git 高频变更热点 | 风险标记 | src/knowledge/wiki-context-builder.ts | src/knowledge/wiki-context-builder.ts:910 |
 | TODO: /FIXME 风险标记 + git 高频变更热点（作者自认的真实风险） | 风险标记 | src/knowledge/wiki-fallback-builder.ts | src/knowledge/wiki-fallback-builder.ts:424 |
-| 高频变更：22 次提交，最近「feat: 调用图高出边锚点回填扩覆盖，主题改模块复合命名，断言白名单与使用证据分级消除待确认噪音」 | 变更热点 | src/services/wiki-service.ts | commit:c7f1817d (2026-09-28) |
-| 高频变更：20 次提交，最近「feat: 调用图高出边锚点回填扩覆盖，主题改模块复合命名，断言白名单与使用证据分级消除待确认噪音」 | 变更热点 | src/knowledge/wiki-context-builder.ts | commit:c7f1817d (2026-09-28) |
-| 高频变更：19 次提交，最近「feat: 调用图高出边锚点回填扩覆盖，主题改模块复合命名，断言白名单与使用证据分级消除待确认噪音」 | 变更热点 | src/knowledge/types.ts | commit:c7f1817d (2026-09-28) |
-| 高频变更：18 次提交，最近「feat: 调用图高出边锚点回填扩覆盖，主题改模块复合命名，断言白名单与使用证据分级消除待确认噪音」 | 变更热点 | src/knowledge/wiki-page-generator.ts | commit:c7f1817d (2026-09-28) |
-| 高频变更：17 次提交，最近「feat: calls 页组内去重与热点回填、依赖 import 证据降噪待确认，.wiki 改为工具独占整目录重建」 | 变更热点 | src/knowledge/wiki-fallback-builder.ts | commit:b06d40e4 (2026-09-27) |
+| 高频变更：23 次提交，最近「feat: 新增意图证据层，为 Wiki 注入带锚点的「为什么」叙述」 | 变更热点 | src/services/wiki-service.ts | commit:7d008875 (2026-09-28) |
+| 高频变更：21 次提交，最近「feat: 新增意图证据层，为 Wiki 注入带锚点的「为什么」叙述」 | 变更热点 | src/knowledge/wiki-context-builder.ts | commit:7d008875 (2026-09-28) |
+| 高频变更：20 次提交，最近「feat: 新增意图证据层，为 Wiki 注入带锚点的「为什么」叙述」 | 变更热点 | src/knowledge/types.ts | commit:7d008875 (2026-09-28) |
+| 高频变更：19 次提交，最近「feat: 新增意图证据层，为 Wiki 注入带锚点的「为什么」叙述」 | 变更热点 | src/knowledge/wiki-page-generator.ts | commit:7d008875 (2026-09-28) |
+| 高频变更：18 次提交，最近「feat: 新增意图证据层，为 Wiki 注入带锚点的「为什么」叙述」 | 变更热点 | src/knowledge/wiki-fallback-builder.ts | commit:7d008875 (2026-09-28) |
 
 ## 环境变量
 
@@ -115,7 +116,7 @@ Common runtime issues and their solutions.
 
 ## Technology-Specific Issues
 
-Key technologies: @ai-sdk/openai, ai, commander, ignore, yaml, tsup, vitest
+Key technologies: @ai-sdk/openai, @clack/prompts, ai, commander, ignore, yaml, tsup, vitest
 
 Refer to the official documentation for each technology for specific troubleshooting guides.
 ## Related

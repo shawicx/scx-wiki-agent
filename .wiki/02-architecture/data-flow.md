@@ -6,6 +6,7 @@
 - src/cli/commands/build.ts
 - src/cli/commands/init.ts
 - src/cli/commands/scan.ts
+- src/cli/confirm-interaction.ts
 - src/cli/index.ts
 - src/core/scanner.ts
 - src/knowledge/claim-verifier.ts
@@ -25,14 +26,14 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| registerBuildCommand | loadGlobalConfig | src/shared/config.ts:108 |
-| registerBuildCommand | globalConfigPath | src/shared/config.ts:32 |
+| registerBuildCommand | loadGlobalConfig | src/shared/config.ts:111 |
+| registerBuildCommand | globalConfigPath | src/shared/config.ts:34 |
 | registerBuildCommand | FileScanner | src/core/scanner.ts:37 |
 | registerBuildCommand | CodebaseMemoryClient | src/mcp/codebase-memory-client.ts:119 |
-| registerBuildCommand | WikiService | src/services/wiki-service.ts:40 |
-| loadGlobalConfig | globalConfigPath | src/shared/config.ts:32 |
-| loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:61 |
-| parseGlobalConfig | expandEnvRefs | src/shared/config.ts:46 |
+| registerBuildCommand | WikiService | src/services/wiki-service.ts:65 |
+| loadGlobalConfig | globalConfigPath | src/shared/config.ts:34 |
+| loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:63 |
+| parseGlobalConfig | expandEnvRefs | src/shared/config.ts:48 |
 
 ## registerInitCommand
 
@@ -42,7 +43,7 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| registerInitCommand | globalConfigPath | src/shared/config.ts:32 |
+| registerInitCommand | globalConfigPath | src/shared/config.ts:34 |
 
 ## registerScanCommand
 
@@ -53,6 +54,17 @@
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
 | registerScanCommand | ScanService | src/services/scan-service.ts:3 |
+
+## runConfirmationSession
+
+入口符号：runConfirmationSession
+
+调用边表：
+
+| 调用方 | 被调用方 | 源文件:行号 |
+| --- | --- | --- |
+| runConfirmationSession | resolveLabel | src/cli/confirm-interaction.ts:92 |
+| runConfirmationSession | textPromptMessage | src/cli/confirm-interaction.ts:101 |
 
 ## createProgram
 
@@ -65,16 +77,16 @@
 | createProgram | getCliVersion | src/cli/index.ts:9 |
 | createProgram | registerInitCommand | src/cli/commands/init.ts:8 |
 | createProgram | registerScanCommand | src/cli/commands/scan.ts:4 |
-| createProgram | registerBuildCommand | src/cli/commands/build.ts:10 |
-| registerBuildCommand | loadGlobalConfig | src/shared/config.ts:108 |
-| registerBuildCommand | globalConfigPath | src/shared/config.ts:32 |
+| createProgram | registerBuildCommand | src/cli/commands/build.ts:11 |
+| registerBuildCommand | loadGlobalConfig | src/shared/config.ts:111 |
+| registerBuildCommand | globalConfigPath | src/shared/config.ts:34 |
 | registerBuildCommand | FileScanner | src/core/scanner.ts:37 |
 | registerBuildCommand | CodebaseMemoryClient | src/mcp/codebase-memory-client.ts:119 |
-| registerBuildCommand | WikiService | src/services/wiki-service.ts:40 |
-| registerInitCommand | globalConfigPath | src/shared/config.ts:32 |
+| registerBuildCommand | WikiService | src/services/wiki-service.ts:65 |
+| registerInitCommand | globalConfigPath | src/shared/config.ts:34 |
 | registerScanCommand | ScanService | src/services/scan-service.ts:3 |
-| loadGlobalConfig | globalConfigPath | src/shared/config.ts:32 |
-| loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:61 |
+| loadGlobalConfig | globalConfigPath | src/shared/config.ts:34 |
+| loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:63 |
 
 ## extractClaims
 
@@ -84,20 +96,7 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:73 |
-
-## verifyAndAnnotateClaims
-
-入口符号：verifyAndAnnotateClaims
-
-调用边表：
-
-| 调用方 | 被调用方 | 源文件:行号 |
-| --- | --- | --- |
-| verifyAndAnnotateClaims | extractClaims | src/knowledge/claim-verifier.ts:50 |
-| verifyAndAnnotateClaims | fileStems | src/knowledge/claim-verifier.ts:140 |
-| verifyAndAnnotateClaims | locallyVerified | src/knowledge/claim-verifier.ts:90 |
-| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:73 |
+| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:76 |
 ## Related
 
 - 同目录：[architecture.md](architecture.md) · [modules.md](modules.md)

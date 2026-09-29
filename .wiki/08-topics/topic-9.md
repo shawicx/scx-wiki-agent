@@ -38,6 +38,8 @@
 | `tableToObjects` | function | `(table: unknown)` | /** 列式表 {cols, rows} → 对象数组（v0.10.x format=json 的结构） */ | src/mcp/codebase-memory-client.ts:27 |
 | `toProjectName` | method | `(repoPath: string)` | /** 仓库绝对路径 → MCP 项目标识符（`/` 和 `:` → `-`） */ | src/mcp/codebase-memory-client.ts:246 |
 | `tracePath` | method | `(\n    functionName: string,\n    direction: 'inbound' | 'outbound' | 'both' = 'both',\n    depth = 6,\n  )` | /** 双向调用链追踪 */ | src/mcp/codebase-memory-client.ts:150 |
+| `walkDirectory` | method | `(dir: string)` |  | src/core/scanner.ts:84 |
+| `workspaceHasPackages` | method | `(relPath: string)` | /** pnpm-workspace.yaml 是否声明了 packages（无该字段的审批型配置不算 workspace） */ | src/core/scanner.ts:225 |
 
 ## 协作边表（文件间调用）
 
@@ -52,7 +54,7 @@
 | constructor | loadGitignore | src/core/scanner.ts:47 |
 | createProgram | getCliVersion | src/cli/index.ts:9 |
 | createProgram | registerScanCommand | src/cli/commands/scan.ts:4 |
-| createProgram | registerBuildCommand | src/cli/commands/build.ts:10 |
+| createProgram | registerBuildCommand | src/cli/commands/build.ts:11 |
 | detectProjectType | workspaceHasPackages | src/core/scanner.ts:225 |
 | detectTechStack | collectImportedPackages | src/core/scanner.ts:172 |
 | ensureIndexed | exec | src/mcp/codebase-memory-client.ts:207 |
@@ -70,14 +72,16 @@
 | searchCode | exec | src/mcp/codebase-memory-client.ts:207 |
 | tracePath | exec | src/mcp/codebase-memory-client.ts:207 |
 | tracePath | adaptTrace | src/mcp/codebase-memory-client.ts:92 |
+| walkDirectory | shouldSkipDir | src/core/scanner.ts:129 |
+| walkDirectory | isIgnored | src/core/scanner.ts:59 |
 
 ## 跨模块边界
 
 | From | To | 调用次数 |
 | --- | --- | --- |
 | cli | shared | 3 |
-| core | shared | 3 |
 | knowledge | cli | 3 |
+| core | shared | 3 |
 | cli | services | 2 |
 | services | core | 1 |
 

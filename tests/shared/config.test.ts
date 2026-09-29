@@ -29,6 +29,13 @@ build:
     });
   });
 
+  it('build.confirm 解析：true 时携带，缺省不携带（CLI --confirm 的一次性开关互不影响）', () => {
+    const on = parseGlobalConfig('provider:\n  name: ollama\n  model: qwen\nbuild:\n  confirm: true');
+    expect(on?.build.confirm).toBe(true);
+    const off = parseGlobalConfig('provider:\n  name: ollama\n  model: qwen\nbuild:\n  confirm: false');
+    expect(off?.build.confirm).toBeUndefined();
+  });
+
   it('显式 base_url 优先于 provider 缺省映射', () => {
     const cfg = parseGlobalConfig(`
 provider:

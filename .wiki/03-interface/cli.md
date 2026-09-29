@@ -13,7 +13,7 @@
 
 | 命令 | 说明 | 源文件:行号 |
 | --- | --- | --- |
-| `build` | - | src/cli/commands/build.ts:10 |
+| `build` | - | src/cli/commands/build.ts:11 |
 | `init` | - | src/cli/commands/init.ts:8 |
 | `scan` | - | src/cli/commands/scan.ts:4 |
 
@@ -31,6 +31,7 @@
 | `--mode <mode>` | Build mode: full (wipe and rewrite .wiki) or update (skip unchanged pages); default full, config-overridable |
 | `--refresh-topics` | Re-detect adaptive topic pages and overwrite topics.json |
 | `--refresh-outline` | Re-plan outline chapters via LLM and overwrite outline.json |
+| `--confirm` | Interactive confirmation pass for 待确认 items (after generation, before writing; TTY only) |
 
 ## `init` 参数
 

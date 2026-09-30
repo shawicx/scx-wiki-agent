@@ -577,6 +577,8 @@ describe('WikiService', () => {
     const overview = readFileSync(join(wikiDir, '01-overview', 'overview.md'), 'utf-8');
     expect(overview).toContain('`ghostThing`（待确认）');
     expect(overview).not.toContain('realThing`（待确认）');
+    // pending marker 是会话期脚手架，写盘内容零残留（可见「待确认」文本保留）
+    expect(overview).not.toContain('wiki:pending');
     expect(client.searchCodeMatches).toHaveBeenCalledWith('realThing', 20);
     expect(client.searchCodeMatches).toHaveBeenCalledWith('ghostThing', 20);
   });

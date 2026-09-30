@@ -16,6 +16,7 @@
  */
 
 import { WIKI_MAX_GREP_PROBES } from '../shared/constants.js';
+import { pendingMarker } from './wiki-markers.js';
 
 /** 单个声明：raw = 反引号内原文（改写定位），chain = 完整点链（优先核验），name = 末段标识符（回退核验/探测） */
 interface Claim {
@@ -176,7 +177,11 @@ export function verifyAndAnnotateClaims(
 
   let content = markdown;
   for (const raw of badRaws) {
-    content = content.split(`\`${raw}\``).join(`\`${raw}\`（待确认）`);
+    // 可见标注 + pending marker（--confirm 收集器只认 marker：被引用的证据
+    // 文本若恰好包含同形文本，因无 marker 不进确认队列）
+    content = content
+      .split(`\`${raw}\``)
+      .join(`\`${raw}\`（待确认）<!-- ${pendingMarker('claim', raw)} -->`);
   }
 
   return {

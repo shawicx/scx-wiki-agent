@@ -130,12 +130,21 @@ function checkEmptyShell(text: string, issues: QualityIssue[]): void {
 }
 
 function checkSecrets(text: string, issues: QualityIssue[]): void {
+  const found = findSecretDetail(text);
+  if (found) {
+    issues.push({ rule: 'secret', severity: 'error', message: `${found.label}（第 ${found.line} 行，值不回显）` });
+  }
+}
+
+/** 密钥探测（供确认层 replacement 复核复用）：返回类别与行号，无命中返回 null */
+export function findSecretDetail(text: string): { label: string; line: number } | null {
   for (const { re, label } of SECRET_PATTERNS) {
     const m = text.match(re)?.[0];
     if (m === undefined) continue;
     const line = text.slice(0, text.indexOf(m)).split('\n').length;
-    issues.push({ rule: 'secret', severity: 'error', message: `${label}（第 ${line} 行，值不回显）` });
+    return { label, line };
   }
+  return null;
 }
 
 /** R1 事后核验：file:line 锚点是否可追溯到扫描文件清单。

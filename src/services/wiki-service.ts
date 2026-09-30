@@ -27,6 +27,7 @@ import { loadOutline, saveOutline, validateOutline } from '../knowledge/outline.
 import type { OutlineFileData, OutlineKnown, OutlineReport } from '../knowledge/outline.js';
 import { resolveEvidenceCitations } from '../knowledge/evidence-id.js';
 import type { EvidenceRef } from '../knowledge/evidence-id.js';
+import { stripPendingMarkers } from '../knowledge/wiki-markers.js';
 import { OutlinePlanner } from '../knowledge/outline-planner.js';
 import {
   PAGE_REGISTRY, ALL_PAGE_NAMES, tier2PagesFor,
@@ -391,13 +392,13 @@ export class WikiService {
       }
     }
 
-    // ---- 阶段三：注入锚定块 + 写盘前闸门 + 写盘（update 模式在终稿上比较） ----
+    // ---- 阶段三：剥离 marker 脚手架 + 注入锚定块 + 写盘前闸门 + 写盘（update 模式在终稿上比较） ----
     for (const entry of producedEntries) {
       const { page, relPath, source } = entry;
 
-      // 页首证据锚定块（确定性注入，LLM 无法伪造）+ 页底 Related 区块
+      // pending marker 是确认会话期脚手架，绝不写盘（keep 项的可见「待确认」文本保留）
       const content =
-        injectEvidenceBlock(entry.content, buildEvidenceBlock(entry.evidenceFiles)) +
+        injectEvidenceBlock(stripPendingMarkers(entry.content), buildEvidenceBlock(entry.evidenceFiles)) +
         buildRelatedSection(page, pages);
 
       // 写盘前质量闸门（LLM 与规则路径都过闸）

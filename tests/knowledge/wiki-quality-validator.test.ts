@@ -223,3 +223,41 @@ describe('证据锚定与图表规则', () => {
     });
   });
 });
+
+describe('incomplete-page（截断残页检测）', () => {
+  const fenceContent = '# Overview\n\n正文段落。\n\n```ts\nconst half =';
+  const tableContent = '# Modules\n\n| 模块 | 职责 |\n|---|---|\n| core | 扫描 |\n| services | 编排';
+
+  it('未闭合代码块：默认 warn 不拦截', () => {
+    const r = validatePageContent(fenceContent, baseOpts);
+    expect(r.passed).toBe(true);
+    expect(r.issues).toContainEqual(
+      expect.objectContaining({ rule: 'incomplete-page', severity: 'warn', message: expect.stringContaining('未闭合代码块') }),
+    );
+  });
+
+  it('末尾表格残行：默认 warn 不拦截', () => {
+    const r = validatePageContent(tableContent, baseOpts);
+    expect(r.passed).toBe(true);
+    expect(r.issues).toContainEqual(
+      expect.objectContaining({ rule: 'incomplete-page', severity: 'warn', message: expect.stringContaining('表格残行') }),
+    );
+  });
+
+  it('truncated=true（生成期仍截断）时升级为 error，拒绝写盘', () => {
+    for (const content of [fenceContent, tableContent]) {
+      const r = validatePageContent(content, { ...baseOpts, truncated: true });
+      expect(r.passed).toBe(false);
+      expect(r.issues).toContainEqual(
+        expect.objectContaining({ rule: 'incomplete-page', severity: 'error' }),
+      );
+    }
+  });
+
+  it('完整内容无 incomplete-page 告警', () => {
+    const content = '# Overview\n\n完整正文。\n\n```ts\nconst a = 1;\n```\n\n| A |\n|---|\n| 1 |';
+    const r = validatePageContent(content, baseOpts);
+    expect(r.issues.some(i => i.rule === 'incomplete-page')).toBe(false);
+    expect(r.passed).toBe(true);
+  });
+});

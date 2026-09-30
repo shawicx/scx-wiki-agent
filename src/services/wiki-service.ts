@@ -276,18 +276,34 @@ export class WikiService {
         intentCoverage.push({ page, counts: intentCounts });
       }
 
-      // LLM 输出在生成阶段过闸：error 级违规直接降级规则路径
+      // LLM 输出在生成阶段过闸：error 级违规直接降级规则路径。
+      // truncated：生成期已知的"续写耗尽后仍截断"事实（notice 记录），
+      // 传入闸门将 incomplete-page 由 warn 升级为 error（截断残页确定性重建）。
       const pageKnownFiles = page === 'testing' ? knownFiles : productionKnownFiles;
+      const pageTruncated = () =>
+        continuations.some(c => c.page === page && c.truncated) ||
+        sectionedPages.some(s => s.page === page && s.truncated);
       const gate = (content: string): boolean =>
-        validatePageContent(content, { page, pagePath: relPath, knownFiles: pageKnownFiles, plannedPaths }).passed;
+        validatePageContent(content, {
+          page, pagePath: relPath, knownFiles: pageKnownFiles, plannedPaths,
+          truncated: pageTruncated(),
+        }).passed;
 
       const produced = await this.generatePage(
         page, pageContext, fallbackBuilder, pageGenerator, noLlm, onChunk, gate,
       );
       if (produced.llmDrop) {
-        // thinking-only 且重试未恢复：降级原因精确标记（供排查 provider 思考配置）
+        // 降级原因精确标记（供排查）：thinking-only 重试未恢复 / 截断残页被闸门拦截
         const thinkingFailed = thinkingOnly.some(t => t.page === page && !t.recovered);
-        llmDropped.push({ page, reason: thinkingFailed ? 'provider thinking-only response' : produced.llmDrop });
+        const truncatedDropped = produced.llmDrop === '质量闸门未过' && pageTruncated();
+        llmDropped.push({
+          page,
+          reason: thinkingFailed
+            ? 'provider thinking-only response'
+            : truncatedDropped
+              ? '输出仍截断（incomplete-page）'
+              : produced.llmDrop,
+        });
       }
 
       // 正文断言校验（仅 LLM 页）：三级核验后，查无实据的标识符标注「待确认」。

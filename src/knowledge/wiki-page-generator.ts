@@ -1061,6 +1061,14 @@ ${ctx.brief}
       rounds++;
     }
 
+    // 尾部愈合：末轮仍截断时，最后一轮拼接的 segment 是未经截齐的原始尾巴
+    // （可能悬在表格行/代码块中间）——复用安全切点丢弃残缺尾巴，只返回完整自洽的前缀。
+    // truncated 标记保留，供闸门升级 incomplete-page 检查与构建报告提示。
+    if (isAbnormalFinish(finish)) {
+      const healed = findSafeCut(text);
+      if (healed) text = healed.kept;
+    }
+
     return { content: text, rounds, truncated: isAbnormalFinish(finish) };
   }
 

@@ -157,7 +157,7 @@ describe('WikiPageGenerator 断流续写', () => {
     expect(notices).toEqual([{ kind: 'continuation', rounds: 1, truncated: false }]);
   });
 
-  it('续写调用抛异常时保留原内容且不外抛', async () => {
+  it('续写调用抛异常时保留安全前缀且不外抛（残缺尾巴被截齐）', async () => {
     const prefix = `# 测试\n\n${LONG}\n\n半截`;
     mockStreamText
       .mockReturnValueOnce(streamResult([textPart(prefix)], 'length') as any)
@@ -167,7 +167,10 @@ describe('WikiPageGenerator 断流续写', () => {
     const generator = new WikiPageGenerator('test-model', 'http://localhost', 'key', n => notices.push(n));
     const result = await generator.generateByName('testing', testingCtx, vi.fn());
 
-    expect(result).toBe(prefix);
+    // 保留安全前缀（完整段落），末尾残句被尾部愈合丢弃
+    expect(result).toContain('# 测试');
+    expect(result).toContain(LONG);
+    expect(result).not.toContain('半截');
     expect(notices).toEqual([]);
   });
 
@@ -180,10 +183,27 @@ describe('WikiPageGenerator 断流续写', () => {
 
     const notices: PageGenNotice[] = [];
     const generator = new WikiPageGenerator('test-model', 'http://localhost', 'key', n => notices.push(n));
-    await generator.generateByName('testing', testingCtx, vi.fn());
+    const result = await generator.generateByName('testing', testingCtx, vi.fn());
 
     expect(mockStreamText).toHaveBeenCalledTimes(3);
+    // 尾部愈合：末轮残句被丢弃，只保留完整自洽前缀；truncated 仍如实上报
+    expect(result).not.toContain('还半截');
     expect(notices).toEqual([{ kind: 'continuation', rounds: 2, truncated: true }]);
+  });
+
+  it('末轮截断在表格行中间：尾部愈合保留到最后一个完整表格行', async () => {
+    const prefix = `# 测试\n\n${LONG}\n\n## 表\n\n| A | B |\n|---|---|\n| 1 | 2 |`;
+    const midRound = `# 测试\n\n${LONG}\n\n| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n| 5 | 6`;
+    mockStreamText
+      .mockReturnValueOnce(streamResult([textPart(prefix)], 'length') as any)
+      .mockReturnValueOnce(streamResult([textPart(midRound)], 'length') as any)
+      .mockReturnValueOnce(streamResult([textPart(`# 测试\n\n${LONG}\n\n又半截`)], 'length') as any);
+
+    const generator = new WikiPageGenerator('test-model', 'http://localhost', 'key');
+    const result = await generator.generateByName('testing', testingCtx, vi.fn());
+
+    expect(result).toContain('| 3 | 4 |');
+    expect(result).not.toContain('| 5 | 6');
   });
 
   it('正常 stop 终止不触发续写', async () => {

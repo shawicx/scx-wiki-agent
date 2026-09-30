@@ -14,12 +14,16 @@
  * - diagram-misuse (warn) ：sequenceDiagram 出现在 calls 页之外（R2 边表优于时序图）。
  * - unanchored-rationale (warn)：动机/设计/演进类小节零证据锚点（R7 事后核验：
  *   file:line 与 commit 哈希+日期均无）。
+ * - incomplete-page (warn/error)：疑似截断残页（未闭合代码块 / 末尾表格残行）。
+ *   默认 warn；当生成期已知该页续写后仍截断（opts.truncated）时升级为 error，
+ *   拒绝写盘并降级规则路径重建。
  *
  * error 拒绝写盘；warn 记入构建报告。纯函数，不做 I/O。
  */
 
 import { posix } from 'node:path';
 import { EVIDENCE_MIN_FILES, EVIDENCE_SUMMARY } from './wiki-evidence.js';
+import { endsWithIncompleteTableRow, hasUnclosedFence } from './wiki-continuation.js';
 
 export type QualitySeverity = 'error' | 'warn';
 
@@ -31,7 +35,8 @@ export type QualityRule =
   | 'thin-evidence'
   | 'mermaid-ghost'
   | 'diagram-misuse'
-  | 'unanchored-rationale';
+  | 'unanchored-rationale'
+  | 'incomplete-page';
 
 export interface QualityIssue {
   rule: QualityRule;
@@ -61,6 +66,8 @@ export interface ValidateOptions {
   plannedPaths: ReadonlySet<string>;
   /** 页面层级（structure/operations/surface），thin-evidence 仅对 structure 生效 */
   tier?: string;
+  /** 生成期事实：该页续写耗尽轮数后仍截断（incomplete-page 由 warn 升级为 error） */
+  truncated?: boolean;
 }
 
 /** 密钥值特征（只报类别与行号，值不回显） */
@@ -92,6 +99,7 @@ export function validatePageContent(content: string, opts: ValidateOptions): Pag
   const evidence = checkThinEvidence(text, opts, issues);
   checkMermaid(text, opts, issues);
   checkUnanchoredRationale(text, issues);
+  checkIncompletePage(text, opts, issues);
 
   return {
     page: opts.page,
@@ -264,4 +272,25 @@ function checkUnanchoredRationale(text: string, issues: QualityIssue[]): void {
       message: `动机类小节「${title}」未引用任何 file:line 或 commit 证据（R7），叙述可能为无据推断`,
     });
   }
+}
+
+/**
+ * 截断残页检测（结构性信号，与生成期事实无关、常开）：
+ * - 未闭合代码块（围栏计数为奇数，后续内容会被吞进代码块）；
+ * - 末尾表格残行（流死在表格行中间）。
+ * 默认 warn（写入报告）；opts.truncated（续写耗尽后仍截断的生成期事实）时升级为
+ * error —— 拒绝写盘，由上层降级规则路径确定性重建完整页面。
+ * 悬空句子/缺失小节等启发式信号误报率高，不检测（诚实优于噪音）。
+ */
+function checkIncompletePage(text: string, opts: ValidateOptions, issues: QualityIssue[]): void {
+  const lines = text.split('\n');
+  const signals: string[] = [];
+  if (hasUnclosedFence(lines)) signals.push('未闭合代码块');
+  if (endsWithIncompleteTableRow(lines)) signals.push('末尾表格残行');
+  if (signals.length === 0) return;
+  issues.push({
+    rule: 'incomplete-page',
+    severity: opts.truncated ? 'error' : 'warn',
+    message: `疑似截断残页（${signals.join('、')}）${opts.truncated ? '：续写耗尽后仍截断' : ''}`,
+  });
 }

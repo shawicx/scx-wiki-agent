@@ -30,13 +30,8 @@ export interface SafeCut {
 export function findSafeCut(text: string): SafeCut | null {
   const lines = text.split('\n');
 
-  let endsInFence = false;
-  for (const line of lines) {
-    if (/^\s*```/.test(line)) endsInFence = !endsInFence;
-  }
-
   let cutLine = -1;
-  if (!endsInFence) {
+  if (!hasUnclosedFence(lines)) {
     cutLine = lastCompleteTableRow(lines);
   }
   if (cutLine < 0) {
@@ -47,6 +42,26 @@ export function findSafeCut(text: string): SafeCut | null {
   const kept = lines.slice(0, cutLine + 1).join('\n');
   if (kept.trim().length < MIN_CONTINUATION_KEEP) return null;
   return { kept };
+}
+
+/** 围栏（```）计数为奇数：存在未闭合代码块（截断残页的结构信号，供质量闸门复用） */
+export function hasUnclosedFence(lines: string[]): boolean {
+  let inFence = false;
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) inFence = !inFence;
+  }
+  return inFence;
+}
+
+/**
+ * 末尾表格块的最后一行不以 | 结尾（流死在表格行中间的结构信号，供质量闸门复用）。
+ * 末尾不是表格时返回 false。
+ */
+export function endsWithIncompleteTableRow(lines: string[]): boolean {
+  let end = lines.length - 1;
+  while (end >= 0 && lines[end].trim().length === 0) end--;
+  if (end < 0 || !lines[end].trimStart().startsWith('|')) return false;
+  return !lines[end].trimEnd().endsWith('|');
 }
 
 /** 围栏外最后一个空行的行号；没有则 -1 */

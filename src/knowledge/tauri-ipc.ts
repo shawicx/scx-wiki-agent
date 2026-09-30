@@ -74,7 +74,7 @@ export function scanIpcSurface(scanResult: ScanResult, cache: SourceCache): IpcS
     return lines;
   };
 
-  for (const file of scanResult.files) {
+  for (const file of scanResult.productionFiles) {
     const domain = languageDomainOf(file.relativePath);
     if (domain === null || isTestPath(file.relativePath)) continue;
     const isRust = domain === 'rust';

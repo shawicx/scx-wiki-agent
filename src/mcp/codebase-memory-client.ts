@@ -188,12 +188,12 @@ export class CodebaseMemoryClient {
    * 默认字面量匹配（regex=false）；totalGrepMatches > 0 即字面量在仓库中存在
    * （含 import/注释/配置中的出现），适合断言核验的兜底通道。
    */
-  searchCode(pattern: string): { totalGrepMatches: number; files: string[] } {
+  searchCode(pattern: string, limit = 20): { totalGrepMatches: number; files: string[] } {
     const raw = this.exec('search_code', {
       project: this.projectName,
       pattern,
       mode: 'files',
-      limit: 1,
+      limit,
       format: 'json',
     }) as { total_grep_matches?: number; files?: string[] };
     return {

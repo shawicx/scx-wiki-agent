@@ -25,16 +25,22 @@ import {
 const mockStreamText = vi.mocked(streamText);
 
 function makeScanResult(files: string[]): ScanResult {
+  const scannedFiles = files.map(f => ({
+    absolutePath: `/tmp/test-project/${f}`, relativePath: f,
+    language: 'typescript' as const, extension: '.ts', size: 100,
+    scope: 'production' as const,
+  }));
   return {
     rootDir: '/tmp/test-project',
-    files: files.map(f => ({
-      absolutePath: `/tmp/test-project/${f}`, relativePath: f,
-      language: 'typescript' as const, extension: '.ts', size: 100,
-    })),
+    files: scannedFiles,
     techStack: ['typescript'],
+    testTechStack: [],
     projectType: 'cli',
     hasTypeScript: true,
     sourceDirs: ['src'],
+    productionFiles: scannedFiles,
+    testFiles: [],
+    fileCounts: { total: scannedFiles.length, production: scannedFiles.length, test: 0 },
   };
 }
 

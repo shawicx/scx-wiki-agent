@@ -175,7 +175,8 @@ export class WikiPageGenerator {
 - 如提供 docsFiles，在概述末尾列出延伸阅读清单（相对路径原样保留）
 - "核心设计思路"章节：用2-3段自然语言描述项目的架构理念、关键设计决策、技术选型理由（结合技术栈）；如提供 intent（意图证据：注释/提交/文档小节/测试行为），每条动机叙述必须引用其原文并携带证据锚点（file:line / commit 哈希+日期 / 文档路径#标题），无证据支撑的设计判断标注「推断」并写明依据（R7）
 - "技术栈"章节：用表格列出每项技术及用途，并在表格后用1-2段分析技术选型的合理性；如提供 depUsage（依赖使用证据），用途陈述必须锚定其证据——usageKind=import 锚定 importFiles、test 锚定测试文件、script 锚定 scripts 命令；usageKind ≠ none 的依赖严禁标「待确认」或「声明未用」，仅 none 可标「声明未用」
-- "项目结构"章节：逐一描述每个源代码目录的职责（至少覆盖所有 sourceDirs），说明目录间的关系；多语言项目的 sourceDirs 含各语言的源码目录（如 src 与 src-tauri）
+- techStack 只包含生产代码 import 的依赖；depUsage.usageKind=test 的依赖只能说明为测试专用，不得写成生产运行时技术栈
+- "项目结构"章节：逐一描述每个源代码目录的职责（至少覆盖所有 sourceDirs），说明目录间的关系，并引用 productionFileCount/testFileCount 区分生产与测试规模；多语言项目的 sourceDirs 含各语言的源码目录（如 src 与 src-tauri）
 - "入口文件"章节：列出每个入口点，说明其启动流程和职责
 - "核心组件"章节：基于 topSymbols 数据，用一段话介绍项目中复杂度最高/调用最频繁的核心组件
 - 不要只列举符号名，要解释每个组件的用途和设计意图
@@ -184,6 +185,8 @@ export class WikiPageGenerator {
         projectType: ctx.projectType,
         hasTypeScript: ctx.hasTypeScript,
         fileCount: ctx.fileCount,
+        productionFileCount: ctx.productionFileCount ?? ctx.fileCount,
+        testFileCount: ctx.testFileCount ?? 0,
         techStack: ctx.techStack,
         entryFiles: ctx.entryFiles.map(f => f.path),
         sourceDirs: ctx.sourceDirs,
@@ -522,7 +525,7 @@ ${hasIpc ? `
 - "安装步骤"章节：给出完整的安装流程，使用提供的包管理器，包含每步的预期输出和验证方法
 - "项目初始化"章节：列出实际的CLI命令（从提供的命令列表中获取），说明每个命令的作用、参数（options 数据直接引用）与使用场景
 - "基本使用"章节：详细列出核心命令和用法，用代码块展示命令示例，说明典型工作流（如 scan → build 的完整流程）；构建/测试等实际命令必须从 scripts 数据直接引用，严禁标「待确认」
-- "环境变量"章节：如提供 envVars 数据，用表格列出变量名与敏感标记；未提供则不设该章节（不要标注待确认）
+- "环境变量"章节：如提供 envVars 数据，用表格列出（变量名 | 敏感 | 生产引用），production 引用必须使用 filePaths 中完整文件路径；未提供则不设该章节（不要标注待确认）
 - "项目结构概览"章节：逐一描述每个源代码目录的含义和作用，锚定 sourceDirFiles 给出的各目录真实文件样本（严禁以「目录内部文件清单未提供」为由标待确认）
 - "开发指南"章节：说明如何构建、如何运行测试、如何开发调试
 - 只描述基于数据可以确定的内容，不要编造具体命令参数；工具链通用常识（包管理器命令差异、ESM/CJS 语义、构建工具常规行为）无需数据佐证，禁止标「待确认」；如提供 depUsage（依赖使用证据），依赖相关叙述按 usageKind 锚定，usageKind ≠ none 的依赖严禁标「待确认」或「声明未用」
@@ -550,7 +553,7 @@ ${hasIpc ? `
 
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- "环境问题"章节：详细列出与项目技术栈相关的环境配置问题、版本冲突、依赖安装问题及解决方案（nodeVersion/envVars/packageManager 数据直接引用）
+- "环境问题"章节：详细列出与项目技术栈相关的环境配置问题、版本冲突、依赖安装问题及解决方案（nodeVersion/envVars/packageManager 数据直接引用）；envVars 的 filePaths 是生产源码锚点，必须原样保留
 - "构建问题"章节：详细列出可能的构建失败场景（如 TypeScript 编译错误、打包问题、ESM/CJS 兼容）及解决方案（scripts.build 等实际命令直接引用）
 - "运行时问题"章节：详细列出可能的运行时问题（如模块解析、路径问题、权限问题、外部依赖缺失如 codebase-memory-mcp 未安装）及解决方案；constants 中的限制常量（超时/上限）是排障的关键边界，必须逐个说明触界时的典型症状；如提供 intent 中的 why-marker（源码 TODO/FIXME/HACK 标记）与 git-churn（高频变更）证据，它们是作者自认的真实风险点与维护热点，按锚点引用并纳入对应问题条目（R7）
 - "调试技巧"章节：列出针对该项目的调试方法（如 watch 构建、单文件测试调试、如何查看日志；入口文件 entryFiles 是排障起点）
@@ -736,10 +739,17 @@ ${ctx.brief}
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - "测试体系概览"：用表格列出框架/配置文件/测试目录/夹具目录的事实
 - "运行方式"：基于 runCommand 给出完整命令，说明其做了什么、预期产出
+- "测试专用证据"：如提供 testOnlyEnvVars/testOnlyConstants/testOnlyDeps，分表列出并保留测试文件锚点；这些内容只属于测试环境，禁止写成生产运行时配置或生产技术栈
 - "测试策略解读"：基于检测到的事实（框架特性、目录组织、夹具位置）用1-2段分析项目的测试策略与覆盖重点
 - 未检测到的项（framework 为 null 等）必须诚实标注「未检测到」，严禁编造框架特性、用例数量或覆盖率数字（R5）；未探测到的配置项（configPath/coverage 阈值等）直接省略或用一句话汇总缺口，禁止逐项标「待确认」；测试框架的通用用法（单文件运行、名称过滤、watch 模式）属公共常识，无需标注
 - 内容要充实，让读者知道如何运行测试、测试覆盖了什么`,
-      userPrompt: JSON.stringify({ ...ctx }, null, 2),
+      userPrompt: JSON.stringify({
+        ...ctx,
+        testOnlyConstants: ctx.testOnlyConstants.map(c => ({
+          ...c,
+          anchor: c.line ? `${c.filePath}:${c.line}` : c.filePath,
+        })),
+      }, null, 2),
     });
   }
 
@@ -749,7 +759,7 @@ ${ctx.brief}
 
 要求：
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- "限制常量"：用表格列出（常量 | 值 | 源文件），并逐个解读该常量防止的是什么失控场景（超时/内存/规模上限等）；如 intent 携带 const-comment（常量的源码注释），解读必须优先引用注释原文并携带 file:line 锚点（R7）——这是作者亲写的「为什么有这个限制」
+- "限制常量"：用表格列出（常量 | 值 | 源文件:行号），并逐个解读该常量防止的是什么失控场景（超时/内存/规模上限等）；如 intent 携带 const-comment（常量的源码注释），解读必须优先引用注释原文并携带 file:line 锚点（R7）——这是作者亲写的「为什么有这个限制」
 - "复杂度热点"：用表格列出（函数 | 源文件 | 复杂度 | 循环深度），对复杂度最高的前几个函数深入分析潜在风险与重构方向
 - "已知边界"：总结上述数据反映出的项目边界（哪些地方最脆弱、改动代价在哪）
 - 无数据的分类诚实标注「未检测到」，严禁编造阈值或性能数字（R5）
@@ -767,7 +777,7 @@ ${ctx.brief}
 - 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
 - "项目信息"章节：用表格列出包名/版本/运行时（ESM/CJS）/Node 版本/包管理器，并用一段话说明运行时与包管理器的实际影响（如 ESM 对 import 的要求、包管理器对应的安装命令前缀）
 - "脚本命令"章节：用表格列出 scripts 的每个命令与脚本内容，逐个解释其行为与预期产出
-- "环境变量"章节：如提供 envVars，用表格列出变量名/敏感标记，说明典型用途；未提供则不设该章节（不要标注待确认）
+- "环境变量"章节：如提供 envVars，用表格列出（变量名 | 敏感 | 生产引用），production 引用必须使用 filePaths 中完整文件路径；用途说明只能基于变量名与引用位置谨慎概括，未提供用途证据时写「见生产引用」，禁止编造；未提供则不设该章节
 - 数据已提供的字段（packageManager/scripts/envVars）严禁再标「待确认」（R5）；工具链通用常识（ESM/CJS 语义、各包管理器命令差异）无需数据佐证，禁止标「待确认」；具体配置文件内容、端口、版本号等数据未提供的条目直接省略，不要逐项标「待确认」
 - 内容要充实，让读者据此能正确准备环境与运行全部命令`,
       userPrompt: JSON.stringify({
@@ -791,12 +801,14 @@ ${ctx.brief}
 - 开头用1-2段概述项目的技术选型全貌（运行时/构建工具/包管理器/核心框架）
 - "核心依赖"章节：用表格列出（依赖 | 版本 | 首个 import 点），按职责分组（框架/UI/状态/工具等），对每组用1-2段说明选型理由与协作关系（基于依赖职责与 import 分布，不得编造调用细节）；如提供 intent（依赖相关提交主题 git-commit 证据），选型/引入动机必须优先引用提交主题并携带 commit 哈希+日期锚点（R7），无提交佐证的动机分析标注「推断」
 - "开发依赖"章节：用表格列出（依赖 | 版本 | 首个 import 点），说明各自的开发场景用途
+- "测试专用依赖"章节：如 testDeps 非空，用表格列出（依赖 | 版本 | 首个测试 import 点），明确它们不属于生产运行时技术栈
 - "声明未用依赖"章节：仅当 unusedDeps 非空时输出表格，且必须在其前写明：「下表由源码 import 扫描推导（覆盖 .ts/.js/.vue/.css），存在动态加载、字符串引用等扫描盲区，清理前请人工复核」——严禁断言这些依赖一定无用
 - 每条 import 点锚点必须原样保留（R1/R3）
 - 内容要充实，让读者理解技术栈全貌与升级影响面`,
       userPrompt: JSON.stringify({
         coreDeps: ctx.coreDeps,
         devDeps: ctx.devDeps,
+        testDeps: ctx.testDeps,
         unusedDeps: ctx.unusedDeps,
         runtime: ctx.runtime,
         buildTool: ctx.buildTool,

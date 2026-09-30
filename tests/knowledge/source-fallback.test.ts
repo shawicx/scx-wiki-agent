@@ -6,19 +6,25 @@ import { findSymbolDefinitions, extractDefinedSymbolNames } from '../../src/know
 import type { ScanResult } from '../../src/core/scanner.js';
 
 function makeScanResult(rootDir: string, rels: string[]): ScanResult {
+  const files = rels.map(rel => ({
+    absolutePath: join(rootDir, rel),
+    relativePath: rel,
+    language: 'typescript' as const,
+    extension: rel.endsWith('.rs') ? '.rs' : rel.endsWith('.vue') ? '.vue' : '.ts',
+    size: 100,
+    scope: 'production' as const,
+  }));
   return {
     rootDir,
-    files: rels.map(rel => ({
-      absolutePath: join(rootDir, rel),
-      relativePath: rel,
-      language: 'typescript' as const,
-      extension: rel.endsWith('.rs') ? '.rs' : rel.endsWith('.vue') ? '.vue' : '.ts',
-      size: 100,
-    })),
+    files,
     techStack: [],
+    testTechStack: [],
     projectType: 'unknown',
     hasTypeScript: true,
     sourceDirs: [],
+    productionFiles: files,
+    testFiles: [],
+    fileCounts: { total: files.length, production: files.length, test: 0 },
   };
 }
 

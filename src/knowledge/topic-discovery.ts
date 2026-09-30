@@ -163,9 +163,9 @@ export class TopicDiscovery {
     const top = [...arch.boundaries].sort((a, b) => b.call_count - a.call_count)[0];
     if (!top || top.call_count <= 0) return null;
     const pkgFile = (pkgName: string) =>
-      this.scanResult.files
+      this.scanResult.productionFiles
         .map(f => f.relativePath)
-        .filter(p => matchPackageForFile(p, [pkgName]) !== null && !isTestPath(p));
+        .filter(p => matchPackageForFile(p, [pkgName]) !== null);
     const files = [...pkgFile(top.from), ...pkgFile(top.to)].slice(0, MAX_TOPIC_FILES);
     if (files.length < MIN_TOPIC_FILES) return null;
     return {
@@ -177,7 +177,7 @@ export class TopicDiscovery {
 
   /** 符号名 → 扫描清单内的生产文件路径（去重，过滤测试路径） */
   private filesForSymbols(names: string[]): string[] {
-    const known = new Set(this.scanResult.files.map(f => f.relativePath));
+    const known = new Set(this.scanResult.productionFiles.map(f => f.relativePath));
     const list = names.map(n => `"${n.replace(/"/g, '\\"')}"`).join(',');
     const q = this.client.queryGraph(
       `MATCH (n) WHERE n.name IN [${list}] AND n.is_test = false

@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
-import { dirname, join } from 'path';
+import { dirname, isAbsolute, join, relative } from 'path';
 import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
 import type { ScanResult } from '../core/scanner.js';
 import { WikiContextBuilder } from '../knowledge/wiki-context-builder.js';
@@ -114,6 +114,7 @@ export class WikiService {
     // 章节树：outline.json 锁定；缺失且 LLM 可用时 planner 首次自动提议（--refresh-outline 重建）；
     // 规划不可用/失败时回退现有锁定文件。坏配置经校验器降级，绝不失败构建。
     const knownFiles = new Set(this.scanResult.files.map(f => f.relativePath));
+    const productionKnownFiles = new Set(this.scanResult.productionFiles.map(f => f.relativePath));
     let outlineRaw: unknown | null = options?.refreshOutline ? null : loadOutline(agentDir);
     if (outlineRaw === null && !noLlm && pageGenerator.hasModel()) {
       // LLM 故障（限流/欠费/断网）不阻断构建：规划失败按无章节页继续（fail-open）
@@ -145,7 +146,10 @@ export class WikiService {
     // 检测式配置探测器：探测项目实际配置（package.json/lockfile/eslint/...），
     // 复用 scanResult 的源文件列表避免重复扫描
     const detector = new ConfigDetector(this.scanResult.rootDir);
-    detector.setSourceFiles(this.scanResult.files.map(f => f.absolutePath));
+    detector.setSourceClassification({
+      production: this.scanResult.productionFiles.map(f => f.absolutePath),
+      test: this.scanResult.testFiles.map(f => f.absolutePath),
+    });
 
     // 意图证据层：「为什么」的确定性证据源（注释/git/文档/测试），
     // fail-open——无 git/无注释时各页 intent 字段缺省，绝不阻断构建
@@ -254,8 +258,9 @@ export class WikiService {
       }
 
       // LLM 输出在生成阶段过闸：error 级违规直接降级规则路径
+      const pageKnownFiles = page === 'testing' ? knownFiles : productionKnownFiles;
       const gate = (content: string): boolean =>
-        validatePageContent(content, { page, pagePath: relPath, knownFiles, plannedPaths }).passed;
+        validatePageContent(content, { page, pagePath: relPath, knownFiles: pageKnownFiles, plannedPaths }).passed;
 
       const produced = await this.generatePage(
         page, pageContext, fallbackBuilder, pageGenerator, noLlm, onChunk, gate,
@@ -270,13 +275,21 @@ export class WikiService {
       // confirmed 为人工确认白名单（confirmations.json），命中即免标。
       let bodyContent = produced.content;
       if (produced.source === 'llm') {
-        const universe = new Set(this.getSymbolUniverse(contextBuilder.getFallbackSymbolNames()));
+        const universe = new Set(this.getSymbolUniverse(
+          contextBuilder.getFallbackSymbolNames(),
+          page === 'testing' ? 'all' : 'production',
+        ));
         for (const dep of contextBuilder.getDepNames()) universe.add(dep);
         for (const key of collectContextKeys(pageContext)) universe.add(key);
         const verified = verifyAndAnnotateClaims(bodyContent, {
           symbols: universe,
-          knownFiles,
-          grepCount: pattern => this.client.searchCode(pattern).totalGrepMatches,
+          knownFiles: pageKnownFiles,
+          grepCount: pattern => {
+            const result = this.client.searchCode(pattern, 20);
+            return result.files.some(file => pageKnownFiles.has(file))
+              ? result.totalGrepMatches
+              : 0;
+          },
           confirmed: persistedConfirmed,
         });
         bodyContent = verified.content;
@@ -288,7 +301,7 @@ export class WikiService {
         relPath,
         source: produced.source,
         content: bodyContent,
-        evidenceFiles: collectEvidenceFiles(pageContext, knownFiles, this.scanResult.rootDir),
+        evidenceFiles: collectEvidenceFiles(pageContext, pageKnownFiles, this.scanResult.rootDir),
       });
     }
 
@@ -332,7 +345,9 @@ export class WikiService {
       // 写盘前质量闸门（LLM 与规则路径都过闸）
       const report = validatePageContent(
         content, {
-          page, pagePath: relPath, knownFiles, plannedPaths,
+          page, pagePath: relPath,
+          knownFiles: entry.page === 'testing' ? knownFiles : productionKnownFiles,
+          plannedPaths,
           tier: findPageDescriptor(page)?.tier,
         },
       );
@@ -398,19 +413,35 @@ export class WikiService {
     return valid.length > 0 ? valid : allPages;
   }
 
-  /** 图谱符号名全集（断言校验一级核验；构建内缓存，首次 LLM 页时查询）。
+  /** 图谱符号名全集（断言校验一级核验；按页面作用域缓存）。
    *  fallback 为源码回落/IPC 扫描找到的名字——必须并入，否则工具自己注入的
-   *  证据会被断言校验反手标成「待确认」（自证矛盾）。 */
-  private symbolUniverse: Set<string> | null = null;
-  private getSymbolUniverse(fallback?: ReadonlySet<string>): Set<string> {
-    if (this.symbolUniverse === null) {
+   *  证据会被断言校验反手标成「待确认」（自证矛盾）。production 作用域只采纳
+   *  能定位到生产扫描文件的图谱符号，防止 is_test 标记失准的测试符号背书。 */
+  private symbolUniverses = new Map<'all' | 'production', Set<string>>();
+  private getSymbolUniverse(
+    fallback?: ReadonlySet<string>,
+    scope: 'all' | 'production' = 'all',
+  ): Set<string> {
+    let universe = this.symbolUniverses.get(scope);
+    if (universe === undefined) {
       const q = this.client.queryGraph(
-        'MATCH (n) WHERE n.is_test = false RETURN DISTINCT n.name AS name LIMIT 5000',
+        'MATCH (n) WHERE n.is_test = false RETURN n.name AS name, n.file_path AS file LIMIT 5000',
+        5000,
       );
-      this.symbolUniverse = new Set(q.rows.map(r => String(r[0])));
+      const productionPaths = new Set(this.scanResult.productionFiles.map(f => f.relativePath));
+      universe = new Set();
+      for (const row of q.rows) {
+        const rawFile = String(row[1] ?? '');
+        const file = isAbsolute(rawFile)
+          ? relative(this.scanResult.rootDir, rawFile).replace(/\\/g, '/')
+          : rawFile;
+        if (scope === 'production' && !productionPaths.has(file)) continue;
+        universe.add(String(row[0]));
+      }
+      this.symbolUniverses.set(scope, universe);
     }
-    if (!fallback || fallback.size === 0) return this.symbolUniverse;
-    const merged = new Set(this.symbolUniverse);
+    if (!fallback || fallback.size === 0) return universe;
+    const merged = new Set(universe);
     for (const n of fallback) merged.add(n);
     return merged;
   }

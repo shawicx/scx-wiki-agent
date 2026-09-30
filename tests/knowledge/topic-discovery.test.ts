@@ -5,6 +5,7 @@ import { TopicDiscovery, loadTopics, saveTopics } from '../../src/knowledge/topi
 import { createMockClient } from '../helpers/mock-mcp-client.js';
 import type { ScanResult } from '../../src/core/scanner.js';
 import type { QueryResult } from '../../src/mcp/types.js';
+import { isTestPath } from '../../src/shared/utils.js';
 import {
   pageRelPath, findPageDescriptor, buildRelatedSection,
 } from '../../src/knowledge/page-registry.js';
@@ -12,19 +13,31 @@ import {
 const tmpDir = join(process.cwd(), '.test-topic-tmp');
 
 function makeScanResult(files: string[]): ScanResult {
+  const scannedFiles = files.map(rel => ({
+    absolutePath: `/tmp/test-project/${rel}`,
+    relativePath: rel,
+    language: 'typescript' as const,
+    extension: '.ts',
+    size: 100,
+    scope: isTestPath(rel) ? 'test' as const : 'production' as const,
+  }));
+  const productionFiles = scannedFiles.filter(f => f.scope === 'production');
+  const testFiles = scannedFiles.filter(f => f.scope === 'test');
   return {
     rootDir: '/tmp/test-project',
-    files: files.map(rel => ({
-      absolutePath: `/tmp/test-project/${rel}`,
-      relativePath: rel,
-      language: 'typescript' as const,
-      extension: '.ts',
-      size: 100,
-    })),
+    files: scannedFiles,
     techStack: ['commander'],
+    testTechStack: [],
     projectType: 'cli',
     hasTypeScript: true,
     sourceDirs: ['src'],
+    productionFiles,
+    testFiles,
+    fileCounts: {
+      total: scannedFiles.length,
+      production: productionFiles.length,
+      test: testFiles.length,
+    },
   };
 }
 

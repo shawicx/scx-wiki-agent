@@ -34,19 +34,51 @@ describe('FileScanner', () => {
     expect(tsFile?.language).toBe('typescript');
   });
 
-  it('should detect tech stack from package.json', () => {
+  it('生产源码无 import 时不回退全量声明依赖', () => {
     const scanner = new FileScanner(fixturesDir);
     const result = scanner.scan();
 
-    expect(result.techStack).toContain('express');
-    expect(result.techStack).toContain('@nestjs/core');
+    // fixture 的生产源码没有外部 import：不得因测试/配置存在而回退到全量声明依赖
+    expect(result.techStack).toEqual([]);
   });
 
   it('should detect project type', () => {
     const scanner = new FileScanner(fixturesDir);
     const result = scanner.scan();
 
-    expect(result.projectType).toBe('backend');
+    expect(result.projectType).toBe('unknown');
+  });
+
+  it('统一划分生产/测试文件，并拆分生产与测试技术栈', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'scanner-scope-'));
+    try {
+      writeFileSync(join(tmp, 'package.json'), JSON.stringify({
+        name: 'scope-demo',
+        dependencies: { commander: '^12.0.0' },
+        devDependencies: { vitest: '^4.0.0' },
+      }));
+      mkdirSync(join(tmp, 'src'), { recursive: true });
+      mkdirSync(join(tmp, 'tests'), { recursive: true });
+      writeFileSync(join(tmp, 'src', 'cli.ts'), "import { Command } from 'commander'\n");
+      writeFileSync(join(tmp, 'tests', 'cli.test.ts'), "import { describe } from 'vitest'\n");
+
+      const result = new FileScanner(tmp).scan();
+      const production = result.files.find(f => f.relativePath === 'src/cli.ts');
+      const test = result.files.find(f => f.relativePath === 'tests/cli.test.ts');
+
+      expect(production?.scope).toBe('production');
+      expect(test?.scope).toBe('test');
+      expect(result.productionFiles.map(f => f.relativePath)).toContain('src/cli.ts');
+      expect(result.testFiles.map(f => f.relativePath)).toContain('tests/cli.test.ts');
+      expect(result.fileCounts).toEqual({ total: 3, production: 2, test: 1 });
+      expect(result.techStack).toContain('commander');
+      expect(result.techStack).not.toContain('vitest');
+      expect(result.testTechStack).toContain('vitest');
+      expect(result.sourceDirs).toEqual(['src']);
+      expect(result.projectType).toBe('cli');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it('仅含 allowBuilds 的 pnpm-workspace.yaml 不判为 monorepo（审批配置 ≠ workspace）', () => {

@@ -499,11 +499,8 @@ export class IntentEvidenceProvider {
           anchor: tl.last ? commitAnchor(tl.last) : module,
         });
       }
-      // 行为承诺：该模块源文件对应的测试用例名
-      for (const e of this.testSpecs()) {
-        const targetFile = e.target.file;
-        if (targetFile && files.includes(targetFile)) items.push(e);
-      }
+      // 测试用例名属于 testing 证据（锚点在测试文件），不混入生产模块主叙事；
+      // 非 testing 页的质量闸门会把测试文件锚点判为作用域外证据。
       this.moduleIntents.set(module, dedupeByAnchor(items).slice(0, MODULE_INTENT_CAP));
     }
 
@@ -525,7 +522,7 @@ export class IntentEvidenceProvider {
 
   // --- 主题/章节页：文件集证据 ---
 
-  /** 主题文件集证据：注释 + 各文件首末提交 + 相关测试行为（页预算封顶） */
+  /** 主题文件集证据：注释 + 各文件首末提交（页预算封顶；测试行为留在 testing 证据域） */
   intentForFiles(files: string[]): IntentEvidence[] {
     const items: IntentEvidence[] = [...this.fileComments(files)];
     for (const rel of files.slice(0, 10)) {
@@ -537,10 +534,6 @@ export class IntentEvidenceProvider {
         text: `${rel} 首次提交：${info.first.subject}`,
         anchor: commitAnchor(info.first),
       });
-    }
-    const fileSet = new Set(files);
-    for (const e of this.testSpecs()) {
-      if (e.target.file && fileSet.has(e.target.file)) items.push(e);
     }
     return dedupeByAnchor(items).slice(0, PAGE_INTENT_CAP);
   }

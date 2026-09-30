@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join, extname, relative, basename, dirname } from 'path';
+import { importedPackageName, isTestPath } from '../shared/utils.js';
+import type { ConstantEvidence, EnvVarEvidence } from '../core/types.js';
 
 export interface EnvironmentInfo {
   packageName: string;
@@ -8,7 +10,7 @@ export interface EnvironmentInfo {
   nodeVersion: string;
   packageManager: string; // npm / pnpm / yarn
   scripts: Record<string, string>;
-  envVars: Array<{ name: string; sensitive: boolean }>;
+  envVars: EnvVarEvidence[];
 }
 
 export interface ConventionsInfo {
@@ -25,14 +27,20 @@ export interface TestingInfo {
   testDirs: string[];
   fixturesDir: string | null;
   coverageThreshold: number | null;
+  productionFileCount: number;
+  testFileCount: number;
+  testOnlyEnvVars: EnvVarEvidence[];
+  testOnlyConstants: ConstantEvidence[];
+  testOnlyDeps: Array<{ name: string; version: string; importFiles: string[] }>;
 }
 
 export interface ConstraintsInfo {
-  constants: Array<{ name: string; value: string; filePath: string }>;
+  constants: ConstantEvidence[];
 }
 
 const CODE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
 const KNOWN_SOURCE_DIRS = ['src', 'src-tauri', 'app', 'lib', 'packages', 'cmd', 'internal'];
+const AUTO_SOURCE_DIRS = [...KNOWN_SOURCE_DIRS, 'tests', 'test', '__tests__', 'spec'];
 
 export interface PackageJsonInfo {
   name?: string;
@@ -41,6 +49,8 @@ export interface PackageJsonInfo {
   scripts?: Record<string, string>;
   engines?: { node?: string };
   packageManager?: string;
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
 }
 
 /**
@@ -49,32 +59,54 @@ export interface PackageJsonInfo {
  * 设计：探测项目实际配置文件——有则提取，无则返回 detected=false / 空值。
  * 多语言/框架可扩展：不同项目（有/无 eslint、Node/Go/Python）都能优雅处理。
  *
- * 源码扫描（env 变量、限制常量）需要源文件列表。
- * 调用方可用 setSourceFiles() 预设（生产路径，复用 scanResult），
- * 否则在首次 detect* 时自动扫描常见源目录（测试路径）。
+ * 源码扫描（env 变量、限制常量）需要生产/测试文件分类。
+ * 生产构建用 setSourceClassification() 注入 FileScanner 的分类结果；
+ * setSourceFiles() 保留为兼容入口并按 isTestPath 拆分。
  */
 export class ConfigDetector {
-  private sourceFiles: string[] | null = null;
+  private sourceClassification: { production: string[]; test: string[] } | null = null;
 
   constructor(private rootDir: string) {}
 
-  /** 预设源文件绝对路径列表（供 env/常量探测复用，避免重复扫描） */
+  /** 兼容入口：预设全量源文件，内部仍按生产/测试口径拆分 */
   setSourceFiles(files: string[]): void {
-    this.sourceFiles = files;
+    this.sourceClassification = this.classifyFiles(files);
   }
 
-  /** 懒加载源文件列表：未预设则扫描 KNOWN_SOURCE_DIRS 下的代码文件 */
-  private getSourceFiles(): string[] {
-    if (this.sourceFiles) return this.sourceFiles;
+  /** 生产构建路径使用的显式分类入口（与 FileScanner 的 scope 同口径） */
+  setSourceClassification(input: { production: string[]; test: string[] }): void {
+    this.sourceClassification = input;
+  }
+
+  /** 懒加载源文件分类：未预设则自动扫描常见生产/测试目录 */
+  private ensureSourceClassification(): { production: string[]; test: string[] } {
+    if (this.sourceClassification) return this.sourceClassification;
     const files: string[] = [];
-    for (const dir of KNOWN_SOURCE_DIRS) {
+    for (const dir of AUTO_SOURCE_DIRS) {
       const absDir = join(this.rootDir, dir);
       if (existsSync(absDir)) {
         this.walkCodeFiles(absDir, files);
       }
     }
-    this.sourceFiles = files;
-    return files;
+    this.sourceClassification = this.classifyFiles(files);
+    return this.sourceClassification;
+  }
+
+  private getSourceFiles(scope: 'production' | 'test' | 'all' = 'all'): string[] {
+    const classified = this.ensureSourceClassification();
+    if (scope === 'production') return classified.production;
+    if (scope === 'test') return classified.test;
+    return [...classified.production, ...classified.test];
+  }
+
+  private classifyFiles(files: string[]): { production: string[]; test: string[] } {
+    const production: string[] = [];
+    const test: string[] = [];
+    for (const file of files) {
+      const rel = relative(this.rootDir, file).replace(/\\/g, '/');
+      (isTestPath(rel) ? test : production).push(file);
+    }
+    return { production, test };
   }
 
   private walkCodeFiles(dir: string, acc: string[]): void {
@@ -149,7 +181,7 @@ export class ConfigDetector {
       packageManager = 'yarn';
     }
 
-    const envVars = this.extractEnvVars();
+    const envVars = this.extractEnvVars(this.getSourceFiles('production'));
 
     return { packageName, version, runtime, nodeVersion, packageManager, scripts, envVars };
   }
@@ -272,57 +304,133 @@ export class ConfigDetector {
       if (existsSync(data)) { fixturesDir = `${d}/data`; break; }
     }
 
-    return { framework, configPath, testDirs: [...testDirs].sort(), fixturesDir, coverageThreshold: null };
+    const productionFiles = this.getSourceFiles('production');
+    const testFiles = this.getSourceFiles('test');
+    const productionEnvNames = new Set(this.extractEnvVars(productionFiles).map(v => v.name));
+    const productionConstantNames = new Set(this.extractConstants(productionFiles).map(c => c.name));
+
+    return {
+      framework,
+      configPath,
+      testDirs: [...testDirs].sort(),
+      fixturesDir,
+      coverageThreshold: null,
+      productionFileCount: productionFiles.length,
+      testFileCount: testFiles.length,
+      testOnlyEnvVars: this.extractEnvVars(testFiles)
+        .filter(v => !productionEnvNames.has(v.name)),
+      testOnlyConstants: this.extractConstants(testFiles)
+        .filter(c => !productionConstantNames.has(c.name)),
+      testOnlyDeps: this.detectTestOnlyDeps(productionFiles, testFiles),
+    };
   }
 
   detectConstraints(): ConstraintsInfo {
-    const constants: ConstraintsInfo['constants'] = [];
-    const constRegex = /(?:const|export\s+const)\s+([A-Z_]*(?:MAX|MIN|LIMIT|TIMEOUT|DEPTH|SIZE|COUNT|THRESHOLD)[A-Z_]*)\s*=\s*([^;\n]+)/g;
-
-    for (const file of this.getSourceFiles()) {
-      try {
-        const source = readFileSync(file, 'utf-8');
-        for (const line of source.split('\n')) {
-          if (isCommentLine(line)) continue;
-          let match: RegExpExecArray | null;
-          constRegex.lastIndex = 0;
-          while ((match = constRegex.exec(line)) !== null) {
-            constants.push({
-              name: match[1],
-              value: match[2].trim(),
-              filePath: relative(this.rootDir, file),
-            });
-          }
-        }
-      } catch { /* skip unreadable */ }
-    }
-
-    return { constants };
+    return { constants: this.extractConstants(this.getSourceFiles('production')) };
   }
 
-  /** 从源码提取 process.env.XXX 引用（跳过注释行） */
-  private extractEnvVars(): Array<{ name: string; sensitive: boolean }> {
-    const envSet = new Set<string>();
+  /** 从指定源码提取 process.env.XXX 引用（跳过注释行） */
+  private extractEnvVars(files: string[]): EnvVarEvidence[] {
+    const byName = new Map<string, Set<string>>();
     const envRegex = /process\.env\.([A-Z_][A-Z0-9_]*)/g;
 
-    for (const file of this.getSourceFiles()) {
+    for (const file of files) {
       try {
         const source = readFileSync(file, 'utf-8');
+        const rel = relative(this.rootDir, file).replace(/\\/g, '/');
         for (const line of source.split('\n')) {
           if (isCommentLine(line)) continue;
           let match: RegExpExecArray | null;
           envRegex.lastIndex = 0;
           while ((match = envRegex.exec(line)) !== null) {
-            envSet.add(match[1]);
+            const name = match[1];
+            const paths = byName.get(name) ?? new Set<string>();
+            paths.add(rel);
+            byName.set(name, paths);
           }
         }
       } catch { /* skip unreadable */ }
     }
 
-    return Array.from(envSet).map(name => ({
+    return [...byName.entries()].map(([name, paths]) => ({
       name,
       sensitive: /KEY|SECRET|TOKEN|PASSWORD|CREDENTIAL/i.test(name),
+      filePaths: [...paths].sort(),
     }));
+  }
+
+  private extractConstants(files: string[]): ConstantEvidence[] {
+    const constants: ConstantEvidence[] = [];
+    const constRegex = /(?:const|export\s+const)\s+([A-Z_]*(?:MAX|MIN|LIMIT|TIMEOUT|DEPTH|SIZE|COUNT|THRESHOLD)[A-Z_]*)\s*=\s*([^;\n]+)/g;
+
+    for (const file of files) {
+      try {
+        const source = readFileSync(file, 'utf-8');
+        const lines = source.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          if (isCommentLine(lines[i])) continue;
+          constRegex.lastIndex = 0;
+          let match: RegExpExecArray | null;
+          while ((match = constRegex.exec(lines[i])) !== null) {
+            constants.push({
+              name: match[1],
+              value: match[2].trim(),
+              filePath: relative(this.rootDir, file).replace(/\\/g, '/'),
+              line: i + 1,
+            });
+          }
+        }
+      } catch { /* skip unreadable */ }
+    }
+    return constants;
+  }
+
+  private detectTestOnlyDeps(
+    productionFiles: string[],
+    testFiles: string[],
+  ): Array<{ name: string; version: string; importFiles: string[] }> {
+    const pkg = this.readPackageJsonLoose();
+    if (!pkg) return [];
+    const productionImports = this.collectImportMap(productionFiles);
+    const testImports = this.collectImportMap(testFiles);
+
+    const declared: Array<{ name: string; version: string }> = [
+      ...Object.entries(pkg.dependencies ?? {}).map(([name, version]) => ({ name, version })),
+      ...Object.entries(pkg.devDependencies ?? {}).map(([name, version]) => ({ name, version })),
+    ];
+    const nonTestScripts = Object.entries(pkg.scripts ?? {})
+      .filter(([scriptName]) => scriptName !== 'test' && !scriptName.startsWith('test:'))
+      .map(([, command]) => command);
+    return declared
+      .filter(({ name }) =>
+        !productionImports.has(name)
+        && testImports.has(name)
+        && !nonTestScripts.some(cmd => new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(cmd)))
+      .map(({ name, version }) => ({
+        name,
+        version,
+        importFiles: testImports.get(name) ?? [],
+      }));
+  }
+
+  private collectImportMap(files: string[]): Map<string, string[]> {
+    const map = new Map<string, string[]>();
+    const importRegex = /(?:import\s+(?:[^\n'";]*?\s+from\s+)?|import\s*\(\s*|require\s*\(\s*)['"]([^'"]+)['"]/g;
+    for (const file of files) {
+      try {
+        const source = readFileSync(file, 'utf-8');
+        const rel = relative(this.rootDir, file).replace(/\\/g, '/');
+        let match: RegExpExecArray | null;
+        while ((match = importRegex.exec(source)) !== null) {
+          const pkgName = importedPackageName(match[1]);
+          if (!pkgName) continue;
+          const paths = map.get(pkgName) ?? [];
+          if (!paths.includes(rel)) paths.push(rel);
+          map.set(pkgName, paths);
+        }
+      } catch { /* skip unreadable */ }
+    }
+    return map;
   }
 }
 

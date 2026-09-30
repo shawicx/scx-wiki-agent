@@ -2,8 +2,8 @@ import { readdirSync, statSync, existsSync, readFileSync } from 'fs';
 import { join, extname, basename, relative } from 'path';
 import ignore from 'ignore';
 import { IGNORED_DIRS, SUPPORTED_EXTENSIONS, CODE_EXTENSIONS } from '../shared/constants.js';
-import { getFileLanguage, relativePath, importedPackageName } from '../shared/utils.js';
-import type { Language } from './types.js';
+import { getFileLanguage, relativePath, importedPackageName, isTestPath } from '../shared/utils.js';
+import type { Language, SourceScope } from './types.js';
 
 export type ProjectType = 'backend' | 'frontend' | 'cli' | 'desktop' | 'agent' | 'monorepo' | 'unknown';
 
@@ -13,15 +13,21 @@ export interface ScannedFile {
   language: Language;
   extension: string;
   size: number;
+  scope: SourceScope;
 }
 
 export interface ScanResult {
   rootDir: string;
   files: ScannedFile[];
   techStack: string[];
+  /** 仅测试 / fixture 文件 import 的依赖（不进入主技术栈叙事） */
+  testTechStack: string[];
   projectType: ProjectType;
   hasTypeScript: boolean;
   sourceDirs: string[];
+  productionFiles: ScannedFile[];
+  testFiles: ScannedFile[];
+  fileCounts: { total: number; production: number; test: number };
 }
 
 const KNOWN_SOURCE_DIRS = ['src', 'src-tauri', 'app', 'lib', 'packages', 'cmd', 'internal'];
@@ -66,18 +72,28 @@ export class FileScanner {
 
   scan(): ScanResult {
     const files = this.walkDirectory(this.rootDir);
-    const techStack = this.detectTechStack(files);
-    const projectType = this.detectProjectType(files, techStack);
-    const hasTypeScript = files.some((f) => f.extension === '.ts' || f.extension === '.tsx');
-    const sourceDirs = this.detectSourceDirs(files);
+    const productionFiles = files.filter(f => f.scope === 'production');
+    const testFiles = files.filter(f => f.scope === 'test');
+    const { techStack, testTechStack } = this.detectTechStack(productionFiles, testFiles);
+    const projectType = this.detectProjectType(techStack);
+    const hasTypeScript = productionFiles.some((f) => f.extension === '.ts' || f.extension === '.tsx');
+    const sourceDirs = this.detectSourceDirs(productionFiles);
 
     return {
       rootDir: this.rootDir,
       files,
       techStack,
+      testTechStack,
       projectType,
       hasTypeScript,
       sourceDirs,
+      productionFiles,
+      testFiles,
+      fileCounts: {
+        total: files.length,
+        production: productionFiles.length,
+        test: testFiles.length,
+      },
     };
   }
 
@@ -112,12 +128,14 @@ export class FileScanner {
         }
         const ext = extname(entry).toLowerCase();
         if (SUPPORTED_EXTENSIONS.includes(ext)) {
+          const scope: SourceScope = isTestPath(rel) ? 'test' : 'production';
           results.push({
             absolutePath: fullPath,
             relativePath: rel,
             language: getFileLanguage(fullPath),
             extension: ext,
             size: stat.size,
+            scope,
           });
         }
       }
@@ -136,10 +154,10 @@ export class FileScanner {
     return false;
   }
 
-  private detectTechStack(files: ScannedFile[]): string[] {
+  private detectTechStack(productionFiles: ScannedFile[], testFiles: ScannedFile[]): { techStack: string[]; testTechStack: string[] } {
     const pkgPath = join(this.rootDir, 'package.json');
     if (!existsSync(pkgPath)) {
-      return [];
+      return { techStack: [], testTechStack: [] };
     }
 
     try {
@@ -150,16 +168,18 @@ export class FileScanner {
         ...Object.keys(pkg.devDependencies ?? {}),
       ]);
 
-      // 收集源码中实际 import 的包名，过滤死依赖（0 import）
-      const importedPackages = this.collectImportedPackages(files);
+      const productionImports = this.collectImportedPackages(productionFiles);
+      const testImports = this.collectImportedPackages(testFiles);
+      const hasProductionCode = productionFiles.some(file => CODE_EXTENSIONS.includes(file.extension));
+      const productionTechStack = productionImports.size === 0 && !hasProductionCode
+        ? [...allDeps]
+        : [...allDeps].filter(dep => productionImports.has(dep));
+      const testTechStack = [...allDeps].filter(dep =>
+        testImports.has(dep) && !productionImports.has(dep));
 
-      // 只保留被实际 import 的依赖；若 import 集合为空（如纯配置项目），回退到全量
-      if (importedPackages.size === 0) {
-        return [...allDeps];
-      }
-      return [...allDeps].filter(dep => importedPackages.has(dep));
+      return { techStack: productionTechStack, testTechStack };
     } catch {
-      return [];
+      return { techStack: [], testTechStack: [] };
     }
   }
 
@@ -195,7 +215,7 @@ export class FileScanner {
     return imported;
   }
 
-  private detectProjectType(files: ScannedFile[], techStack: string[]): ProjectType {
+  private detectProjectType(techStack: string[]): ProjectType {
     // Check for monorepo indicators
     // pnpm-workspace.yaml 需真实声明 packages 才算 workspace：
     // 仅含 allowBuilds 等审批配置的文件（CI/安全用途）不代表 monorepo

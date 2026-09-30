@@ -24,13 +24,25 @@ function file(root: string, rel: string, content: string): ScannedFile {
 }
 
 function makeScanResult(files: ScannedFile[], rootDir = '/fake-root'): ScanResult {
+  const scopedFiles = files.map(f => ({
+    ...f,
+    scope: f.scope ?? ('production' as const),
+  }));
   return {
     rootDir,
-    files,
+    files: scopedFiles,
     techStack: [],
+    testTechStack: [],
     projectType: 'cli',
     hasTypeScript: true,
     sourceDirs: ['src'],
+    productionFiles: scopedFiles.filter(f => f.scope === 'production'),
+    testFiles: scopedFiles.filter(f => f.scope === 'test'),
+    fileCounts: {
+      total: scopedFiles.length,
+      production: scopedFiles.filter(f => f.scope === 'production').length,
+      test: scopedFiles.filter(f => f.scope === 'test').length,
+    },
   };
 }
 
@@ -160,7 +172,7 @@ describe('IntentEvidenceProvider git 挖掘', () => {
     expect(broken.gitForFile('src/a.ts')).toBeNull();
   });
 
-  it('prepareModules 聚合模块时间线/高频主题/模块 intent（文件头+首提交+行为承诺）', () => {
+  it('prepareModules 聚合模块时间线/高频主题/生产模块 intent，测试行为不混入主叙事', () => {
     const src = file(root, 'src/core/scanner.ts', '// 扫描器：递归遍历目录并识别技术栈\nexport const A = 1;');
     const test = file(root, 'tests/core/scanner.test.ts', "describe('scanner', () => {\n  it('skips gitignored dirs', () => {});\n});");
     const provider = new IntentEvidenceProvider(makeScanResult([src, test], root), {
@@ -181,9 +193,10 @@ describe('IntentEvidenceProvider git 挖掘', () => {
     const kinds = intent.map(e => e.kind);
     expect(kinds).toContain('file-header');
     expect(kinds).toContain('git-commit');
-    expect(kinds).toContain('test-spec');
-    const spec = intent.find(e => e.kind === 'test-spec')!;
-    expect(spec.target.file).toBe('src/core/scanner.ts');
+    expect(kinds).not.toContain('test-spec');
+    // testSpecs 仍是可独立消费的测试证据通道，但锚点保留在测试文件
+    const spec = provider.testSpecs().find(e => e.target.file === 'src/core/scanner.ts')!;
+    expect(spec.anchor).toBe('tests/core/scanner.test.ts:1');
     expect(spec.text).toContain('skips gitignored dirs');
   });
 

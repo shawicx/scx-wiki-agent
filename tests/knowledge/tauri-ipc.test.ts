@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { isTauriProject, scanIpcSurface } from '../../src/knowledge/tauri-ipc.js';
 import type { ScanResult } from '../../src/core/scanner.js';
+import { isTestPath } from '../../src/shared/utils.js';
 
 describe('tauri-ipc', () => {
   let tmp: string;
@@ -17,19 +18,31 @@ describe('tauri-ipc', () => {
   });
 
   function makeScanResult(rels: string[]): ScanResult {
+    const files = rels.map(rel => ({
+      absolutePath: join(tmp, rel),
+      relativePath: rel,
+      language: 'typescript' as const,
+      extension: rel.endsWith('.rs') ? '.rs' : rel.endsWith('.vue') ? '.vue' : '.ts',
+      size: 100,
+      scope: isTestPath(rel) ? 'test' as const : 'production' as const,
+    }));
+    const productionFiles = files.filter(f => f.scope === 'production');
+    const testFiles = files.filter(f => f.scope === 'test');
     return {
       rootDir: tmp,
-      files: rels.map(rel => ({
-        absolutePath: join(tmp, rel),
-        relativePath: rel,
-        language: 'typescript' as const,
-        extension: rel.endsWith('.rs') ? '.rs' : rel.endsWith('.vue') ? '.vue' : '.ts',
-        size: 100,
-      })),
+      files,
       techStack: [],
+      testTechStack: [],
       projectType: 'unknown',
       hasTypeScript: true,
       sourceDirs: [],
+      productionFiles,
+      testFiles,
+      fileCounts: {
+        total: files.length,
+        production: productionFiles.length,
+        test: testFiles.length,
+      },
     };
   }
 

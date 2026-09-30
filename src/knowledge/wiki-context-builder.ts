@@ -78,6 +78,8 @@ export class WikiContextBuilder {
   ) {}
 
   private knownFiles: Set<string> | null = null;
+  /** 生产扫描文件清单（主叙事页过滤图谱 is_test 失准节点的消费侧防线） */
+  private productionKnownFiles: Set<string> | null = null;
   /** 主题页定义（由 WikiService 从 topics.json 装配注入） */
   private topics: TopicDefinition[] = [];
   /** 章节树净页（由 WikiService 从 outline.json 校验后注入） */
@@ -166,7 +168,7 @@ export class WikiContextBuilder {
         docstring: (row[5] as string | null) ?? null,
       }))
       .map(s => ({ ...s, file: toKnownRelativePath(s.file, known, this.scanResult.rootDir) ?? '' }))
-      .filter(s => s.file !== '' && !isTestPath(s.file));
+      .filter(s => this.isProductionGraphFile(s.file));
     for (const s of this.appendSourceFallback(supplementalSymbols)) {
       supplementalSymbols.push(s);
     }
@@ -199,13 +201,27 @@ export class WikiContextBuilder {
     return this.knownFiles;
   }
 
+  private getProductionKnownFiles(): Set<string> {
+    if (!this.productionKnownFiles) {
+      this.productionKnownFiles = new Set(this.scanResult.productionFiles.map(f => f.relativePath));
+    }
+    return this.productionKnownFiles;
+  }
+
+  /** 生产图谱节点判定：正常构建要求命中扫描清单；无扫描清单的窄单测退回 isTestPath */
+  private isProductionGraphFile(file: string): boolean {
+    const production = this.getProductionKnownFiles();
+    return production.size > 0
+      ? toKnownRelativePath(file, production, this.scanResult.rootDir) !== null
+      : !isTestPath(file);
+  }
+
   /** 模块级意图证据预聚合（构建内幂等）：候选文件按体积降序作重要性代理，
  *  提供方内部截 GIT_FILE_CAP 控住子进程成本 */
   private prepareIntentModules(pkgNames: string[]): void {
     if (!this.intentProvider || this.intentModulesReady) return;
     this.intentModulesReady = true;
-    const candidates = this.scanResult.files
-      .filter(f => !isTestPath(f.relativePath))
+    const candidates = [...this.scanResult.productionFiles]
       .sort((a, b) => b.size - a.size)
       .map(f => f.relativePath);
     this.intentProvider.prepareModules(pkgNames, candidates);
@@ -214,8 +230,7 @@ export class WikiContextBuilder {
   buildOverviewContext(): OverviewContext {
     const arch = this.client.getArchitecture();
     // 入口文件只认生产代码（tests/fixtures 下的同名文件不算项目入口）
-    const entryFiles = this.scanResult.files
-      .filter(f => !isTestPath(f.relativePath))
+    const entryFiles = this.scanResult.productionFiles
       .filter(f => ENTRY_FILE_NAMES.some(e => f.relativePath.endsWith('/' + e) || f.relativePath === e))
       .map(f => ({ name: f.relativePath.split('/').pop()!, path: f.relativePath }));
 
@@ -228,23 +243,32 @@ export class WikiContextBuilder {
     }));
 
     const pkgMeta = this.readPackageMeta();
+    const productionLanguageCounts = new Map<string, number>();
+    for (const file of this.scanResult.productionFiles) {
+      productionLanguageCounts.set(
+        file.language,
+        (productionLanguageCounts.get(file.language) ?? 0) + 1,
+      );
+    }
 
     return {
       projectType: this.scanResult.projectType,
       hasTypeScript: this.scanResult.hasTypeScript,
       fileCount: this.scanResult.files.length,
+      productionFileCount: this.scanResult.fileCounts.production,
+      testFileCount: this.scanResult.fileCounts.test,
       techStack: this.scanResult.techStack,
       sourceDirs: this.scanResult.sourceDirs,
-      languages: arch.languages.map(l => ({
-        language: l.language,
-        fileCount: l.file_count,
+      languages: [...productionLanguageCounts.entries()].map(([language, fileCount]) => ({
+        language,
+        fileCount,
         // 各语言真实文件锚点：防止 LLM 以「未提供该语言文件路径」为由整段标待确认
-        exampleFiles: this.exampleFilesForLanguage(l.language),
+        exampleFiles: this.exampleFilesForLanguage(language),
       })),
       readmeExcerpt: this.readRepoFileExcerpt('README.md', 2000),
-      docsFiles: this.scanResult.files
+      docsFiles: this.scanResult.productionFiles
         .map(f => f.relativePath)
-        .filter(p => p.startsWith('docs/') && p.endsWith('.md') && !isTestPath(p))
+        .filter(p => p.startsWith('docs/') && p.endsWith('.md'))
         .slice(0, 10),
       packageName: pkgMeta.name,
       packageDescription: pkgMeta.description,
@@ -258,8 +282,8 @@ export class WikiContextBuilder {
   /** 语言名 → 扫描清单内真实文件样本（≤3 个，优先生产代码） */
   private exampleFilesForLanguage(language: string): string[] {
     const want = language.toLowerCase();
-    const byLang = this.scanResult.files
-      .filter(f => !isTestPath(f.relativePath) && f.language.toLowerCase() === want)
+    const byLang = this.scanResult.productionFiles
+      .filter(f => f.language.toLowerCase() === want)
       .map(f => f.relativePath);
     if (byLang.length > 0) return byLang.slice(0, 3);
     // 语言名与扫描 language 字段不一致时按扩展名兑底（vue/css/json 等资源语言）
@@ -271,8 +295,8 @@ export class WikiContextBuilder {
     };
     const exts = extMap[want];
     if (!exts) return [];
-    return this.scanResult.files
-      .filter(f => !isTestPath(f.relativePath) && exts.includes(f.extension))
+    return this.scanResult.productionFiles
+      .filter(f => exts.includes(f.extension))
       .map(f => f.relativePath)
       .slice(0, 3);
   }
@@ -294,7 +318,7 @@ export class WikiContextBuilder {
     } catch {
       scripts = {};
     }
-    return this.scanResult.techStack.map(name => {
+    return [...declared].map(name => {
       const prod = prodImports.get(name) ?? [];
       if (prod.length > 0) {
         return { name, importFiles: prod.slice(0, 5), importCount: prod.length, usageKind: 'import' as const };
@@ -303,8 +327,10 @@ export class WikiContextBuilder {
       if (test.length > 0) {
         return { name, importFiles: test.slice(0, 5), importCount: test.length, usageKind: 'test' as const };
       }
-      const inScript = Object.values(scripts).some(cmd => new RegExp(`\\b${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(cmd));
-      if (inScript) {
+      const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const scriptHit = Object.values(scripts).some(cmd =>
+        new RegExp(`\\b${escapedName}\\b`).test(cmd));
+      if (scriptHit) {
         return { name, importFiles: [], importCount: 0, usageKind: 'script' as const };
       }
       return { name, importFiles: [], importCount: 0, usageKind: 'none' as const };
@@ -370,8 +396,7 @@ export class WikiContextBuilder {
     const arch = this.getArchitectureSnapshot();
     const pkgNames = arch.packages.map(p => p.name);
     const filesByPackage = new Map<string, string[]>();
-    for (const file of this.scanResult.files) {
-      if (isTestPath(file.relativePath)) continue;
+    for (const file of this.scanResult.productionFiles) {
       const pkg = matchPackageForFile(file.relativePath, pkgNames);
       if (!pkg) continue;
       const files = filesByPackage.get(pkg) ?? [];
@@ -600,6 +625,7 @@ export class WikiContextBuilder {
 
   /** entry_points 消费端过滤：排除非代码文件与构建脚本（build.rs/deps.rs 是构建期代码，不是应用入口） */
   private isAppEntryPoint(file: string): boolean {
+    if (!this.isProductionGraphFile(file)) return false;
     if (languageDomainOf(file) === null) return false;
     if (/(^|\/)(build|deps)\.rs$/.test(file)) return false;
     return true;
@@ -842,7 +868,7 @@ export class WikiContextBuilder {
     );
 
     const exportedFunctions = q.rows
-      .filter(row => !isTestPath((row[2] as string) ?? ''))
+      .filter(row => this.isProductionGraphFile((row[2] as string) ?? ''))
       .map(row => {
       const qn = row[1] as string | null;
       const snippet = qn ? this.safeGetSnippet(qn) : null;
@@ -901,7 +927,7 @@ export class WikiContextBuilder {
 
     const seen = new Set<string>();
     const symbols = q.rows
-      .filter(row => !isTestPath((row[5] as string) ?? ''))
+      .filter(row => this.isProductionGraphFile((row[5] as string) ?? ''))
       .map(row => ({
         name: row[0] as string,
         type: this.labelToSymbolType(row[1] as string),
@@ -922,8 +948,7 @@ export class WikiContextBuilder {
   }
 
   buildOnboardingContext(): OnboardingContext {
-    const entryFiles = this.scanResult.files
-      .filter(f => !isTestPath(f.relativePath))
+    const entryFiles = this.scanResult.productionFiles
       .filter(f => ENTRY_FILE_NAMES.some(e => f.relativePath.endsWith('/' + e) || f.relativePath === e))
       .map(f => ({ name: f.relativePath.split('/').pop()!, path: f.relativePath }));
 
@@ -976,9 +1001,9 @@ export class WikiContextBuilder {
       depUsage: this.buildDepUsage(),
       sourceDirFiles: this.scanResult.sourceDirs.map(dir => ({
         dir,
-        files: this.scanResult.files
+        files: this.scanResult.productionFiles
           .map(f => f.relativePath)
-          .filter(p => p.startsWith(`${dir}/`) && !isTestPath(p))
+          .filter(p => p.startsWith(`${dir}/`))
           .slice(0, 8),
       })),
       firstRunExample,
@@ -992,8 +1017,7 @@ export class WikiContextBuilder {
     // 运行态与常量数据补强：排障页最常缺的就是"实际命令、env、边界常量"
     const env = this.detector.detectEnvironment();
     const constants = this.detector.detectConstraints().constants;
-    const entryFiles = this.scanResult.files
-      .filter(f => !isTestPath(f.relativePath))
+    const entryFiles = this.scanResult.productionFiles
       .filter(f => ENTRY_FILE_NAMES.some(e => f.relativePath.endsWith('/' + e) || f.relativePath === e))
       .map(f => f.relativePath);
 
@@ -1077,7 +1101,7 @@ export class WikiContextBuilder {
     const fileBySymbol = new Map<string, string>();
     for (const row of fileQ.rows) {
       const file = (row[1] as string) ?? '';
-      if (file && !isTestPath(file)) fileBySymbol.set(row[0] as string, file);
+      if (this.isProductionGraphFile(file)) fileBySymbol.set(row[0] as string, file);
     }
     const fanIn: CallsContext['fanIn'] = hotspotSlice.map(h => ({
       symbol: h.name,
@@ -1206,7 +1230,7 @@ export class WikiContextBuilder {
     const classMap = new Map<string, ClassesContext['classes'][number]>();
     for (const row of q.rows) {
       const clsName = row[0] as string;
-      if (isTestPath((row[2] as string) ?? '')) continue;
+      if (!this.isProductionGraphFile((row[2] as string) ?? '')) continue;
       if (!classMap.has(clsName)) {
         classMap.set(clsName, {
           name: clsName,
@@ -1394,13 +1418,13 @@ export class WikiContextBuilder {
     // 仓库既有文档（根 README/AGENTS.md + docs/**.md）：标题取首个 # 行
     const relatedDocs: Array<{ path: string; title: string }> = [];
     for (const rel of ['README.md', 'AGENTS.md']) {
-      if (this.scanResult.files.some(f => f.relativePath === rel)) {
+      if (this.scanResult.productionFiles.some(f => f.relativePath === rel)) {
         relatedDocs.push({ path: rel, title: this.docTitleOf(rel) ?? rel });
       }
     }
-    for (const rel of this.scanResult.files
+    for (const rel of this.scanResult.productionFiles
       .map(f => f.relativePath)
-      .filter(p => p.startsWith('docs/') && p.endsWith('.md') && !isTestPath(p))
+      .filter(p => p.startsWith('docs/') && p.endsWith('.md'))
       .slice(0, 15 - relatedDocs.length)) {
       relatedDocs.push({ path: rel, title: this.docTitleOf(rel) ?? rel });
     }
@@ -1468,12 +1492,14 @@ export class WikiContextBuilder {
        RETURN n.name AS name, n.file_path AS file, n.complexity AS cx, n.loop_depth AS ld
        ORDER BY n.complexity DESC LIMIT 20`,
     );
-    const hotFunctions = q.rows.map(row => ({
-      name: row[0] as string,
-      filePath: (row[1] as string) ?? '',
-      complexity: row[2] as number,
-      loopDepth: (row[3] as number) ?? 0,
-    }));
+    const hotFunctions = q.rows
+      .map(row => ({
+        name: row[0] as string,
+        filePath: (row[1] as string) ?? '',
+        complexity: row[2] as number,
+        loopDepth: (row[3] as number) ?? 0,
+      }))
+      .filter(fn => this.isProductionGraphFile(fn.filePath));
 
     // 常量注释证据：每个限制「防什么失控场景」的直接叙述源（源码同行/上邻注释）
     const constFiles = [...new Set(constants.map(c => c.filePath))].slice(0, 12);
@@ -1541,7 +1567,7 @@ export class WikiContextBuilder {
       });
 
     // 退出码：从 scanResult 源码扫 process.exit(N)
-    const exitCodes = this.scanResult.files
+    const exitCodes = this.scanResult.productionFiles
       .filter(f => f.extension === '.ts' || f.extension === '.js')
       .flatMap(f => this.extractExitCodes(f.absolutePath, f.relativePath))
       .slice(0, 20);
@@ -1615,30 +1641,56 @@ export class WikiContextBuilder {
     const deps: Record<string, string> = pkg.dependencies ?? {};
     const devDeps: Record<string, string> = pkg.devDependencies ?? {};
     const allDeclared = new Set([...Object.keys(deps), ...Object.keys(devDeps)]);
-    const usedDeps = new Set(this.scanResult.techStack); // scanner 已过滤死依赖
+    const prodImports = this.collectImportFiles(allDeclared, 'prod');
+    const testImports = this.collectImportFiles(allDeclared, 'test');
+    let scripts: Record<string, string> = {};
+    try {
+      scripts = this.detector.detectEnvironment().scripts;
+    } catch {
+      scripts = {};
+    }
 
-    // 收集每个已用依赖的 import 文件
-    const importMap = this.collectImportFiles(allDeclared);
+    const escaped = (name: string) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const usageKind = (name: string): 'import' | 'test' | 'script' | 'none' => {
+      if ((prodImports.get(name) ?? []).length > 0) return 'import';
+      if ((testImports.get(name) ?? []).length > 0) return 'test';
+      const scriptHit = Object.values(scripts).some(cmd =>
+        new RegExp(`\\b${escaped(name)}\\b`).test(cmd));
+      return scriptHit ? 'script' : 'none';
+    };
+    const toUsage = (name: string, version: string, kind: 'import' | 'test' | 'script') => ({
+      name,
+      version,
+      importFiles: kind === 'test'
+        ? (testImports.get(name) ?? []).slice(0, 5)
+        : (prodImports.get(name) ?? []).slice(0, 5),
+      usageKind: kind,
+    });
 
     const coreDeps = Object.entries(deps)
-      .filter(([name]) => usedDeps.has(name))
-      .map(([name, version]) => ({ name, version, importFiles: importMap.get(name) ?? [] }));
+      .filter(([name]) => usageKind(name) === 'import')
+      .map(([name, version]) => toUsage(name, version, 'import'));
 
     const devDepsUsed = Object.entries(devDeps)
-      .filter(([name]) => usedDeps.has(name))
-      .map(([name, version]) => ({ name, version, importFiles: importMap.get(name) ?? [] }));
+      .filter(([name]) => ['import', 'script'].includes(usageKind(name)))
+      .map(([name, version]) => toUsage(name, version, usageKind(name) as 'import' | 'script'));
+
+    const testDeps = [...allDeclared]
+      .filter(name => usageKind(name) === 'test')
+      .map(name => toUsage(name, deps[name] ?? devDeps[name] ?? '', 'test'));
 
     const unusedDeps = [...allDeclared]
-      .filter(name => !usedDeps.has(name))
+      .filter(name => usageKind(name) === 'none')
       .map(name => ({ name, version: deps[name] ?? devDeps[name] ?? '' }));
 
     // 依赖引入动机：提交主题中点名依赖的记录（选型理由的 git 佐证）
-    const depNames = [...new Set([...coreDeps, ...devDepsUsed].map(d => d.name))];
+    const depNames = [...new Set([...coreDeps, ...devDepsUsed, ...testDeps].map(d => d.name))];
     const intent = this.intentProvider?.depCommitEvidence(depNames);
 
     return {
       coreDeps,
       devDeps: devDepsUsed,
+      testDeps,
       unusedDeps,
       runtime: pkg.type === 'module' ? 'ESM' : 'CJS',
       buildTool: this.detectBuildTool(devDeps),

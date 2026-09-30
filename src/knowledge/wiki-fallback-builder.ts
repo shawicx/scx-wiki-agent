@@ -102,7 +102,11 @@ export class WikiFallbackBuilder {
       builder.addParagraph(ctx.packageDescription);
     }
 
-    builder.addParagraph(`A ${ctx.projectType} project with ${ctx.fileCount} files.`);
+    const productionCount = ctx.productionFileCount ?? ctx.fileCount;
+    const testCount = ctx.testFileCount ?? 0;
+    builder.addParagraph(
+      `A ${ctx.projectType} project with ${productionCount} production files and ${testCount} test files (total ${ctx.fileCount}).`,
+    );
 
     if (ctx.techStack.length > 0) {
       builder.addSection('Tech Stack', ctx.techStack.map(t => `- ${t}`).join('\n'));
@@ -406,6 +410,18 @@ export class WikiFallbackBuilder {
       builder.addSection('Project Structure', ctx.sourceDirs.map(d => `- ${d}/`).join('\n'));
     }
 
+    if (ctx.envVars && ctx.envVars.length > 0) {
+      builder.addSection('Environment Variables', 'Production source references only');
+      builder.addTable(
+        ['Variable', 'Sensitive', 'Production references'],
+        ctx.envVars.map(v => [
+          v.name,
+          v.sensitive ? '⚠️ Yes' : 'No',
+          v.filePaths.join('<br>') || '-',
+        ]),
+      );
+    }
+
     return builder.build();
   }
 
@@ -439,8 +455,12 @@ export class WikiFallbackBuilder {
     if (ctx.constants && ctx.constants.length > 0) {
       builder.addSection('限制常量（超界即故障的边界）', '');
       builder.addTable(
-        ['常量', '值', '源文件'],
-        ctx.constants.map(c => [`\`${c.name}\``, `\`${c.value}\``, c.filePath]),
+        ['常量', '值', '源文件:行号'],
+        ctx.constants.map(c => [
+          `\`${c.name}\``,
+          `\`${c.value}\``,
+          c.line ? `${c.filePath}:${c.line}` : c.filePath,
+        ]),
       );
     }
 
@@ -451,10 +471,14 @@ export class WikiFallbackBuilder {
     }
 
     if (ctx.envVars && ctx.envVars.length > 0) {
-      builder.addSection('环境变量', '从源码 process.env 引用提取');
+      builder.addSection('环境变量', '从生产源码 process.env 引用提取');
       builder.addTable(
-        ['变量名', '敏感', '用途'],
-        ctx.envVars.map(v => [v.name, v.sensitive ? '⚠️ 是' : '否', UNCONFIRMED_CELL]),
+        ['变量名', '敏感', '生产引用'],
+        ctx.envVars.map(v => [
+          v.name,
+          v.sensitive ? '⚠️ 是' : '否',
+          v.filePaths.join('<br>') || '-',
+        ]),
       );
     }
 
@@ -659,10 +683,14 @@ export class WikiFallbackBuilder {
     }
 
     if (ctx.envVars.length > 0) {
-      builder.addSection('环境变量', '从源码 process.env 引用提取');
+      builder.addSection('环境变量', '从生产源码 process.env 引用提取');
       builder.addTable(
-        ['变量名', '敏感', '用途'],
-        ctx.envVars.map(v => [v.name, v.sensitive ? '⚠️ 是' : '否', UNCONFIRMED_CELL]),
+        ['变量名', '敏感', '生产引用'],
+        ctx.envVars.map(v => [
+          v.name,
+          v.sensitive ? '⚠️ 是' : '否',
+          v.filePaths.join('<br>') || '-',
+        ]),
       );
     }
 
@@ -684,8 +712,46 @@ export class WikiFallbackBuilder {
         ['运行命令', ctx.runCommand ? `\`${ctx.runCommand}\`` : '-'],
         ['测试目录', ctx.testDirs.join(', ') || '-'],
         ['夹具目录', ctx.fixturesDir ?? '-'],
+        ['文件规模', `生产文件 ${ctx.productionFileCount} / 测试文件 ${ctx.testFileCount}`],
       ],
     );
+
+    if (ctx.testOnlyEnvVars.length > 0) {
+      builder.addSection('测试专用环境变量', '仅测试 / fixture 源码引用，不属于生产运行时配置');
+      builder.addTable(
+        ['变量名', '敏感', '测试引用'],
+        ctx.testOnlyEnvVars.map(v => [
+          v.name,
+          v.sensitive ? '⚠️ 是' : '否',
+          v.filePaths.join('<br>') || '-',
+        ]),
+      );
+    }
+
+    if (ctx.testOnlyConstants.length > 0) {
+      builder.addSection('测试专用限制常量', '仅测试 / fixture 源码定义');
+      builder.addTable(
+        ['常量', '值', '源文件:行号'],
+        ctx.testOnlyConstants.map(c => [
+          `\`${c.name}\``,
+          `\`${c.value}\``,
+          c.line ? `${c.filePath}:${c.line}` : c.filePath,
+        ]),
+      );
+    }
+
+    if (ctx.testOnlyDeps.length > 0) {
+      builder.addSection('测试专用依赖', '仅测试链路使用（测试文件 import 或测试命令引用）');
+      builder.addTable(
+        ['依赖', '版本', '测试证据'],
+        ctx.testOnlyDeps.map(d => [
+          `\`${d.name}\``,
+          d.version,
+          d.importFiles.map(f => `\`${f}\``).join('<br>')
+            || (ctx.runCommand ? `\`${ctx.runCommand}\`` : '-'),
+        ]),
+      );
+    }
 
     return builder.build();
   }
@@ -746,8 +812,12 @@ export class WikiFallbackBuilder {
     if (ctx.constants.length > 0) {
       builder.addSection('限制常量（源码提取）', '');
       builder.addTable(
-        ['常量', '值', '源文件'],
-        ctx.constants.map(c => [`\`${c.name}\``, `\`${c.value}\``, c.filePath]),
+        ['常量', '值', '源文件:行号'],
+        ctx.constants.map(c => [
+          `\`${c.name}\``,
+          `\`${c.value}\``,
+          c.line ? `${c.filePath}:${c.line}` : c.filePath,
+        ]),
       );
     }
 
@@ -842,8 +912,21 @@ export class WikiFallbackBuilder {
     if (ctx.devDeps.length > 0) {
       builder.addSection('开发依赖', '仅开发环境使用');
       builder.addTable(
-        ['依赖', '版本', '首个 import 点'],
+        ['依赖', '版本', '使用方式', '首个 import 点'],
         ctx.devDeps.map(d => [
+          `\`${d.name}\``,
+          d.version,
+          d.usageKind,
+          d.importFiles[0] ? `\`${d.importFiles[0]}\`` : '-',
+        ]),
+      );
+    }
+
+    if (ctx.testDeps.length > 0) {
+      builder.addSection('测试专用依赖', '仅测试链路使用，不属于生产运行时技术栈');
+      builder.addTable(
+        ['依赖', '版本', '首个测试 import 点'],
+        ctx.testDeps.map(d => [
           `\`${d.name}\``,
           d.version,
           d.importFiles[0] ? `\`${d.importFiles[0]}\`` : '-',

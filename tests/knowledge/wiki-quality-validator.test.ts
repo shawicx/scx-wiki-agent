@@ -57,6 +57,20 @@ describe('validatePageContent', () => {
     expect(r.issues.some(i => i.rule === 'broken-anchor' && i.message.includes('src/ghost.ts'))).toBe(true);
   });
 
+  it('测试文件锚点按页面作用域裁决：非 testing 告警，testing 可用', () => {
+    const content = '# Page\n\n见 `tests/config.test.ts:1`';
+    const production = validatePageContent(content, baseOpts);
+    expect(production.issues.some(i => i.rule === 'broken-anchor' && i.message.includes('tests/config.test.ts'))).toBe(true);
+
+    const testing = validatePageContent(content, {
+      ...baseOpts,
+      page: 'testing',
+      pagePath: '05-guides/testing.md',
+      knownFiles: new Set([...baseOpts.knownFiles, 'tests/config.test.ts']),
+    });
+    expect(testing.issues.some(i => i.rule === 'broken-anchor')).toBe(false);
+  });
+
   it('有效锚点计入统计且不产生告警', () => {
     const content = '# Calls\n\n见 `src/index.ts:42` 与 `src/services/wiki-service.ts:10`';
     const r = validatePageContent(content, baseOpts);

@@ -1,6 +1,6 @@
 // src/knowledge/types.ts
 
-import type { SymbolType, RelationType } from '../core/types.js';
+import type { SymbolType, RelationType, ConstantEvidence, EnvVarEvidence } from '../core/types.js';
 import type { IntentEvidence, GitCommitRef } from './intent-evidence.js';
 import type { PendingConfirmation, ConfirmationDecision } from './confirmation.js';
 
@@ -27,14 +27,24 @@ export interface DepUsage {
   usageKind: 'import' | 'test' | 'script' | 'none';
 }
 
+/** tech-stack 页的依赖使用证据（版本 + 作用域化使用方式） */
+export interface DependencyUsageInfo {
+  name: string;
+  version: string;
+  importFiles: string[];
+  usageKind: 'import' | 'test' | 'script';
+}
+
 /** Context for overview page */
 export interface OverviewContext {
   projectType: string;
   hasTypeScript: boolean;
   fileCount: number;
+  productionFileCount?: number;
+  testFileCount?: number;
   techStack: string[];
   sourceDirs: string[];
-  /** 源码语言分布（来自 MCP get_architecture；多语言项目如 Tauri 须说明各语言职责域）
+  /** 生产源码语言分布（来自 FileScanner；多语言项目如 Tauri 须说明各语言职责域）
    *  exampleFiles：该语言在扫描清单内的真实文件样本（职责描述的锚点） */
   languages?: Array<{ language: string; fileCount: number; exampleFiles?: string[] }>;
   /** 根 README.md 摘录（前 ~2000 字符；项目自述的既有事实源） */
@@ -270,9 +280,11 @@ export interface ReadmeContext {
 /** Context for tech-stack page (技术栈，R3 拒绝编造用途) */
 export interface TechStackContext {
   /** 核心依赖（dependencies 中被实际 import 的） */
-  coreDeps: Array<{ name: string; version: string; importFiles: string[] }>;
-  /** 开发依赖（devDependencies 中被 import 的） */
-  devDeps: Array<{ name: string; version: string; importFiles: string[] }>;
+  coreDeps: DependencyUsageInfo[];
+  /** 开发依赖（devDependencies 中被生产 import 或脚本引用的） */
+  devDeps: DependencyUsageInfo[];
+  /** 仅测试 / fixture 使用的依赖 */
+  testDeps: DependencyUsageInfo[];
   /** 声明未用依赖（package.json 声明但 src/ 中 0 import） */
   unusedDeps: Array<{ name: string; version: string }>;
   /** 运行时/构建信息 */
@@ -291,7 +303,7 @@ export interface EnvironmentContext {
   nodeVersion: string;
   packageManager: string;
   scripts: Record<string, string>;
-  envVars: Array<{ name: string; sensitive: boolean }>;
+  envVars: EnvVarEvidence[];
 }
 
 /** Context for testing page (测试) */
@@ -301,6 +313,11 @@ export interface TestingContext {
   testDirs: string[];
   fixturesDir: string | null;
   runCommand: string;
+  productionFileCount: number;
+  testFileCount: number;
+  testOnlyEnvVars: EnvVarEvidence[];
+  testOnlyConstants: ConstantEvidence[];
+  testOnlyDeps: Array<{ name: string; version: string; importFiles: string[] }>;
 }
 
 /** Context for conventions page (规约——AI 头号文档) */
@@ -315,7 +332,7 @@ export interface ConventionsContext {
 /** Context for constraints page (边界与代价) */
 export interface ConstraintsContext {
   /** 源码中的限制常量（MAX/LIMIT/TIMEOUT 等） */
-  constants: Array<{ name: string; value: string; filePath: string }>;
+  constants: ConstantEvidence[];
   /** 高复杂度函数（MCP complexity > 阈值） */
   hotFunctions: Array<{ name: string; filePath: string; complexity: number; loopDepth: number }>;
   /** 常量注释证据（每个限制「防什么失控场景」的直接叙述源） */
@@ -351,7 +368,7 @@ export interface OnboardingContext {
   }>;
   scripts: Record<string, string>;
   /** 源码 process.env 引用（env 清单，敏感标记） */
-  envVars?: Array<{ name: string; sensitive: boolean }>;
+  envVars?: EnvVarEvidence[];
   /** 技术栈依赖的使用证据（依赖用途叙述的锚点） */
   depUsage?: DepUsage[];
   /** 各源码目录的真实文件样本（结构描述的锚点，防止「目录内容未提供」类待确认） */
@@ -368,9 +385,9 @@ export interface TroubleshootingContext {
   scripts?: Record<string, string>;
   packageManager?: string;
   nodeVersion?: string;
-  envVars?: Array<{ name: string; sensitive: boolean }>;
+  envVars?: EnvVarEvidence[];
   /** 限制常量（源码 MAX/LIMIT/TIMEOUT 等，排障边界参考） */
-  constants?: Array<{ name: string; value: string; filePath: string }>;
+  constants?: ConstantEvidence[];
   /** 入口文件（排障起点） */
   entryFiles?: string[];
   /** 技术栈依赖的使用证据（排障叙述依赖用途时的锚点） */

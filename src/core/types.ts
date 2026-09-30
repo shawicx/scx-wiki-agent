@@ -1,5 +1,23 @@
 export type Language = 'typescript' | 'javascript' | 'tsx' | 'jsx' | 'vue' | 'rust' | 'css' | 'markdown' | 'json' | 'yaml' | 'unknown';
 
+/** 文件证据作用域：production 供主叙事使用，test 供测试页与测试证据使用 */
+export type SourceScope = 'production' | 'test';
+
+/** 生产源码中的环境变量引用证据 */
+export interface EnvVarEvidence {
+  name: string;
+  sensitive: boolean;
+  filePaths: string[];
+}
+
+/** 源码中的限制常量证据 */
+export interface ConstantEvidence {
+  name: string;
+  value: string;
+  filePath: string;
+  line?: number;
+}
+
 export type SymbolType = 'function' | 'class' | 'interface' | 'method' | 'variable' | 'import' | 'export';
 
 export type RelationType =

@@ -169,5 +169,53 @@ describe('ConfigDetector', () => {
       expect(names).toContain('TIMEOUT_MS');
       expect(names).not.toContain('UNRELATED');
     });
+
+    it('显式分类后只从生产文件提取运行环境与约束，测试专用证据进入 testing', () => {
+      mkdirSync(join(tempDir, 'src'), { recursive: true });
+      mkdirSync(join(tempDir, 'tests'), { recursive: true });
+      writeFileSync(join(tempDir, 'package.json'), JSON.stringify({
+        name: 'scope-demo',
+        dependencies: { commander: '^12.0.0' },
+        devDependencies: {
+          vitest: '^4.0.0',
+          'test-script-tool': '^1.0.0',
+          'dual-build-tool': '^2.0.0',
+        },
+        scripts: {
+          build: 'dual-build-tool build',
+          test: 'vitest run | test-script-tool',
+        },
+      }));
+      writeFileSync(join(tempDir, 'src', 'index.ts'),
+        'const key = process.env.API_KEY;\nconst MAX_USERS = 100;\n');
+      writeFileSync(join(tempDir, 'tests', 'index.test.ts'),
+        "import { describe } from 'vitest'\n"
+        + "import { build } from 'dual-build-tool'\n"
+        + 'const key = process.env.TEST_WIKI_KEY;\n'
+        + 'const TEST_MAX_ROWS = 20;\n');
+
+      const detector = new ConfigDetector(tempDir);
+      detector.setSourceClassification({
+        production: [join(tempDir, 'src/index.ts')],
+        test: [join(tempDir, 'tests/index.test.ts')],
+      });
+
+      const env = detector.detectEnvironment();
+      expect(env.envVars.map(v => v.name)).toEqual(['API_KEY']);
+      expect(env.envVars[0].filePaths).toEqual(['src/index.ts']);
+
+      const constraints = detector.detectConstraints();
+      expect(constraints.constants.map(c => c.name)).toEqual(['MAX_USERS']);
+      expect(constraints.constants[0].line).toBe(2);
+
+      const testing = detector.detectTesting();
+      expect(testing.productionFileCount).toBe(1);
+      expect(testing.testFileCount).toBe(1);
+      expect(testing.testOnlyEnvVars.map(v => v.name)).toEqual(['TEST_WIKI_KEY']);
+      expect(testing.testOnlyEnvVars[0].filePaths).toEqual(['tests/index.test.ts']);
+      expect(testing.testOnlyConstants.map(c => c.name)).toEqual(['TEST_MAX_ROWS']);
+      expect(testing.testOnlyDeps.map(d => d.name)).toEqual(['vitest']);
+      expect(testing.testOnlyDeps[0].importFiles).toEqual(['tests/index.test.ts']);
+    });
   });
 });

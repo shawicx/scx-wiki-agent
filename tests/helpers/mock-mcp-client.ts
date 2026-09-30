@@ -81,7 +81,7 @@ export function createMockClient(overrides?: Partial<{
     }),
     searchCode: vi.fn().mockImplementation((pattern: string) => {
       const matches = overrides?.searchCounts?.get(pattern) ?? 0;
-      return { totalGrepMatches: matches, files: matches > 0 ? ['src/mock.ts'] : [] };
+      return { totalGrepMatches: matches, files: matches > 0 ? ['src/index.ts'] : [] };
     }),
   };
 }

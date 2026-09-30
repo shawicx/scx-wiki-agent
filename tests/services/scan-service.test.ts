@@ -10,8 +10,11 @@ describe('ScanService', () => {
     const result = service.scan();
 
     expect(result.files.length).toBeGreaterThan(0);
-    expect(result.techStack).toContain('express');
-    expect(result.projectType).toBe('backend');
+    expect(result.techStack).toEqual([]);
+    expect(result.projectType).toBe('unknown');
     expect(result.hasTypeScript).toBe(true);
+    expect(result.files.every(f => f.scope === 'production' || f.scope === 'test')).toBe(true);
+    expect(result.productionFiles.length + result.testFiles.length).toBe(result.files.length);
+    expect(result.fileCounts.total).toBe(result.files.length);
   });
 });

@@ -69,9 +69,7 @@ export class OutlinePlanner {
   /** 确定性组装规划输入（全部真实数据，无臆造字段） */
   private buildInputs(topics: TopicDefinition[], feedback?: string): Record<string, unknown> {
     const arch = this.client.getArchitecture();
-    const productionFiles = this.scanResult.files
-      .map(f => f.relativePath)
-      .filter(p => !isTestPath(p));
+    const productionFiles = this.scanResult.productionFiles.map(f => f.relativePath);
 
     // 每模块文件分组（候选锚点池；路径段精确归属，多段包名取最长）
     const pkgNames = arch.packages.map(p => p.name);

@@ -54,4 +54,16 @@ describe('CodebaseMemoryClient', () => {
     const result = client.queryGraph('MATCH (n) RETURN n LIMIT 1');
     expect(result.columns).toEqual(['n']);
   });
+
+  it('searchCode 支持提高返回文件数以供调用方做作用域过滤', () => {
+    mockExec.mockReturnValue(JSON.stringify({
+      files: ['src/index.ts', 'tests/index.test.ts'],
+      total_grep_matches: 2,
+    }));
+    const client = new CodebaseMemoryClient('/proj');
+    const result = client.searchCode('demoSymbol', 20);
+    expect(result.files).toEqual(['src/index.ts', 'tests/index.test.ts']);
+    const args = JSON.parse(mockExec.mock.calls[0][1][2] as string);
+    expect(args.limit).toBe(20);
+  });
 });

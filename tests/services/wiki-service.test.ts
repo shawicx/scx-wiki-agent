@@ -15,21 +15,27 @@ const mockStreamText = vi.mocked(streamText);
 const tmpDir = join(process.cwd(), '.test-wiki-tmp');
 
 function makeBackendScanResult(): ScanResult {
+  const files = [
+    {
+      absolutePath: '/tmp/test-project/src/index.ts',
+      relativePath: 'src/index.ts',
+      language: 'typescript' as const,
+      extension: '.ts',
+      size: 100,
+      scope: 'production' as const,
+    },
+  ];
   return {
     rootDir: '/tmp/test-project',
-    files: [
-      {
-        absolutePath: '/tmp/test-project/src/index.ts',
-        relativePath: 'src/index.ts',
-        language: 'typescript',
-        extension: '.ts',
-        size: 100,
-      },
-    ],
+    files,
     techStack: ['express', 'typescript'],
+    testTechStack: [],
     projectType: 'backend',
     hasTypeScript: true,
     sourceDirs: ['src'],
+    productionFiles: files,
+    testFiles: [],
+    fileCounts: { total: 1, production: 1, test: 0 },
   };
 }
 
@@ -377,7 +383,11 @@ describe('WikiService', () => {
     ].map(f => ({
       absolutePath: `/tmp/test-project/${f}`, relativePath: f,
       language: 'typescript' as const, extension: '.ts', size: 100,
+      scope: 'production' as const,
     }));
+    scan.productionFiles = scan.files;
+    scan.testFiles = [];
+    scan.fileCounts = { total: scan.files.length, production: scan.files.length, test: 0 };
     return scan;
   }
 
@@ -440,8 +450,62 @@ describe('WikiService', () => {
     const overview = readFileSync(join(wikiDir, '01-overview', 'overview.md'), 'utf-8');
     expect(overview).toContain('`ghostThing`（待确认）');
     expect(overview).not.toContain('realThing`（待确认）');
-    expect(client.searchCode).toHaveBeenCalledWith('realThing');
-    expect(client.searchCode).toHaveBeenCalledWith('ghostThing');
+    expect(client.searchCode).toHaveBeenCalledWith('realThing', 20);
+    expect(client.searchCode).toHaveBeenCalledWith('ghostThing', 20);
+  });
+
+  it('claim 核验按页面作用域过滤：非 testing 页不采纳测试文件证据，testing 页可采纳', async () => {
+    mockStreamText.mockImplementation((() => ({
+      fullStream: (async function* () {
+        yield {
+          type: 'text-delta',
+          text: '# 文档\n\n测试符号 `TEST_ONLY_SYMBOL`。',
+        };
+      })(),
+      finishReason: Promise.resolve('stop'),
+    })) as any);
+
+    const client = createMockClient();
+    client.searchCode.mockImplementation((pattern: string) =>
+      pattern === 'TEST_ONLY_SYMBOL'
+        ? { totalGrepMatches: 1, files: ['tests/config.test.ts'] }
+        : { totalGrepMatches: 0, files: [] });
+    client.queryGraph.mockImplementation((cypher: string) =>
+      cypher.includes('RETURN n.name AS name, n.file_path AS file')
+        ? {
+            columns: ['name', 'file'],
+            rows: [['TEST_ONLY_SYMBOL', '/tmp/test-project/tests/config.test.ts']],
+            total: 1,
+          }
+        : { columns: [], rows: [], total: 0 });
+
+    const scan = makeBackendScanResult();
+    scan.files.push({
+      absolutePath: '/tmp/test-project/tests/config.test.ts',
+      relativePath: 'tests/config.test.ts',
+      language: 'typescript',
+      extension: '.ts',
+      size: 100,
+      scope: 'test',
+    });
+    scan.testFiles = scan.files.filter(f => f.scope === 'test');
+    scan.productionFiles = scan.files.filter(f => f.scope === 'production');
+    scan.fileCounts = {
+      total: scan.files.length,
+      production: scan.productionFiles.length,
+      test: scan.testFiles.length,
+    };
+
+    const service = new WikiService(client as any, scan);
+    const overviewDir = join(tmpDir, 'wiki-scope-overview');
+    await service.buildWiki(overviewDir, { model: 'test-model', pages: ['overview'] });
+    const overview = readFileSync(join(overviewDir, '01-overview', 'overview.md'), 'utf-8');
+    expect(overview).toContain('`TEST_ONLY_SYMBOL`（待确认）');
+
+    const testingDir = join(tmpDir, 'wiki-scope-testing');
+    await service.buildWiki(testingDir, { model: 'test-model', pages: ['testing'] });
+    const testing = readFileSync(join(testingDir, '05-guides', 'testing.md'), 'utf-8');
+    expect(testing).not.toContain('`TEST_ONLY_SYMBOL`（待确认）');
   });
 
   it('两阶段构建：confirmSession 在生成后写盘前收到聚合项，resolve 后写盘无标记并持久化白名单', async () => {

@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { WikiPageGenerator } from '../../src/knowledge/wiki-page-generator.js';
-import type { OverviewContext, ArchitectureContext, ModulesContext } from '../../src/knowledge/types.js';
+import type {
+  ArchitectureContext,
+  ModulesContext,
+  OverviewContext,
+} from '../../src/knowledge/types.js';
 import type { SymbolType } from '../../src/core/types.js';
 
 // Mock the ai module
@@ -31,6 +35,8 @@ describe('WikiPageGenerator', () => {
       projectType: 'cli',
       hasTypeScript: true,
       fileCount: 42,
+      productionFileCount: 35,
+      testFileCount: 7,
       techStack: ['commander'],
       sourceDirs: ['src'],
       entryFiles: [],
@@ -43,6 +49,8 @@ describe('WikiPageGenerator', () => {
     const callArgs = mockStreamText.mock.calls[0][0] as any;
     expect(callArgs.prompt).toContain('cli');
     expect(callArgs.prompt).toContain('commander');
+    expect(callArgs.prompt).toContain('"productionFileCount": 35');
+    expect(callArgs.prompt).toContain('"testFileCount": 7');
     expect(onChunk).toHaveBeenCalled();
     expect(result).toContain('This is a CLI tool for');
     expect(result).toContain('generating wiki docs.');
@@ -157,22 +165,32 @@ describe('WikiPageGenerator', () => {
 
     await generator.generateByName('environment', {
       packageName: 'p', version: '1.0.0', runtime: 'ESM', nodeVersion: '20',
-      packageManager: 'bun', scripts: { test: 'bun test' }, envVars: [],
+      packageManager: 'bun', scripts: { test: 'bun test' }, envVars: [{
+        name: 'API_KEY',
+        sensitive: true,
+        filePaths: ['src/index.ts'],
+      }],
     }, vi.fn());
     expect(streamText).toHaveBeenCalledOnce();
     let callArgs = mockStreamText.mock.calls[0][0] as any;
     expect(callArgs.prompt).toContain('"bun"');
     expect(callArgs.prompt).toContain('bun test');
+    expect(callArgs.prompt).toContain('src/index.ts');
+    expect(callArgs.system).toContain('生产引用');
     mockStreamText.mockClear();
 
     await generator.generateByName('tech-stack', {
       coreDeps: [{ name: 'vue', version: '3', importFiles: ['src/main.ts'] }],
-      devDeps: [], unusedDeps: [{ name: 'left-pad', version: '1' }],
+      devDeps: [],
+      testDeps: [{ name: 'vitest', version: '4', importFiles: ['tests/a.test.ts'], usageKind: 'test' }],
+      unusedDeps: [{ name: 'left-pad', version: '1' }],
       runtime: 'ESM', buildTool: 'vite', packageManager: 'bun',
     }, vi.fn());
     expect(streamText).toHaveBeenCalledOnce();
     callArgs = mockStreamText.mock.calls[0][0] as any;
     expect(callArgs.prompt).toContain('left-pad');
+    expect(callArgs.prompt).toContain('tests/a.test.ts');
+    expect(callArgs.system).toContain('测试专用依赖');
     expect(callArgs.system).toContain('人工复核');
     mockStreamText.mockClear();
 
@@ -215,11 +233,33 @@ describe('WikiPageGenerator', () => {
     await generator.generateByName('testing', {
       framework: 'vitest', configPath: 'vitest.config.ts',
       testDirs: ['tests'], fixturesDir: null, runCommand: 'pnpm test',
+      productionFileCount: 35,
+      testFileCount: 7,
+      testOnlyEnvVars: [{
+        name: 'TEST_WIKI_KEY',
+        sensitive: true,
+        filePaths: ['tests/config.test.ts'],
+      }],
+      testOnlyConstants: [{
+        name: 'TEST_MAX_ROWS',
+        value: '20',
+        filePath: 'tests/config.test.ts',
+        line: 3,
+      }],
+      testOnlyDeps: [{
+        name: 'vitest',
+        version: '^4.0.0',
+        importFiles: ['tests/config.test.ts'],
+      }],
     }, vi.fn());
 
     const callArgs = mockStreamText.mock.calls[0][0] as any;
     expect(callArgs.prompt).toContain('vitest');
     expect(callArgs.prompt).toContain('pnpm test');
+    expect(callArgs.prompt).toContain('"productionFileCount": 35');
+    expect(callArgs.prompt).toContain('TEST_WIKI_KEY');
+    expect(callArgs.prompt).toContain('tests/config.test.ts:3');
+    expect(callArgs.system).toContain('测试专用证据');
   });
 
   it('generateByName 派发 constraints 并注入限制数据', async () => {

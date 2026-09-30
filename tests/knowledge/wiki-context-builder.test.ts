@@ -9,16 +9,35 @@ import { IntentEvidenceProvider } from '../../src/knowledge/intent-evidence.js';
 import { createMockClient } from '../helpers/mock-mcp-client.js';
 import type { ScanResult } from '../../src/core/scanner.js';
 import type { QueryResult } from '../../src/mcp/types.js';
+import { isTestPath } from '../../src/shared/utils.js';
 
 function makeScanResult(overrides: Partial<ScanResult> = {}): ScanResult {
-  return {
+  const base = {
     rootDir: '/tmp/test-project',
     files: [],
     techStack: ['commander', 'typescript'],
+    testTechStack: [],
     projectType: 'cli',
     hasTypeScript: true,
     sourceDirs: ['src'],
     ...overrides,
+  };
+  const files = base.files.map(f => ({
+    ...f,
+    scope: f.scope ?? (isTestPath(f.relativePath) ? 'test' as const : 'production' as const),
+  }));
+  const productionFiles = files.filter(f => f.scope === 'production');
+  const testFiles = files.filter(f => f.scope === 'test');
+  return {
+    ...base,
+    files,
+    productionFiles,
+    testFiles,
+    fileCounts: {
+      total: files.length,
+      production: productionFiles.length,
+      test: testFiles.length,
+    },
   };
 }
 
@@ -29,6 +48,7 @@ function scannedFile(rootDir: string, relativePath: string) {
     language: relativePath.endsWith('.rs') ? 'rust' as const : 'typescript' as const,
     extension: relativePath.endsWith('.rs') ? '.rs' : '.ts',
     size: 100,
+    scope: isTestPath(relativePath) ? 'test' as const : 'production' as const,
   };
 }
 
@@ -77,7 +97,7 @@ describe('WikiContextBuilder (MCP-backed)', () => {
       expect(ctx.topSymbols[0].complexity).toBe(8);
     });
 
-    it('entryFiles 检测 index.ts', () => {
+  it('entryFiles 检测 index.ts', () => {
       const client = createMockClient();
       const builder = new WikiContextBuilder(client as any, makeScanResult({
         files: [
@@ -86,9 +106,31 @@ describe('WikiContextBuilder (MCP-backed)', () => {
       }));
       const ctx = builder.buildOverviewContext();
 
-      expect(ctx.entryFiles.some(f => f.path === 'src/index.ts')).toBe(true);
-    });
+    expect(ctx.entryFiles.some(f => f.path === 'src/index.ts')).toBe(true);
   });
+
+  it('overview 语言分布来自生产扫描文件，不采用图谱的全量语言统计', () => {
+    const client = createMockClient({
+      architecture: {
+        ...createMockClient().getArchitecture(),
+        languages: [{ language: 'TypeScript', file_count: 999 }],
+      },
+    });
+    const builder = new WikiContextBuilder(client as any, makeScanResult({
+      files: [
+        'src/index.ts',
+        'src-tauri/main.rs',
+        'tests/index.test.ts',
+      ].map(f => scannedFile('/tmp/test-project', f)),
+    }));
+
+    const ctx = builder.buildOverviewContext();
+    expect(ctx.languages).toEqual([
+      { language: 'typescript', fileCount: 1, exampleFiles: ['src/index.ts'] },
+      { language: 'rust', fileCount: 1, exampleFiles: ['src-tauri/main.rs'] },
+    ]);
+  });
+});
 
   describe('buildArchitectureContext', () => {
     it('包含 MCP 的 layers/boundaries/clusters', () => {
@@ -489,6 +531,61 @@ describe('WikiContextBuilder (MCP-backed)', () => {
         .buildOverviewContext();
       expect(noPkg.packageName).toBe('');
       expect(noPkg.packageDescription).toBe('');
+    });
+
+    it('tech-stack 区分生产依赖、脚本工具与测试专用依赖', () => {
+      const tmp = mkdtempSync(join(tmpdir(), 'tech-scope-'));
+      try {
+        writeFileSync(join(tmp, 'package.json'), JSON.stringify({
+          name: 'tech-scope',
+          dependencies: { commander: '^12.0.0' },
+          devDependencies: { tsup: '^8.0.0', vitest: '^4.0.0' },
+          scripts: { build: 'tsup', test: 'vitest run' },
+        }));
+        mkdirSync(join(tmp, 'src'), { recursive: true });
+        mkdirSync(join(tmp, 'tests'), { recursive: true });
+        writeFileSync(join(tmp, 'src/cli.ts'), "import { Command } from 'commander'\n");
+        writeFileSync(join(tmp, 'tests/cli.test.ts'), "import { describe } from 'vitest'\n");
+
+        const scan = makeScanResult({
+          rootDir: tmp,
+          files: [
+            'src/cli.ts',
+            'tests/cli.test.ts',
+          ].map(f => scannedFile(tmp, f)),
+          techStack: ['commander'],
+          testTechStack: ['vitest'],
+        });
+        const detector = new ConfigDetector(tmp);
+        detector.setSourceClassification({
+          production: [join(tmp, 'src/cli.ts')],
+          test: [join(tmp, 'tests/cli.test.ts')],
+        });
+        const ctx = new WikiContextBuilder(createMockClient() as any, scan, detector)
+          .buildTechStackContext();
+
+        expect(ctx.coreDeps).toEqual([{
+          name: 'commander',
+          version: '^12.0.0',
+          importFiles: ['src/cli.ts'],
+          usageKind: 'import',
+        }]);
+        expect(ctx.devDeps).toEqual([{
+          name: 'tsup',
+          version: '^8.0.0',
+          importFiles: [],
+          usageKind: 'script',
+        }]);
+        expect(ctx.testDeps).toEqual([{
+          name: 'vitest',
+          version: '^4.0.0',
+          importFiles: ['tests/cli.test.ts'],
+          usageKind: 'test',
+        }]);
+        expect(ctx.unusedDeps).toEqual([]);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
     });
   });
 

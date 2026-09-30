@@ -16,6 +16,18 @@ import type { PageGenNotice } from '../../src/knowledge/wiki-page-generator.js';
 const mockStreamText = vi.mocked(streamText);
 
 const LONG = '这是一段足够长的正文内容，用于越过最低保留长度阈值。'.repeat(10);
+const testingCtx = {
+  framework: 'vitest',
+  configPath: 'vitest.config.ts',
+  testDirs: ['tests'],
+  fixturesDir: null,
+  runCommand: 'pnpm test',
+  productionFileCount: 1,
+  testFileCount: 1,
+  testOnlyEnvVars: [],
+  testOnlyConstants: [],
+  testOnlyDeps: [],
+};
 
 interface FakePart {
   type: string;
@@ -109,10 +121,7 @@ describe('WikiPageGenerator 断流续写', () => {
 
     const notices: PageGenNotice[] = [];
     const generator = new WikiPageGenerator('test-model', 'http://localhost', 'key', n => notices.push(n));
-    const result = await generator.generateByName('testing', {
-      framework: 'vitest', configPath: 'vitest.config.ts',
-      testDirs: ['tests'], fixturesDir: null, runCommand: 'pnpm test',
-    }, vi.fn());
+    const result = await generator.generateByName('testing', testingCtx, vi.fn());
 
     expect(mockStreamText).toHaveBeenCalledTimes(2);
     expect(result).toContain('## 第三节');
@@ -141,10 +150,7 @@ describe('WikiPageGenerator 断流续写', () => {
 
     const notices: PageGenNotice[] = [];
     const generator = new WikiPageGenerator('test-model', 'http://localhost', 'key', n => notices.push(n));
-    const result = await generator.generateByName('testing', {
-      framework: 'vitest', configPath: 'vitest.config.ts',
-      testDirs: ['tests'], fixturesDir: null, runCommand: 'pnpm test',
-    }, vi.fn());
+    const result = await generator.generateByName('testing', testingCtx, vi.fn());
 
     expect(mockStreamText).toHaveBeenCalledTimes(2);
     expect(result).toContain('完整内容。');
@@ -159,10 +165,7 @@ describe('WikiPageGenerator 断流续写', () => {
 
     const notices: PageGenNotice[] = [];
     const generator = new WikiPageGenerator('test-model', 'http://localhost', 'key', n => notices.push(n));
-    const result = await generator.generateByName('testing', {
-      framework: 'vitest', configPath: 'vitest.config.ts',
-      testDirs: ['tests'], fixturesDir: null, runCommand: 'pnpm test',
-    }, vi.fn());
+    const result = await generator.generateByName('testing', testingCtx, vi.fn());
 
     expect(result).toBe(prefix);
     expect(notices).toEqual([]);
@@ -177,10 +180,7 @@ describe('WikiPageGenerator 断流续写', () => {
 
     const notices: PageGenNotice[] = [];
     const generator = new WikiPageGenerator('test-model', 'http://localhost', 'key', n => notices.push(n));
-    await generator.generateByName('testing', {
-      framework: 'vitest', configPath: 'vitest.config.ts',
-      testDirs: ['tests'], fixturesDir: null, runCommand: 'pnpm test',
-    }, vi.fn());
+    await generator.generateByName('testing', testingCtx, vi.fn());
 
     expect(mockStreamText).toHaveBeenCalledTimes(3);
     expect(notices).toEqual([{ kind: 'continuation', rounds: 2, truncated: true }]);
@@ -191,10 +191,7 @@ describe('WikiPageGenerator 断流续写', () => {
 
     const notices: PageGenNotice[] = [];
     const generator = new WikiPageGenerator('test-model', 'http://localhost', 'key', n => notices.push(n));
-    await generator.generateByName('testing', {
-      framework: 'vitest', configPath: 'vitest.config.ts',
-      testDirs: ['tests'], fixturesDir: null, runCommand: 'pnpm test',
-    }, vi.fn());
+    await generator.generateByName('testing', testingCtx, vi.fn());
 
     expect(mockStreamText).toHaveBeenCalledOnce();
     expect(notices).toEqual([]);
@@ -204,10 +201,7 @@ describe('WikiPageGenerator 断流续写', () => {
     mockStreamText.mockReturnValueOnce(streamResult([reasoningPart('思考内容')], 'length') as any);
 
     const generator = new WikiPageGenerator('test-model', 'http://localhost', 'key');
-    const result = await generator.generateByName('testing', {
-      framework: 'vitest', configPath: 'vitest.config.ts',
-      testDirs: ['tests'], fixturesDir: null, runCommand: 'pnpm test',
-    }, vi.fn());
+    const result = await generator.generateByName('testing', testingCtx, vi.fn());
 
     expect(result).toBe('思考内容');
     expect(mockStreamText).toHaveBeenCalledOnce();

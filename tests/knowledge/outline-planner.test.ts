@@ -29,16 +29,22 @@ const symCypher = `MATCH (n) WHERE n.is_test = false AND n.docstring IS NOT NULL
        ORDER BY n.complexity DESC LIMIT 60`;
 
 function makeScanResult(): ScanResult {
+  const files = ['src/services/x.ts', 'src/services/y.ts', 'src/core/z.ts'].map(f => ({
+    absolutePath: `/tmp/test-project/${f}`, relativePath: f,
+    language: 'typescript' as const, extension: '.ts', size: 100,
+    scope: 'production' as const,
+  }));
   return {
     rootDir: '/tmp/test-project',
-    files: ['src/services/x.ts', 'src/services/y.ts', 'src/core/z.ts'].map(f => ({
-      absolutePath: `/tmp/test-project/${f}`, relativePath: f,
-      language: 'typescript' as const, extension: '.ts', size: 100,
-    })),
+    files,
     techStack: ['typescript'],
+    testTechStack: [],
     projectType: 'cli',
     hasTypeScript: true,
     sourceDirs: ['src'],
+    productionFiles: files,
+    testFiles: [],
+    fileCounts: { total: files.length, production: files.length, test: 0 },
   };
 }
 

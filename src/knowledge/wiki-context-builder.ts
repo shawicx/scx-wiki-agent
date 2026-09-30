@@ -7,6 +7,13 @@ import type { SymbolType, RelationType } from '../core/types.js';
 import { isTestPath, languageDomainOf, matchPackageForFile, importedPackageName } from '../shared/utils.js';
 import { PAGE_REGISTRY, pageRelPath, isTopicPage, topicIdFromPage, TOPIC_DIR, TOPIC_ANSWER, isChapterPage, parseChapterPage, CHAPTER_DIR, CHAPTER_ANSWER } from './page-registry.js';
 import { ConfigDetector } from './config-detector.js';
+import {
+  collectDataFlowShapes,
+  parseEdgeArgs,
+  type GraphSymbolFacts,
+  type GraphTypeFacts,
+  type TransitionFacts,
+} from './data-flow-shape.js';
 import { collectEvidenceFiles, toKnownRelativePath, EVIDENCE_MIN_FILES } from './wiki-evidence.js';
 import { findSymbolDefinitions } from './source-fallback.js';
 import { IntentEvidenceProvider } from './intent-evidence.js';
@@ -46,6 +53,13 @@ const ENTRY_FILE_NAMES = ['index.ts', 'index.js', 'main.ts', 'main.js', 'cli.ts'
 const CALLS_MIN_GROUPS = 6;
 /** calls 页单次查询边数上限（BFS 每层两次查询各限此数） */
 const CALLS_EDGE_LIMIT = 40;
+
+/** data-flow 形态证据查询的文件数上限（防大仓库单查询爆炸） */
+const DATA_FLOW_FILE_LIMIT = 30;
+/** data-flow 符号事实查询上限 */
+const DATA_FLOW_SYMBOL_LIMIT = 200;
+/** data-flow 类型定义节点查询上限 */
+const DATA_FLOW_TYPE_LIMIT = 60;
 
 /** modules 页详述上限：超过后其余模块聚合为概要（DeepWiki 目录分组分块的防超限映射） */
 const MODULE_DETAIL_LIMIT = 12;
@@ -590,12 +604,15 @@ export class WikiContextBuilder {
     // 已被先前序列覆盖的符号不再单独成节（前缀序列已包含其调用链，避免重复展示）
     const sequences: ExecutionSequence[] = [];
     const covered = new Set<string>();
+    const transitionFacts: TransitionFacts[] = [];
+    let sequenceIndex = 0;
     for (const entry of arch.entry_points.slice(0, 6)) {
       if (!this.isAppEntryPoint(entry.file)) continue;
       if (covered.has(entry.name)) continue;
-      const seq = this.buildCallChainFromEdges(entry.name, entry.file);
+      const seq = this.buildCallChainFromEdges(entry.name, entry.file, { sequenceIndex, facts: transitionFacts });
       if (seq) {
         sequences.push(seq);
+        sequenceIndex++;
         for (const m of seq.messages) {
           covered.add(m.from);
           covered.add(m.to);
@@ -609,9 +626,10 @@ export class WikiContextBuilder {
       for (const anchor of this.topCallerAnchors()) {
         if (sequences.length >= 3) break;
         if (covered.has(anchor.name)) continue;
-        const seq = this.buildCallChainFromEdges(anchor.name, anchor.file);
+        const seq = this.buildCallChainFromEdges(anchor.name, anchor.file, { sequenceIndex, facts: transitionFacts });
         if (seq) {
           sequences.push(seq);
+          sequenceIndex++;
           for (const m of seq.messages) {
             covered.add(m.from);
             covered.add(m.to);
@@ -620,7 +638,106 @@ export class WikiContextBuilder {
       }
     }
 
-    return { sequences };
+    // 数据形态证据层：CALLS 边只决定路径与排序，页面主体由确定性形态证据构成
+    const shapes = this.collectDataFlowShapeEvidence(transitionFacts);
+
+    return {
+      sequences,
+      stages: shapes.stages,
+      transitions: shapes.transitions,
+      ioEvents: shapes.ioEvents,
+      typeDefinitions: shapes.typeDefinitions,
+      shapeCoverage: shapes.shapeCoverage,
+    };
+  }
+
+  /**
+   * 数据形态证据采集：一次查询批量取参与者符号事实（签名/返回类型/函数体范围）
+   * 与本地类型定义节点，交 data-flow-shape 纯函数模块做确定性组装。
+   */
+  private collectDataFlowShapeEvidence(facts: TransitionFacts[]): ReturnType<typeof collectDataFlowShapes> {
+    if (facts.length === 0) {
+      return {
+        stages: [], transitions: [], ioEvents: [], typeDefinitions: [],
+        shapeCoverage: {
+          symbolsConsidered: 0, stages: 0, transitions: 0, dataBearingTransitions: 0,
+          controlOnlyTransitions: 0, ioEvents: 0, typedStages: 0, unknownStages: 0,
+          typeDefinitions: 0, approximatedBodies: 0,
+        },
+      };
+    }
+    const files = [...new Set(facts.flatMap(f => [f.callerFile, f.calleeFile]))]
+      .filter(f => this.isProductionGraphFile(f))
+      .slice(0, DATA_FLOW_FILE_LIMIT);
+    const fileList = files.map(f => `"${f.replace(/"/g, '\\"')}"`).join(',');
+
+    // 符号事实：signature/return_type/param_types/param_names/end_line 都是数据形态的确定性证据
+    const symbolRows = fileList.length > 0
+      ? this.client.queryGraph(
+        `MATCH (n) WHERE n.file_path IN [${fileList}]
+           AND n.is_test = false
+           AND n.label IN ['Function', 'Method', 'Class']
+         RETURN n.name AS name, n.file_path AS file, n.label AS label,
+                n.signature AS sig, n.return_type AS rt, n.param_types AS pt,
+                n.param_names AS pn, n.start_line AS sl, n.end_line AS el, n.docstring AS doc
+         LIMIT ${DATA_FLOW_SYMBOL_LIMIT}`,
+      ).rows
+      : [];
+
+    // 本地类型定义节点（interface/type/enum/class）：定义体文本由行区间从源码截取
+    const typeRows = fileList.length > 0
+      ? this.client.queryGraph(
+        `MATCH (n) WHERE n.file_path IN [${fileList}]
+           AND n.is_test = false
+           AND n.label IN ['Interface', 'Type', 'Enum', 'Class']
+         RETURN n.name AS name, n.label AS label, n.file_path AS file,
+                n.start_line AS sl, n.end_line AS el
+         LIMIT ${DATA_FLOW_TYPE_LIMIT}`,
+      ).rows
+      : [];
+
+    const symbols: GraphSymbolFacts[] = symbolRows.map(row => ({
+      name: String(row[0] ?? ''),
+      file: String(row[1] ?? ''),
+      label: String(row[2] ?? ''),
+      signature: (row[3] as string | null) ?? null,
+      returnType: (row[4] as string | null) ?? null,
+      paramTypes: (row[5] as string | null) ?? null,
+      paramNames: (row[6] as string | null) ?? null,
+      startLine: Number(row[7] ?? 0),
+      endLine: Number(row[8] ?? 0),
+      docstring: (row[9] as string | null) ?? null,
+    })).filter(s => s.name.length > 0 && s.file.length > 0);
+
+    const typeNodes: GraphTypeFacts[] = typeRows.map(row => ({
+      name: String(row[0] ?? ''),
+      label: String(row[1] ?? ''),
+      file: String(row[2] ?? ''),
+      startLine: Number(row[3] ?? 0),
+      endLine: Number(row[4] ?? 0),
+    })).filter(t => t.name.length > 0 && t.file.length > 0);
+
+    return collectDataFlowShapes({
+      transitions: facts,
+      symbols,
+      typeNodes,
+      readSource: file => this.readSourceCached(file),
+      isProduction: file => this.isProductionGraphFile(file),
+    });
+  }
+
+  /** 源文件文本缓存（I/O 扫描/类型定义摘录；不可读缓存为 null 不再重试） */
+  private readSourceCached(file: string): string | null {
+    const cached = this.sourceCache.get(file);
+    if (cached !== undefined) return cached;
+    let src: string | null;
+    try {
+      src = readFileSync(isAbsolute(file) ? file : join(this.scanResult.rootDir, file), 'utf-8');
+    } catch {
+      src = null;
+    }
+    this.sourceCache.set(file, src);
+    return src;
   }
 
   /** entry_points 消费端过滤：排除非代码文件与构建脚本（build.rs/deps.rs 是构建期代码，不是应用入口） */
@@ -679,7 +796,11 @@ export class WikiContextBuilder {
    * 这里改用 Cypher 查精确的 CALLS 边，按 BFS 层级还原真实的 caller→callee 关系。
    * frontier 用 name@file 双键，防止同名符号跨语言/跨文件互相污染。
    */
-  private buildCallChainFromEdges(entryName: string, entryFile: string): ExecutionSequence | null {
+  private buildCallChainFromEdges(
+    entryName: string,
+    entryFile: string,
+    collector: { sequenceIndex: number; facts: TransitionFacts[] },
+  ): ExecutionSequence | null {
     const MAX_DEPTH = 3;
     const MAX_NODES = 25;
 
@@ -694,15 +815,19 @@ export class WikiContextBuilder {
     for (let depth = 0; depth < MAX_DEPTH && frontier.size > 0 && participants.size < MAX_NODES; depth++) {
       const nameList = [...frontier].map(k => `"${k.split('@')[0].replace(/"/g, '\\"')}"`).join(',');
       // 查当前 frontier 中每个节点的直接 callee（过滤测试节点）
-      // 注意：该 Cypher 实现不支持 NOT ... CONTAINS 语法，用 is_test 过滤 + 结果后处理
+      // 注意：该 Cypher 实现不支持 NOT ... CONTAINS 语法，用 is_test 过滤 + 结果后处理。
+      // r.line / r.args / r.confidence / r.strategy 是图谱边上的数据形态线索：
+      // r.line 是调用点锚点，callee.start_line 是定义锚点，二者不得混用。
       const q = this.client.queryGraph(
-        `MATCH (caller)-[:CALLS]->(callee)
+        `MATCH (caller)-[r:CALLS]->(callee)
          WHERE caller.name IN [${nameList}]
            AND caller.is_test = false
            AND callee.is_test = false
          RETURN caller.name AS caller, caller.file_path AS callerFile,
-                callee.name AS callee, callee.file_path AS file, callee.label AS label, callee.start_line AS line
-         LIMIT 40`,
+                callee.name AS callee, callee.file_path AS file, callee.label AS label,
+                callee.start_line AS calleeLine, r.line AS callLine, r.args AS args,
+                r.confidence AS confidence, r.strategy AS strategy
+         LIMIT ${CALLS_EDGE_LIMIT}`,
       );
 
       const nextFrontier = new Set<string>();
@@ -713,6 +838,12 @@ export class WikiContextBuilder {
         const calleeFile = (row[3] as string) ?? '';
         const calleeLabel = row[4] as string;
         const calleeLine = Number(row[5] ?? 0);
+        const callLine = Number(row[6] ?? 0);
+        const args = parseEdgeArgs(row[7]);
+        const confidence = row[8] === null || row[8] === undefined || row[8] === ''
+          ? undefined
+          : Number(row[8]);
+        const strategy = typeof row[9] === 'string' && row[9].length > 0 ? row[9] : undefined;
 
         // 跳过自调用
         if (callerName === calleeName) continue;
@@ -739,8 +870,32 @@ export class WikiContextBuilder {
           from: callerName,
           to: calleeName,
           label: calleeName,
-          callLine: calleeLine,
-          filePath: calleeFile,
+          callFile: callerFile,
+          callLine,
+          calleeFile,
+          calleeLine,
+          args: args.map(a => ({
+            expression: a.expression,
+            evidence: 'call-argument' as const,
+            ...(callLine > 0 ? { anchor: `${callerFile}:${callLine}` } : {}),
+          })),
+          ...(confidence !== undefined && Number.isFinite(confidence) ? { confidence } : {}),
+          ...(strategy ? { strategy } : {}),
+        });
+
+        collector.facts.push({
+          caller: callerName,
+          callerFile,
+          callee: calleeName,
+          calleeFile,
+          calleeLine,
+          callLine,
+          args: args.map(a => ({ expression: a.expression ?? '', ...(a.value ? { value: a.value } : {}) })),
+          ...(confidence !== undefined && Number.isFinite(confidence) ? { confidence } : {}),
+          ...(strategy ? { strategy } : {}),
+          sequenceIndex: collector.sequenceIndex,
+          depth,
+          isEntry: depth === 0 && callerName === entryName,
         });
 
         if (!visited.has(calleeName)) {

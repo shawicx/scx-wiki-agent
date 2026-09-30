@@ -1,4 +1,5 @@
 import { WikiBuilder } from './wiki-builder.js';
+import { explainReturnType } from './data-flow-shape.js';
 import { UNCONFIRMED_CELL, unconfirmedNote } from './wiki-markers.js';
 import { isTopicPage, isChapterPage } from './page-registry.js';
 import type { IntentEvidence } from './intent-evidence.js';
@@ -6,6 +7,7 @@ import type {
   OverviewContext,
   ArchitectureContext,
   DataFlowContext,
+  DataValueShape,
   ModulesContext,
   ApiContext,
   GlossaryContext,
@@ -64,6 +66,103 @@ function symbolAnchorText(symbol: { name: string; file?: string; startLine?: num
 
 function languageSummary(languages: Array<{ language: string; fileCount: number }> | undefined): string {
   return (languages ?? []).map(l => `${l.language} × ${l.fileCount}`).join(' / ');
+}
+
+/** 数据流页固定分工声明（与 calls.md 的职责边界） */
+const FLOW_CALLS_POINTER =
+  '完整控制流与调用可达性见 [calls.md](../07-reference/calls.md)；本页只描述带数据形态证据的转换。';
+
+const STAGE_ROLE_LABELS: Record<string, string> = {
+  entry: '入口',
+  transform: '转换',
+  'io-boundary': 'I/O 边界',
+  'external-process': '外部进程',
+  output: '输出阶段',
+};
+
+const STAGE_EVIDENCE_LABELS: Record<string, string> = {
+  signature: '函数签名',
+  'call-argument': '调用实参',
+  return: '返回类型',
+  io: 'I/O 调用',
+  'type-definition': '类型定义',
+};
+
+const IO_KIND_LABELS: Record<string, string> = {
+  'fs-read': '读文件',
+  'fs-write': '写文件',
+  'directory-read': '读目录',
+  'directory-write': '建目录',
+  remove: '删除',
+  process: '子进程',
+  config: '配置读取',
+  env: '环境变量',
+  http: 'HTTP',
+  ipc: 'IPC',
+  db: '数据库',
+  stdout: '终端输出',
+};
+
+const IO_DIRECTION_LABELS: Record<string, string> = {
+  input: '输入',
+  output: '输出',
+  bidirectional: '双向',
+};
+
+function anchorText(file: string, line: number): string {
+  if (!file) return '未检出位置';
+  return line > 0 ? `${file}:${line}` : file;
+}
+
+function inline(text: string): string {
+  return '`' + text.replace(/`/g, "'").replace(/\|/g, '\\|') + '`';
+}
+
+/** 单个数据形态的展示文本（表达式与类型同时存在时都要展示，禁止用类型顶替表达式） */
+function shapeText(shape: DataValueShape, explainReturn: boolean): string {
+  // I/O 形态的证据就是调用表达式本身，不再叠加「未检出类型」噪音
+  if (shape.evidence === 'io') return shape.expression ? inline(shape.expression) : '未检出';
+  const voidLike = shape.type !== undefined && /^(?:Promise\s*<\s*void\s*>|void)$/.test(shape.type);
+  const type = shape.type
+    ? (explainReturn && voidLike && shape.evidence !== 'literal'
+      ? explainReturnType(shape.type)
+      : shape.type)
+    : undefined;
+  if (shape.expression && type) return `${inline(shape.expression)}：${type}`;
+  if (type) return type;
+  if (shape.expression) return `${inline(shape.expression)}（未检出类型）`;
+  return '未检出';
+}
+
+function shapesText(shapes: DataValueShape[], explainReturn = false): string {
+  if (shapes.length === 0) return '未检出';
+  return shapes.map(s => shapeText(s, explainReturn)).join('<br>');
+}
+
+/** 证据局限：只陈述确定性事实，不编造缺口内容 */
+function limitationNotes(ctx: DataFlowContext): string[] {
+  const notes: string[] = [];
+  const c = ctx.shapeCoverage;
+  if (c.unknownStages > 0) {
+    notes.push(`${c.unknownStages} 个阶段未检出完整类型形态，仅保留真实符号与锚点，未做类型推断。`);
+  }
+  if (c.controlOnlyTransitions > 0) {
+    notes.push(`另有 ${c.controlOnlyTransitions} 条纯控制流边（无实参、无签名、无 I/O）未列入本页。`);
+  }
+  if (c.approximatedBodies > 0) {
+    notes.push(`${c.approximatedBodies} 个阶段的函数体范围由括号匹配/行数窗口近似得出（body-scope-approximated），I/O 归属可能与同文件相邻函数混淆。`);
+  }
+  const lowConfidence = ctx.transitions.filter(t => t.confidence !== undefined && t.confidence < 0.8).length;
+  if (lowConfidence > 0) {
+    notes.push(`${lowConfidence} 条转换来自低置信度图谱边（confidence < 0.8），不作为数据形态的唯一依据。`);
+  }
+  if (ctx.typeDefinitions.length === 0) {
+    notes.push('未从阶段所在文件解析到本地 interface/type/enum/class 定义。');
+  }
+  if (notes.length === 0) {
+    notes.push('本页结论均来自图谱签名、调用点实参与源码 I/O 扫描等确定性证据，无推断内容。');
+  }
+  return notes;
 }
 
 export class WikiFallbackBuilder {
@@ -194,36 +293,84 @@ export class WikiFallbackBuilder {
     return builder.build();
   }
 
+  /**
+   * 数据流页规则渲染：输出确定性的「数据形态」证据（阶段表 / 转换表 / I-O 边界表 /
+   * 类型定义），不再输出纯调用边表——纯控制流细节属于 calls.md。
+   */
   buildDataFlow(ctx: DataFlowContext): string {
-    const builder = new WikiBuilder()
-      .addTitle('Data Flow');
+    const builder = new WikiBuilder().addTitle('Data Flow');
 
-    if (ctx.sequences.length === 0) {
-      builder.addParagraph('No execution sequences traced.');
+    if (ctx.stages.length === 0 && ctx.transitions.length === 0) {
+      builder.addParagraph('本页未采集到带数据形态证据的阶段：无签名、无调用实参、无返回类型、无 I/O 边界事件。');
+      builder.addParagraph(FLOW_CALLS_POINTER);
       return builder.build();
     }
 
-    builder.addParagraph('数据处理阶段表（调用关系详见 calls.md，此处描述数据形态转换）：');
+    builder.addParagraph(
+      `数据处理共识别 ${ctx.stages.length} 个阶段、${ctx.transitions.length} 条带数据证据的调用转换、`
+      + `${ctx.ioEvents.length} 个 I/O 边界事件。${FLOW_CALLS_POINTER}`,
+    );
 
-    // 阶段表：将每个序列视为一个处理阶段，列出关键转换（R2 边表优于时序图）
-    for (const seq of ctx.sequences) {
-      builder.addSection(seq.name, `入口符号：${seq.entrySymbol}`);
+    // 数据阶段表
+    builder.addSection('数据阶段', '');
+    builder.addTable(
+      ['阶段', '角色', '输入形态', '输出形态', '证据'],
+      ctx.stages.map(s => [
+        `${s.symbol}（${anchorText(s.file, s.line)}）`,
+        STAGE_ROLE_LABELS[s.role] ?? s.role,
+        shapesText(s.inputs),
+        shapesText(s.outputs, true),
+        s.evidenceKinds.length > 0
+          ? s.evidenceKinds.map(k => STAGE_EVIDENCE_LABELS[k] ?? k).join(' / ')
+          : '无',
+      ]),
+    );
 
-      // 调用边表（替代 sequenceDiagram）
-      if (seq.messages.length > 0) {
-        builder.addParagraph('调用边表：');
-        builder.addTable(
-          ['调用方', '被调用方', '源文件:行号'],
-          seq.messages.map(m => [
-            m.from,
-            m.to,
-            m.filePath
-              ? (m.callLine > 0 ? `${m.filePath}:${m.callLine}` : m.filePath)
-              : '-',
-          ]),
-        );
+    // 阶段转换表：调用点用 r.line，To 定义用 callee start_line，二者语义不同
+    if (ctx.transitions.length > 0) {
+      builder.addSection('阶段转换', '');
+      builder.addTable(
+        ['From', 'To', '调用实参', '调用点', 'To 定义'],
+        ctx.transitions.map(t => [
+          t.from,
+          t.to,
+          t.args.length > 0
+            ? t.args.map(a => a.expression ? inline(a.expression) : '—').join('<br>')
+            : '未检出实参',
+          anchorText(t.callFile, t.callLine),
+          t.calleeDefinition,
+        ]),
+      );
+    }
+
+    // 输入与输出边界表
+    if (ctx.ioEvents.length > 0) {
+      builder.addSection('输入与输出边界', '');
+      builder.addTable(
+        ['类型', '方向', '数据介质', '所属阶段', '表达式', '位置'],
+        ctx.ioEvents.map(e => [
+          IO_KIND_LABELS[e.kind] ?? e.kind,
+          IO_DIRECTION_LABELS[e.direction] ?? e.direction,
+          e.medium ? inline(e.medium) : '—',
+          e.symbol,
+          inline(e.expression),
+          anchorText(e.file, e.line) + (e.approximated ? '（函数体范围近似）' : ''),
+        ]),
+      );
+    }
+
+    // 关键数据结构
+    if (ctx.typeDefinitions.length > 0) {
+      builder.addSection('关键数据结构', '');
+      for (const def of ctx.typeDefinitions) {
+        builder.addSubSection(`${def.name}（${def.kind} · ${anchorText(def.file, def.line)}）`, '');
+        builder.addCodeBlock('ts', def.text);
       }
     }
+
+    // 证据局限（诚实降级：只描述确定性事实，不编造）
+    builder.addSection('证据局限', '');
+    builder.addBulletList(limitationNotes(ctx));
 
     return builder.build();
   }

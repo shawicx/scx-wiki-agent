@@ -62,6 +62,20 @@ interface ConfirmSummary {
   persisted: number;
 }
 
+/**
+ * data-flow 成页预检：仅有控制流边（无签名、无调用实参、无返回类型、无 I/O 数据形态证据）
+ * 时不得成页——否则页面退化成 calls.md 的复制品。返回 null 表示可成页，否则返回剔除原因。
+ */
+export function dataFlowDropReason(ctx: DataFlowContext | null): string | null {
+  if (!ctx || ctx.sequences.length === 0) {
+    return '无执行序列数据（可信 CALLS 边不足），跳过空壳页生成';
+  }
+  if (ctx.stages.length === 0 || ctx.shapeCoverage.dataBearingTransitions === 0) {
+    return '仅有控制流边，缺少签名、调用参数、返回类型或 I/O 数据形态证据，跳过 data-flow 页生成';
+  }
+  return null;
+}
+
 export class WikiService {
   constructor(
     private client: CodebaseMemoryClient,
@@ -167,14 +181,16 @@ export class WikiService {
     const skippedPages: Array<{ page: string; reason: string }> = [];
     const legacyRemoved: string[] = [];
 
-    // data-flow 预检：无执行序列数据时整页剔除（诚实空壳页对读者无价值）。
+    // data-flow 预检：没有数据形态证据时整页剔除（诚实空壳页对读者无价值，
+    // 且纯控制流边会让 data-flow 退化成 calls.md 复制品）。
     // 必须在 plannedPaths / README 索引 / 编号目录清理计算前完成，否则目录表与 Related
     // 会出现指向未产出页的死链。预检构建的 context 存入 prebuiltContexts 复用
     // （getArchitecture 无缓存，避免同一图谱查询跑两遍）。
     const prebuiltContexts = new Map<string, unknown>();
     if (pages.includes('data-flow')) {
       const dfContext = contextBuilder.buildByName('data-flow', pages) as DataFlowContext | null;
-      if (dfContext && dfContext.sequences.length > 0) {
+      const dropReason = dataFlowDropReason(dfContext);
+      if (dropReason === null && dfContext) {
         prebuiltContexts.set('data-flow', dfContext);
       } else {
         pages = pages.filter(p => p !== 'data-flow');
@@ -184,7 +200,7 @@ export class WikiService {
           rmSync(oldPath);
           legacyRemoved.push(oldRel);
         }
-        skippedPages.push({ page: 'data-flow', reason: '无执行序列数据（可信 CALLS 边不足），跳过空壳页生成' });
+        skippedPages.push({ page: 'data-flow', reason: dropReason ?? '缺少数据形态证据，跳过空壳页生成' });
       }
     }
 

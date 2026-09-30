@@ -4,6 +4,7 @@ import type {
   OverviewContext,
   ArchitectureContext,
   DataFlowContext,
+  DataValueShape,
   ModulesContext,
   ModuleSummary,
   ApiContext,
@@ -315,35 +316,97 @@ export class WikiPageGenerator {
   }
 
   async generateDataFlow(ctx: DataFlowContext, onChunk: (text: string) => void): Promise<string> {
-    const sequences = ctx.sequences.map(s => ({
-      name: s.name,
-      participants: s.participants.map(p => ({
-        name: p.name,
-        type: p.type,
-        file: p.filePath,
-      })),
-      messages: s.messages.map(m => ({
-        from: m.from,
-        to: m.to,
-        label: m.label,
-        location: `${m.filePath}:${m.callLine}`,
-      })),
+    // 执行路径只用于阶段排序与路径解释；页面主体是确定性数据形态证据
+    const executionPaths = ctx.sequences.map(s => ({
+      entry: s.entrySymbol,
+      symbols: [...new Set(s.messages.flatMap(m => [m.from, m.to]))],
+    }));
+    const shapeAnchor = (file: string, line: number) => (line > 0 ? `${file}:${line}` : file);
+    const shapes = (list: DataValueShape[]) => list.map(s => ({
+      expression: s.expression,
+      type: s.type,
+      evidence: s.evidence,
+      anchor: s.anchor,
     }));
 
     return this.generate(onChunk, {
-      systemPrompt: `你是一个资深代码文档专家。请根据执行序列数据生成详尽、专业的数据流文档页面（Markdown格式）。
+      systemPrompt: `你是一个资深代码文档专家。请根据确定性「数据形态证据」生成数据流文档页（Markdown格式）。
 
-要求：
-- 用中文撰写，内容必须详尽完整，不要人为缩减篇幅
-- "核心数据流概览"：用2-3段描述项目从入口到完成的核心数据流走向，说明主要阶段和数据如何在模块间流转
-- "数据阶段表"：用表格描述每个处理阶段（这是核心，替代时序图）：
-  | 阶段 | 输入类型 | 输出类型 | 关键函数 | 源文件:行号 |
-  每个阶段对应数据流中的一个转换步骤。从 sequences 数据推导出阶段（如"扫描"→"索引"→"生成"）
-- "错误路径"：报错分支触发的调用须单独标注"错误路径"，不得混入主成功流程
-- 每条事实声明必须带 file:line 或函数名锚点（R1 锚点强制）
-- 严禁使用 sequenceDiagram 表达调用关系（R2 边表优于时序图）；调用关系详见 calls.md
-- 内容要充实，要让读者理解数据在各阶段如何变换`,
-      userPrompt: JSON.stringify({ sequences, supplementalSymbols: ctx.supplementalSymbols ?? [] }, null, 2),
+数据来源（全部为工具确定性采集，禁止补充数据之外的结构）：
+- stages：数据阶段（真实符号 + 输入/输出数据形态 + 证据类型）
+- transitions：带数据证据的调用转换（调用实参 + 调用点 + callee 定义点）
+- ioEvents：函数体内的 I/O 与外部边界事件（读/写文件、子进程、配置、env、终端输出）
+- typeDefinitions：本地 interface/type/enum/class 定义摘录
+- shapeCoverage：数据形态覆盖率
+
+必须固定输出以下七个二级章节，顺序不得调整：
+## 核心数据流概览
+## 数据阶段表
+## 阶段转换表
+## 输入与输出边界
+## 关键数据结构
+## 错误与降级路径
+## 证据局限
+
+各节硬性要求：
+- 核心数据流概览：2-3 段，说明数据从哪里进入、经过哪些阶段、最终写到哪里。只能引用 stages/ioEvents 中真实存在的符号与 file:line。
+- 数据阶段表：表头必须为 | 阶段 | 输入形态 | 输出形态 | 转换依据 | 证据 |
+  输入/输出形态只能来自 stages[].inputs/outputs（expression 与 type 同时存在时都要展示；无类型写「未检出类型」）；
+  转换依据填写签名/调用实参/I-O 的实际内容；证据列填 evidence 类型。禁止根据函数名编造 schema。
+- 阶段转换表：表头必须为 | From | To | 调用实参 | 调用点 | To 定义 |
+  调用点用 transitions[].callSite（CALLS 边 r.line），To 定义用 transitions[].calleeDefinition（callee start_line），两者语义不同，严禁混用或互换。
+- 输入与输出边界：表头必须为 | 类型 | 方向 | 数据介质 | 所属阶段 | 表达式 | 位置 |，逐条列出 ioEvents。
+- 关键数据结构：用代码块原样引用 typeDefinitions[].text，并标注 file:line；未提供定义体的类型只写名称与引用位置。
+- 错误与降级路径：只有数据中存在相应证据（如错误分支调用、I/O 失败处理）时才写；无证据时写「未检出错误路径证据」，禁止编造。
+- 证据局限：如实转述 shapeCoverage（unknownStages/controlOnlyTransitions/approximatedBodies/低置信度边），说明哪些形态未知。
+
+禁止事项（违反即不可用）：
+- 禁止把调用链当数据转换：不要复述 calls.md 的完整边表；纯控制流细节链接到 calls.md。
+- 禁止在 type 为 unknown/未检出时编造 object 字段或无中生有的数据结构。
+- 禁止把文件路径字符串推断成完整文件内容结构（medium 只是路径表达式）。
+- 禁止把 I/O 函数所在模块整体当作阶段：I/O 必须落到 ioEvents[].symbol。
+- 低置信度（confidence < 0.8）的边不得作为唯一事实来源，须在证据局限中说明。
+- 严禁使用 sequenceDiagram（R2 边表优于时序图）。
+- 每条事实声明必须带 file:line 锚点（R1）。
+- 页面固定写明：「完整控制流与调用可达性见 calls.md；本页只描述带数据形态证据的转换。」
+
+用中文撰写，内容必须详尽完整，不要人为缩减篇幅。`,
+      userPrompt: JSON.stringify({
+        stages: ctx.stages.map(s => ({
+          symbol: s.symbol,
+          role: s.role,
+          anchor: shapeAnchor(s.file, s.line),
+          inputs: shapes(s.inputs),
+          outputs: shapes(s.outputs),
+          evidence: s.evidenceKinds,
+          dataShapeKnown: s.dataShapeKnown,
+        })),
+        transitions: ctx.transitions.map(t => ({
+          from: t.from,
+          to: t.to,
+          args: t.args.map(a => a.expression).filter((e): e is string => typeof e === 'string'),
+          callSite: shapeAnchor(t.callFile, t.callLine),
+          calleeDefinition: t.calleeDefinition,
+          confidence: t.confidence,
+        })),
+        ioEvents: ctx.ioEvents.map(e => ({
+          kind: e.kind,
+          direction: e.direction,
+          symbol: e.symbol,
+          medium: e.medium,
+          expression: e.expression,
+          anchor: shapeAnchor(e.file, e.line),
+        })),
+        typeDefinitions: ctx.typeDefinitions.map(d => ({
+          name: d.name,
+          kind: d.kind,
+          anchor: shapeAnchor(d.file, d.line),
+          text: d.text,
+        })),
+        shapeCoverage: ctx.shapeCoverage,
+        executionPaths,
+        supplementalSymbols: ctx.supplementalSymbols ?? [],
+      }, null, 2),
     });
   }
 

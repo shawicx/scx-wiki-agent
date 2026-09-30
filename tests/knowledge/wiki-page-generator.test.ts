@@ -304,4 +304,88 @@ describe('WikiPageGenerator', () => {
     expect(callArgs.system).toContain('跨模块协作面');
     expect(result).toBe('# 质量闸门');
   });
+
+  it('data-flow prompt 注入 stages/transitions/ioEvents/typeDefinitions 与禁止编造规则', async () => {
+    mockStreamText.mockReturnValue({
+      fullStream: (async function* () {
+        yield { type: 'text-delta', text: '## 核心数据流概览' };
+      })(),
+    } as any);
+
+    const generator = new WikiPageGenerator('gpt-4o-mini');
+    await generator.generateByName('data-flow', {
+      sequences: [{
+        name: 'main',
+        entrySymbol: 'main',
+        participants: [{ name: 'main', type: 'function' as SymbolType, filePath: 'src/index.ts' }],
+        messages: [],
+      }],
+      stages: [{
+        id: 'readConfig@src/config.ts',
+        name: 'readConfig',
+        role: 'io-boundary' as const,
+        symbol: 'readConfig',
+        file: 'src/config.ts',
+        line: 3,
+        inputs: [{ expression: 'configPath', type: 'string', evidence: 'call-argument' as const, anchor: 'src/index.ts:10' }],
+        outputs: [{ type: 'Config', evidence: 'graph-signature' as const, anchor: 'src/config.ts:3' }],
+        evidenceKinds: ['signature', 'call-argument'] as const,
+        dataShapeKnown: true,
+      }],
+      transitions: [{
+        from: 'main',
+        to: 'readConfig',
+        callFile: 'src/index.ts',
+        callLine: 10,
+        args: [{ expression: 'configPath', evidence: 'call-argument' as const }],
+        calleeDefinition: 'src/config.ts:3',
+        confidence: 0.6,
+      }],
+      ioEvents: [{
+        kind: 'fs-read' as const,
+        symbol: 'readConfig',
+        file: 'src/config.ts',
+        line: 4,
+        expression: "readFileSync(configPath, 'utf-8')",
+        medium: 'configPath',
+        direction: 'input' as const,
+      }],
+      typeDefinitions: [{
+        name: 'Config',
+        kind: 'interface' as const,
+        file: 'src/config.ts',
+        line: 1,
+        text: 'export interface Config { name: string }',
+      }],
+      shapeCoverage: {
+        symbolsConsidered: 2, stages: 1, transitions: 1, dataBearingTransitions: 1,
+        controlOnlyTransitions: 0, ioEvents: 1, typedStages: 1, unknownStages: 0,
+        typeDefinitions: 1, approximatedBodies: 0,
+      },
+    }, vi.fn());
+
+    const callArgs = mockStreamText.mock.calls[0][0] as any;
+    const prompt = callArgs.prompt as string;
+    // 结构化输入
+    expect(prompt).toContain('"stages"');
+    expect(prompt).toContain('"transitions"');
+    expect(prompt).toContain('"ioEvents"');
+    expect(prompt).toContain('"typeDefinitions"');
+    expect(prompt).toContain('"shapeCoverage"');
+    // 调用点与定义点两套锚点都要给
+    expect(prompt).toContain('src/index.ts:10');
+    expect(prompt).toContain('src/config.ts:3');
+    // 实参表达式与置信度
+    expect(prompt).toContain('configPath');
+    expect(prompt).toContain('"confidence": 0.6');
+    // 固定章节与禁止事项
+    expect(callArgs.system).toContain('## 数据阶段表');
+    expect(callArgs.system).toContain('| 阶段 | 输入形态 | 输出形态 | 转换依据 | 证据 |');
+    expect(callArgs.system).toContain('| From | To | 调用实参 | 调用点 | To 定义 |');
+    expect(callArgs.system).toContain('禁止根据函数名编造 schema');
+    expect(callArgs.system).toContain('禁止把调用链当数据转换');
+    expect(callArgs.system).toContain('完整控制流与调用可达性见 calls.md');
+    // 不再要求从调用链推导阶段
+    expect(callArgs.system).not.toContain('从 sequences 数据推导出阶段');
+  });
 });

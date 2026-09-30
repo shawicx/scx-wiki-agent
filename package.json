@@ -19,7 +19,7 @@
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit && node scripts/check-file-lines.mjs"
   },
   "keywords": [
     "wiki",

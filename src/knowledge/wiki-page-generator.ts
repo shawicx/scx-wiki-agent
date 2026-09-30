@@ -47,10 +47,12 @@ interface GenerationOutcome {
   truncated: boolean;
 }
 
-/** 单页生成结束后的续写/分节结果通知（供构建报告统计） */
+/** 单页生成结束后的续写/分节/thinking-only 结果通知（供构建报告统计） */
 export type PageGenNotice =
   | { kind: 'continuation'; rounds: number; truncated: boolean }
-  | { kind: 'sections'; sections: number; continuedSections: number; truncated: boolean };
+  | { kind: 'sections'; sections: number; continuedSections: number; truncated: boolean }
+  /** 正文通道为空、思考通道非空（provider thinking-only response）：recovered=重试后拿回正文 */
+  | { kind: 'thinking-only'; recovered: boolean };
 
 const CONTINUE_INSTRUCTION = [
   '你的上一轮输出因达到长度上限而中断。你上面那条回复是已生成的安全前缀，末尾不完整的代码块、段落或表格行已被移除。',
@@ -59,6 +61,12 @@ const CONTINUE_INSTRUCTION = [
   '- 禁止任何开场白、说明或寒暄，直接续写 Markdown 正文',
   '- 保持既有章节编号、表格与图表规范，反幻觉规则 R1-R7 继续生效',
   '- 一次性写完剩余全部章节',
+].join('\n');
+
+const THINKING_ONLY_INSTRUCTION = [
+  '【重要】你的上一轮输出全部进入了思考通道（reasoning 字段），正文通道为空。',
+  '本次严禁输出任何思考过程、内部分析或草稿：从第一个字符起就是最终 Markdown 正文，',
+  '直接以页面首个标题开头，并严格遵守前述全部生成要求与 R1-R7 反幻觉规则。',
 ].join('\n');
 
 /** 均匀分块（保序） */
@@ -1016,11 +1024,20 @@ ${ctx.brief}
     onChunk: (text: string) => void,
     config: PageConfig,
   ): Promise<GenerationOutcome> {
-    const outcome = await this.streamOnce(onChunk, config);
+    let outcome = await this.streamOnce(onChunk, config);
 
-    // content 为空时回退用 reasoning（思考模型未关闭思考的情况）：无法安全续写，直接返回
+    // thinking-only 防线：正文通道为空而思考通道非空（思考模型关闭思考失败的典型表现）。
+    // reasoning 是思维链草稿而非用户文档——绝不直接当正文写入；重试一次显式要求只输出
+    // 最终 Markdown，重试仍失败则返回空串，交由上层降级规则路径（wiki-service）。
     if (outcome.text.trim().length === 0 && outcome.reasoning.trim().length > 0) {
-      return { content: outcome.reasoning, rounds: 0, truncated: false };
+      onChunk('\n\n[wiki] 检测到 thinking-only 响应（正文为空、思考非空），重试要求直接输出正文…\n\n');
+      const retry = await this.streamOnce(onChunk, config, undefined, THINKING_ONLY_INSTRUCTION);
+      const recovered = retry.text.trim().length > 0;
+      this.onNotice?.({ kind: 'thinking-only', recovered });
+      if (!recovered) {
+        return { content: '', rounds: 0, truncated: false };
+      }
+      outcome = retry;
     }
 
     let text = outcome.text;
@@ -1050,15 +1067,18 @@ ${ctx.brief}
   /**
    * 单轮流式生成。携带 prefix 时以 messages 形式发起续写：
    * 原始页面数据 + 已生成的安全前缀 + 续写指令。
+   * extraSystem 附加在 system 末尾（thinking-only 重试时注入显式正文输出要求）。
    */
   private async streamOnce(
     onChunk: (text: string) => void,
     config: PageConfig,
     prefix?: string,
+    extraSystem?: string,
   ): Promise<StreamOutcome> {
     if (!this.model) return { text: '', reasoning: '', finish: 'error' };
 
-    const system = WikiPageGenerator.ANTI_HALLUCINATION + '\n\n' + config.systemPrompt;
+    const system = WikiPageGenerator.ANTI_HALLUCINATION + '\n\n' + config.systemPrompt
+      + (extraSystem ? '\n\n' + extraSystem : '');
     // 思考模型（如 Qwen3/DeepSeek-v4）默认把内容输出到 reasoning 字段，content 为空。
     // 尝试关闭思考；若 provider 不支持则透传忽略。
     const providerOptions = {

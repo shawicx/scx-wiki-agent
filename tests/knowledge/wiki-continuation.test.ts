@@ -197,13 +197,18 @@ describe('WikiPageGenerator 断流续写', () => {
     expect(notices).toEqual([]);
   });
 
-  it('思考回退路径（text 空、reasoning 非空）不参与续写', async () => {
-    mockStreamText.mockReturnValueOnce(streamResult([reasoningPart('思考内容')], 'length') as any);
+  it('thinking-only 响应不作为正文：重试仍失败则判空降级', async () => {
+    // 两轮均只有 reasoning（思考模型关闭思考失败）：reasoning 绝不返回为正文
+    mockStreamText
+      .mockReturnValueOnce(streamResult([reasoningPart('思考内容')], 'length') as any)
+      .mockReturnValueOnce(streamResult([reasoningPart('仍是思考')], 'length') as any);
 
-    const generator = new WikiPageGenerator('test-model', 'http://localhost', 'key');
+    const notices: PageGenNotice[] = [];
+    const generator = new WikiPageGenerator('test-model', 'http://localhost', 'key', n => notices.push(n));
     const result = await generator.generateByName('testing', testingCtx, vi.fn());
 
-    expect(result).toBe('思考内容');
-    expect(mockStreamText).toHaveBeenCalledOnce();
+    expect(result).toBe('');
+    expect(mockStreamText).toHaveBeenCalledTimes(2);
+    expect(notices).toEqual([{ kind: 'thinking-only', recovered: false }]);
   });
 });

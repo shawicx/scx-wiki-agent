@@ -105,6 +105,7 @@ export class WikiService {
     const noLlm = options?.noLlm ?? false;
     const continuations: Array<{ page: string; rounds: number; truncated: boolean }> = [];
     const sectionedPages: Array<{ page: string; sections: number; continuedSections: number; truncated: boolean }> = [];
+    const thinkingOnly: Array<{ page: string; recovered: boolean }> = [];
     const llmDropped: Array<{ page: string; reason: string }> = [];
     let currentPage = '';
     const pageGenerator = new WikiPageGenerator(
@@ -112,6 +113,8 @@ export class WikiService {
       n => {
         if (n.kind === 'continuation') {
           continuations.push({ page: currentPage, rounds: n.rounds, truncated: n.truncated });
+        } else if (n.kind === 'thinking-only') {
+          thinkingOnly.push({ page: currentPage, recovered: n.recovered });
         } else {
           sectionedPages.push({
             page: currentPage, sections: n.sections,
@@ -282,7 +285,9 @@ export class WikiService {
         page, pageContext, fallbackBuilder, pageGenerator, noLlm, onChunk, gate,
       );
       if (produced.llmDrop) {
-        llmDropped.push({ page, reason: produced.llmDrop });
+        // thinking-only 且重试未恢复：降级原因精确标记（供排查 provider 思考配置）
+        const thinkingFailed = thinkingOnly.some(t => t.page === page && !t.recovered);
+        llmDropped.push({ page, reason: thinkingFailed ? 'provider thinking-only response' : produced.llmDrop });
       }
 
       // 正文断言校验（仅 LLM 页）：三级核验后，查无实据的标识符标注「待确认」。
@@ -393,7 +398,7 @@ export class WikiService {
       writtenPages.push({ page, relPath, source, status: existed ? 'updated' : 'created' });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, llmDropped, outlineReport, claimStats, intentCoverage, confirmSummary);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, thinkingOnly, llmDropped, outlineReport, claimStats, intentCoverage, confirmSummary);
     return filenames;
   }
 
@@ -716,6 +721,7 @@ export class WikiService {
     legacyRemoved: string[],
     continuations: Array<{ page: string; rounds: number; truncated: boolean }>,
     sectionedPages: Array<{ page: string; sections: number; continuedSections: number; truncated: boolean }>,
+    thinkingOnly: Array<{ page: string; recovered: boolean }>,
     llmDropped: Array<{ page: string; reason: string }>,
     outline: OutlineReport | null,
     claimStats: Array<{ page: string } & ClaimStats>,
@@ -768,6 +774,13 @@ export class WikiService {
         .map(s => `${s.page}（${s.sections} 节${s.continuedSections > 0 ? `·${s.continuedSections} 节续写` : ''}${s.truncated ? '·有节仍截断' : ''}）`)
         .join('、');
       lines.push(`  分节生成 ${sectionedPages.length} 页：${detail}`);
+    }
+
+    if (thinkingOnly.length > 0) {
+      const detail = thinkingOnly
+        .map(t => `${t.page}（${t.recovered ? '重试恢复，建议检查 provider 思考配置' : '降级规则路径'}）`)
+        .join('、');
+      lines.push(`  thinking-only 响应 ${thinkingOnly.length} 页（正文通道为空、思考通道非空）：${detail}`);
     }
 
     if (claimStats.length > 0) {

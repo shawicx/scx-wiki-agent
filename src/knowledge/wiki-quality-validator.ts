@@ -7,7 +7,11 @@
  * - secret         (error)：疑似密钥/凭证值泄漏，拒绝写盘（LLM 路径降级规则生成）。
  * - dead-link      (warn) ：markdown 相对导航链接指向本次不产出的页面。
  * - broken-anchor  (warn) ：file:line 锚点无法在扫描文件清单中追溯到（R1 事后核验），
- *   含 `:0` 残缺锚点。
+ *   含 `:0` 残缺锚点；注入 readFileLine 时 additionally 校验行号范围与锚点-符号
+ *   关联（符号唯一解析但定义文件不含锚点文件时告警）；注入 readFile 时校验
+ *   docs/foo.md#标题 文档锚点与页内 #fragment 链接的目标存在性。
+ * - claim-support  (warn) ：正文事实句（含反引号标识符的行）中带证据锚点或
+ *   「推断」标注的比例过低（<50% 且事实句 ≥5）。
  * - thin-evidence  (warn) ：structure 层页面证据锚定块内源文件数不足下限
  *   （readme 索引页与 operations 配置驱动页豁免）。
  * - mermaid-ghost  (warn) ：Mermaid 图中引用扫描清单外的文件路径（防幽灵节点）。
@@ -26,6 +30,7 @@
 import { posix } from 'node:path';
 import { EVIDENCE_MIN_FILES, EVIDENCE_SUMMARY } from './wiki-evidence.js';
 import { endsWithIncompleteTableRow, hasUnclosedFence } from './wiki-continuation.js';
+import { isCommentLine } from './claim-verifier.js';
 
 export type QualitySeverity = 'error' | 'warn';
 
@@ -39,7 +44,8 @@ export type QualityRule =
   | 'diagram-misuse'
   | 'unanchored-rationale'
   | 'incomplete-page'
-  | 'unanchored-dependency';
+  | 'unanchored-dependency'
+  | 'claim-support';
 
 export interface QualityIssue {
   rule: QualityRule;
@@ -53,10 +59,12 @@ export interface PageQualityReport {
   /** 无 error 级违规时为 true（warn 不拦截写盘） */
   passed: boolean;
   issues: QualityIssue[];
-  /** 锚点核验统计 */
-  anchors: { total: number; valid: number };
+  /** 锚点核验统计（分类需注入 readFileLine，未注入时分类为 0） */
+  anchors: { total: number; valid: number; outOfRange: number; comment: number; doc: number; usage: number };
   /** 证据锚定块内源文件数 */
   evidence: number;
+  /** 事实句支撑率（claim-support 度量） */
+  claimSupport: { factual: number; supported: number; unsupportedSample: string[] };
 }
 
 export interface ValidateOptions {
@@ -71,6 +79,12 @@ export interface ValidateOptions {
   tier?: string;
   /** 生成期事实：该页续写耗尽轮数后仍截断（incomplete-page 由 warn 升级为 error） */
   truncated?: boolean;
+  /** 注入式源码行读取（保持纯函数契约）：返回 null = 不可读/行号超范围 */
+  readFileLine?: (file: string, line: number) => string | null;
+  /** 注入式整文件读取（文档锚点 heading 解析用）：返回 null = 不可读 */
+  readFile?: (file: string) => string | null;
+  /** 简名 → 定义文件集（getSymbolIndex 产物）：锚点-符号关联核验用 */
+  symbolFiles?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 /** 密钥值特征（只报类别与行号，值不回显） */
@@ -99,11 +113,13 @@ export function validatePageContent(content: string, opts: ValidateOptions): Pag
   checkSecrets(text, issues);
   const anchors = checkAnchors(text, opts, issues);
   checkDeadLinks(text, opts, issues);
+  checkFragmentLinks(text, opts, issues);
   const evidence = checkThinEvidence(text, opts, issues);
   checkMermaid(text, opts, issues);
   checkUnanchoredRationale(text, issues);
   checkIncompletePage(text, opts, issues);
   checkUnanchoredDependency(text, opts, issues);
+  const claimSupport = checkClaimSupport(text, issues);
 
   return {
     page: opts.page,
@@ -111,6 +127,7 @@ export function validatePageContent(content: string, opts: ValidateOptions): Pag
     issues,
     anchors,
     evidence,
+    claimSupport,
   };
 }
 
@@ -149,33 +166,105 @@ export function findSecretDetail(text: string): { label: string; line: number } 
 
 /** R1 事后核验：file:line 锚点是否可追溯到扫描文件清单。
  *  LLM 常写短文件名（如 signing.rs）：basename 在扫描清单内唯一可解析时视为有效锚点
- *  （指向无歧义），仅多义/全无命中才告警。 */
+ *  （指向无歧义），仅多义/全无命中才告警。
+ *  注入 readFileLine 时升级为「真锚点」核验：行号范围 + 锚点-符号关联 +
+ *  分类统计（comment/doc/usage）；注入 readFile 时校验 docs/foo.md#标题 目标。 */
 function checkAnchors(
   text: string,
   opts: ValidateOptions,
   issues: QualityIssue[],
-): { total: number; valid: number } {
+): { total: number; valid: number; outOfRange: number; comment: number; doc: number; usage: number } {
   let total = 0;
   let valid = 0;
+  let outOfRange = 0;
+  let comment = 0;
+  let doc = 0;
+  let usage = 0;
   const zeroLine = new Set<string>();
   const unknown = new Set<string>();
+  const outOfRangeSet = new Set<string>();
+  const mismatched = new Set<string>();
+  const docMissing = new Set<string>();
   const byBasename = new Map<string, number>();
+  const byBasenamePath = new Map<string, string>();
   for (const f of opts.knownFiles) {
     const base = f.slice(f.lastIndexOf('/') + 1);
     byBasename.set(base, (byBasename.get(base) ?? 0) + 1);
+    byBasenamePath.set(base, f);
   }
+  const lineRe = new RegExp(ANCHOR_RE.source, 'g');
+  const docRe = new RegExp(DOC_ANCHOR_RE.source, 'gi');
 
-  for (const m of text.matchAll(ANCHOR_RE)) {
-    total++;
-    const [path, line] = [m[1], m[2]];
-    if (line === '0') {
-      zeroLine.add(`${path}:0`);
-    } else if (opts.knownFiles.has(path)) {
+  let inFence = false;
+  for (const rawLine of text.split('\n')) {
+    if (/^\s*```/.test(rawLine)) { inFence = !inFence; continue; }
+    if (inFence) continue;
+    const line = rawLine;
+
+    // 行内反引号标识符（锚点-符号关联用）
+    const tickNames = new Set<string>();
+    for (const t of line.matchAll(/`([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)`/g)) {
+      tickNames.add(t[1].split('.').pop()!);
+    }
+
+    for (const m of line.matchAll(lineRe)) {
+      total++;
+      const [path, lineNo] = [m[1], m[2]];
+      if (lineNo === '0') {
+        zeroLine.add(`${path}:0`);
+        continue;
+      }
+      // 解析锚点文件（全路径 > 唯一 basename > 不可解析）
+      let resolved: string | null = null;
+      if (opts.knownFiles.has(path)) {
+        resolved = path;
+      } else if (!path.includes('/') && byBasename.get(path) === 1) {
+        resolved = byBasenamePath.get(path) ?? null;
+      }
+      if (resolved === null) {
+        unknown.add(path);
+        continue;
+      }
       valid++;
-    } else if (path.includes('/') === false && byBasename.get(path) === 1) {
-      valid++; // 短文件名唯一可解析（无歧义指向真实文件）
-    } else {
-      unknown.add(path);
+
+      if (opts.readFileLine) {
+        const content = opts.readFileLine(resolved, Number(lineNo));
+        if (content === null) {
+          outOfRange++;
+          outOfRangeSet.add(`${path}:${lineNo}`);
+        } else if (isCommentLine(content, resolved)) {
+          comment++; // 注释锚点：R7 允许，仅统计分布
+        } else {
+          usage++;
+        }
+        // 锚点-符号关联：行内标识符唯一解析到定义文件集、而锚点文件不在其中
+        if (opts.symbolFiles) {
+          for (const name of tickNames) {
+            const defFiles = opts.symbolFiles.get(name);
+            if (defFiles && defFiles.size > 0 && !defFiles.has(resolved!)) {
+              mismatched.add(`${name} @ ${path}:${lineNo}（定义于 ${[...defFiles].slice(0, 2).join('、')}）`);
+            }
+          }
+        }
+      }
+    }
+
+    // 文档锚点 docs/foo.md#标题：目标文件可读时校验 heading slug 存在性
+    if (opts.readFile) {
+      for (const m of line.matchAll(docRe)) {
+        const anchor = m[0];
+        const hashIdx = anchor.indexOf('#');
+        const docPath = anchor.slice(0, hashIdx);
+        const frag = anchor.slice(hashIdx + 1);
+        if (!opts.knownFiles.has(docPath)) continue;
+        doc++;
+        const docContent = opts.readFile(docPath);
+        if (docContent === null) continue;
+        const slugs = headingSlugs(docContent);
+        if (!slugs.has(frag) && !slugs.has(decodeURIComponent(frag))) {
+          docMissing.add(anchor);
+        }
+      }
     }
   }
 
@@ -185,7 +274,91 @@ function checkAnchors(
   for (const u of unknown) {
     issues.push({ rule: 'broken-anchor', severity: 'warn', message: `锚点路径不在扫描文件清单中: ${u}` });
   }
-  return { total, valid };
+  for (const o of outOfRangeSet) {
+    issues.push({ rule: 'broken-anchor', severity: 'warn', message: `锚点行号超出文件范围: ${o}` });
+  }
+  for (const mm of [...mismatched].slice(0, 5)) {
+    issues.push({ rule: 'broken-anchor', severity: 'warn', message: `锚点文件与符号定义文件不符: ${mm}` });
+  }
+  for (const d of [...docMissing].slice(0, 5)) {
+    issues.push({ rule: 'broken-anchor', severity: 'warn', message: `文档锚点目标不存在: ${d}` });
+  }
+  return { total, valid, outOfRange, comment, doc, usage };
+}
+
+/**
+ * GitHub 风格 heading slug（中文保留）：小写 ASCII、去标点（保留连字符/下划线/
+ * 字母数字/中日韩文字）、空格→连字符。纯函数，供文档锚点与页内 fragment 校验。
+ */
+export function headingSlug(title: string): string {
+  return title
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, '')
+    .trim()
+    .replace(/\s+/g, '-');
+}
+
+/** 文档内容 → 全部 heading slug 集合 */
+function headingSlugs(docContent: string): Set<string> {
+  const slugs = new Set<string>();
+  for (const line of docContent.split('\n')) {
+    const m = line.match(/^#{1,6}\s+(.+)$/);
+    if (m) slugs.add(headingSlug(m[1]));
+  }
+  return slugs;
+}
+
+/** 页内 fragment 链接（[文本](#锚点)）：目标 heading 必须存在于本页 */
+function checkFragmentLinks(text: string, opts: ValidateOptions, issues: QualityIssue[]): void {
+  const slugs = headingSlugs(text);
+  const dead = new Set<string>();
+  for (const m of text.matchAll(/\]\(#([^)]+)\)/g)) {
+    const frag = m[1];
+    if (!slugs.has(frag) && !slugs.has(decodeURIComponent(frag))) dead.add(frag);
+  }
+  for (const d of dead) {
+    issues.push({ rule: 'broken-anchor', severity: 'warn', message: `页内锚链接目标不存在: #${d}` });
+  }
+}
+
+/**
+ * 事实句支撑率（claim-support，warn）：
+ * 事实句 = 围栏外、非标题/表头分隔行、含 ≥1 个反引号标识符的行（表格行按行计，
+ * 表格是声明密集区）；支撑 = 同行含 file:line / commit / 文档锚点，或诚实标注
+ * 「推断」（R5 降级计为已处理）。事实句 ≥5 且支撑率 <50% 时告警。
+ */
+function checkClaimSupport(text: string, issues: QualityIssue[]): { factual: number; supported: number; unsupportedSample: string[] } {
+  let factual = 0;
+  let supported = 0;
+  const unsupported: string[] = [];
+  let inFence = false;
+  for (const rawLine of text.split('\n')) {
+    if (/^\s*```/.test(rawLine)) { inFence = !inFence; continue; }
+    if (inFence) continue;
+    const line = rawLine.trim();
+    if (line === '' || HEADING_RE.test(line)) continue;
+    if (/^\|?[\s:|-]*\|?$/.test(line)) continue; // 表头分隔行/空表行
+    if (!/`[A-Za-z_$][\w$.-]{2,}`/.test(line)) continue; // 无标识符声明，非事实句
+    factual++;
+    const anchored = ANCHOR_TEST_RE.test(line)
+      || COMMIT_ANCHOR_RE.test(line)
+      || DOC_ANCHOR_RE.test(line)
+      || line.includes('推断');
+    if (anchored) {
+      supported++;
+    } else {
+      unsupported.push(line.slice(0, 60));
+    }
+  }
+  if (factual >= 5 && supported * 2 < factual) {
+    issues.push({
+      rule: 'claim-support',
+      severity: 'warn',
+      message: `事实句支撑率 ${supported}/${factual}（<50%）：${unsupported.slice(0, 3).map(s => `「${s}」`).join('')}${unsupported.length > 3 ? ' 等' : ''}`,
+    });
+  }
+  return { factual, supported, unsupportedSample: unsupported.slice(0, 5) };
 }
 
 /** 相对导航链接完整性：.md 目标必须是本次产出页面或仓库真实文件 */

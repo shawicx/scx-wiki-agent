@@ -311,6 +311,10 @@ export class WikiService {
         validatePageContent(content, {
           page, pagePath: relPath, knownFiles: pageKnownFiles, plannedPaths,
           truncated: pageTruncated(),
+          // 真锚点核验（注入式访问器，闸门保持纯函数）：行号范围 + 锚点-符号关联
+          readFileLine: (f, l) => this.readSourceLine(f, l),
+          readFile: f => this.readSourceFile(f),
+          symbolFiles: this.getSymbolIndex(page === 'testing' ? 'all' : 'production').files,
         }).passed;
 
       const produced = await this.generatePage(
@@ -428,13 +432,16 @@ export class WikiService {
         injectEvidenceBlock(stripPendingMarkers(entry.content), buildEvidenceBlock(entry.evidenceFiles)) +
         buildRelatedSection(page, pages);
 
-      // 写盘前质量闸门（LLM 与规则路径都过闸）
+      // 写盘前质量闸门（LLM 与规则路径都过闸；注入式真锚点核验访问器）
       const report = validatePageContent(
         content, {
           page, pagePath: relPath,
           knownFiles: entry.page === 'testing' ? knownFiles : productionKnownFiles,
           plannedPaths,
           tier: findPageDescriptor(page)?.tier,
+          readFileLine: (f, l) => this.readSourceLine(f, l),
+          readFile: f => this.readSourceFile(f),
+          symbolFiles: this.getSymbolIndex(entry.page === 'testing' ? 'all' : 'production').files,
         },
       );
       qualityReports.push(report);
@@ -601,6 +608,15 @@ export class WikiService {
     }
     if (lines === null || lineNo < 1 || lineNo > lines.length) return null;
     return lines[lineNo - 1];
+  }
+
+  /** 整文件读取（文档锚点 heading 解析用；复用行缓存） */
+  private readSourceFile(file: string): string | null {
+    const lines = this.sourceLineCache.get(file) ?? null;
+    if (lines !== null) return lines.join('\n');
+    if (this.readSourceLine(file, 1) === null) return null;
+    const cached = this.sourceLineCache.get(file);
+    return cached ? cached.join('\n') : null;
   }
 
   /**
@@ -986,11 +1002,32 @@ export class WikiService {
     }
 
     const anchors = reports.reduce(
-      (acc, r) => ({ total: acc.total + r.anchors.total, valid: acc.valid + r.anchors.valid }),
-      { total: 0, valid: 0 },
+      (acc, r) => ({
+        total: acc.total + r.anchors.total,
+        valid: acc.valid + r.anchors.valid,
+        outOfRange: acc.outOfRange + (r.anchors.outOfRange ?? 0),
+        comment: acc.comment + (r.anchors.comment ?? 0),
+      }),
+      { total: 0, valid: 0, outOfRange: 0, comment: 0 },
     );
     if (anchors.total > 0) {
-      lines.push(`  锚点核验：${anchors.valid}/${anchors.total} 可追溯到扫描文件清单`);
+      const rangeNote = anchors.outOfRange > 0 ? `，${anchors.outOfRange} 处行号超范围` : '';
+      const commentNote = anchors.comment > 0 ? `，注释锚点 ${anchors.comment} 处` : '';
+      lines.push(`  锚点核验：${anchors.valid}/${anchors.total} 可追溯到扫描文件清单${rangeNote}${commentNote}`);
+    }
+
+    // 事实句支撑率（claim-support：正文可信度度量，比证据块文件数更接近真实）
+    const cs = reports.reduce(
+      (acc, r) => ({ factual: acc.factual + r.claimSupport.factual, supported: acc.supported + r.claimSupport.supported }),
+      { factual: 0, supported: 0 },
+    );
+    if (cs.factual > 0) {
+      const weakPages = reports
+        .filter(r => r.claimSupport.factual >= 5 && r.claimSupport.supported * 2 < r.claimSupport.factual)
+        .map(r => r.page);
+      lines.push(
+        `  事实句支撑率：${cs.supported}/${cs.factual}（${Math.round((cs.supported / cs.factual) * 100)}%）${weakPages.length > 0 ? `，弱支撑页：${weakPages.join('、')}` : ''}`,
+      );
     }
 
     const evidenceCovered = reports.filter(r => r.evidence > 0).length;

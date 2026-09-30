@@ -6,8 +6,10 @@ import {
   collectPendingConfirmations,
   applyConfirmations,
   validateReplacement,
-  loadConfirmedClaims,
-  saveConfirmedClaims,
+  loadConfirmedEntries,
+  saveConfirmedEntries,
+  evaluateConfirmedEntries,
+  type ConfirmedEntry,
   type ConfirmationDecision,
 } from '../../src/knowledge/confirmation.js';
 import { pendingMarker, stripPendingMarkers } from '../../src/knowledge/wiki-markers.js';
@@ -200,37 +202,71 @@ describe('validateReplacement', () => {
   });
 });
 
-describe('confirmations.json 持久化', () => {
+describe('confirmations.json 持久化（v2 指纹条目）', () => {
   let agentDir: string;
 
   beforeEach(() => { agentDir = mkdtempSync(join(tmpdir(), 'confirm-store-')); });
   afterEach(() => { rmSync(agentDir, { recursive: true, force: true }); });
 
-  it('缺失/损坏文件返回空集（fail-open）', () => {
-    expect(loadConfirmedClaims(agentDir).size).toBe(0);
-    writeFileSync(join(agentDir, 'confirmations.json'), '{broken', 'utf-8');
-    expect(loadConfirmedClaims(agentDir).size).toBe(0);
+  const entry = (raw: string, overrides?: Partial<ConfirmedEntry>): ConfirmedEntry => ({
+    raw, files: [], hashes: [], head: 'abc1234', confirmedAt: '2026-10-01T00:00:00Z', ...overrides,
   });
 
-  it('合并写入：新增才落盘，读取回放为白名单', () => {
-    expect(saveConfirmedClaims(agentDir, ['ghostThing'])).toBe(1);
-    expect(saveConfirmedClaims(agentDir, ['ghostThing'])).toBe(0); // 重复不写
-    expect(saveConfirmedClaims(agentDir, ['anotherOne', ''])).toBe(1); // 空串忽略
+  it('缺失/损坏文件返回空集（fail-open）；v1 旧格式迁移为无指纹条目', () => {
+    expect(loadConfirmedEntries(agentDir)).toHaveLength(0);
+    writeFileSync(join(agentDir, 'confirmations.json'), '{broken', 'utf-8');
+    expect(loadConfirmedEntries(agentDir)).toHaveLength(0);
 
-    const loaded = loadConfirmedClaims(agentDir);
-    expect(loaded.has('ghostThing')).toBe(true);
-    expect(loaded.has('anotherOne')).toBe(true);
-    expect(loaded.size).toBe(2);
+    writeFileSync(join(agentDir, 'confirmations.json'), JSON.stringify({ version: 1, confirmed: ['legacyThing'] }), 'utf-8');
+    const migrated = loadConfirmedEntries(agentDir);
+    expect(migrated).toEqual([{ raw: 'legacyThing', files: [], hashes: [], head: '', confirmedAt: '' }]);
+  });
 
+  it('v2 全量写入与读取回放（按 raw 排序稳定）', () => {
+    saveConfirmedEntries(agentDir, [entry('zebra'), entry('alpha', { files: ['src/a.ts'], hashes: ['h1'] })]);
     const raw = JSON.parse(readFileSync(join(agentDir, 'confirmations.json'), 'utf-8'));
-    expect(raw.version).toBe(1);
-    expect(raw.confirmed).toEqual(['anotherOne', 'ghostThing']); // 排序稳定
+    expect(raw.version).toBe(2);
+    expect(raw.entries.map((e: ConfirmedEntry) => e.raw)).toEqual(['alpha', 'zebra']);
+    expect(loadConfirmedEntries(agentDir)).toHaveLength(2);
   });
 
   it('agentDir 不存在时自动创建', () => {
     const nested = join(agentDir, 'a/b');
-    saveConfirmedClaims(nested, ['x']);
-    expect(loadConfirmedClaims(nested).has('x')).toBe(true);
+    saveConfirmedEntries(nested, [entry('x')]);
+    expect(loadConfirmedEntries(nested)).toHaveLength(1);
     mkdirSync(nested, { recursive: true }); // 幂等：已存在不报错
+  });
+});
+
+describe('evaluateConfirmedEntries（指纹重校验）', () => {
+  const head = 'abc1234';
+  const hashOf = (f: string) => `hash(${f})`;
+
+  it('HEAD 未变 → 全部有效免标', () => {
+    const entries: ConfirmedEntry[] = [
+      { raw: 'foo', files: ['src/a.ts'], hashes: ['hash(src/a.ts)'], head, confirmedAt: '' },
+      { raw: 'bar', files: [], hashes: [], head, confirmedAt: '' },
+    ];
+    const r = evaluateConfirmedEntries(entries, head, hashOf);
+    expect([...r.validRaws].sort()).toEqual(['bar', 'foo']);
+    expect(r.stale).toHaveLength(0);
+  });
+
+  it('HEAD 变 + 文件哈希不变 → 仍有效；文件变更/删除/不可读 → 过期', () => {
+    const entries: ConfirmedEntry[] = [
+      { raw: 'stable', files: ['src/a.ts'], hashes: ['hash(src/a.ts)'], head, confirmedAt: '' },
+      { raw: 'changed', files: ['src/b.ts'], hashes: ['old-hash'], head, confirmedAt: '' },
+      { raw: 'deleted', files: ['src/gone.ts'], hashes: ['hash(src/gone.ts)'], head, confirmedAt: '' },
+    ];
+    const hashProbe = (f: string) => (f === 'src/gone.ts' ? null : `hash(${f})`);
+    const r = evaluateConfirmedEntries(entries, 'def5678', hashProbe);
+    expect(r.validRaws.has('stable')).toBe(true);
+    expect(r.stale.map(e => e.raw).sort()).toEqual(['changed', 'deleted']);
+  });
+
+  it('歧义名（files 空 = HEAD-scoped）：HEAD 变即过期重问', () => {
+    const entries: ConfirmedEntry[] = [{ raw: 'ambiguousDep', files: [], hashes: [], head, confirmedAt: '' }];
+    expect(evaluateConfirmedEntries(entries, head, hashOf).stale).toHaveLength(0);
+    expect(evaluateConfirmedEntries(entries, 'other', hashOf).stale.map(e => e.raw)).toEqual(['ambiguousDep']);
   });
 });

@@ -13,8 +13,12 @@ import type { ClaimStats, ProbeEvidenceKind } from '../knowledge/claim-verifier.
 import {
   collectPendingConfirmations,
   applyConfirmations,
-  loadConfirmedClaims,
-  saveConfirmedClaims,
+  loadConfirmedEntries,
+  saveConfirmedEntries,
+  evaluateConfirmedEntries,
+  currentHead,
+  hashFileContent,
+  type ConfirmedEntry,
 } from '../knowledge/confirmation.js';
 import type { ConfirmationDecision } from '../knowledge/confirmation.js';
 import { extractDefinedSymbolNames } from '../knowledge/source-fallback.js';
@@ -256,8 +260,17 @@ export class WikiService {
     const citationStats: Array<{ page: string; cited: number; invalid: number }> = [];
     const intentCoverage: Array<{ page: string; counts: Record<string, number> }> = [];
 
-    // 持久化确认白名单（confirmations.json）：上次构建确认过的 claim 本次直接免标
-    const persistedConfirmed = loadConfirmedClaims(agentDir);
+    // 持久化确认（confirmations.json v2 指纹条目）：指纹仍有效的 claim 本次免标；
+    // 过期条目（HEAD 变且文件哈希失配 / 歧义名 HEAD-scoped 过期）重新进入待确认
+    // 队列并从 store 剪除，计数进构建报告（不静默沿用）。
+    const repoHead = currentHead(this.scanResult.rootDir);
+    const hashOf = hashFileContent(this.scanResult.rootDir);
+    const storedEntries = loadConfirmedEntries(agentDir);
+    const { validRaws: persistedConfirmed, stale: staleConfirmed } =
+      evaluateConfirmedEntries(storedEntries, repoHead, hashOf);
+    // store 内保留未过期条目（有效条目 + 尚未到期的），过期条目构建后统一剪除落盘
+    const staleSet = new Set(staleConfirmed);
+    let confirmedEntries = storedEntries.filter(e => !staleSet.has(e));
 
     // full 模式：写盘前整目录重建（此刻规划已全部成功，后续任意页失败也有逐页降级兑底）
     if (mode === 'full') {
@@ -366,6 +379,7 @@ export class WikiService {
 
     // ---- 阶段二：待确认项人工裁决（生成后、写盘前，单次会话跨页去重） ----
     let confirmSummary: ConfirmSummary | null = null;
+    let storeDirty = staleConfirmed.length > 0; // 过期条目待剪除
     if (options?.confirmSession) {
       const items = collectPendingConfirmations(
         producedEntries.map(e => ({ page: e.page, content: e.content })),
@@ -376,13 +390,22 @@ export class WikiService {
         for (const entry of producedEntries) {
           entry.content = applyConfirmations(entry.content, byKey);
         }
-        // 确认的 claim 持久化：后续构建经白名单自动免标，不再重复打扰
+        // 确认的 claim 持久化（v2 指纹条目）：符号解析唯一时存文件+哈希（文件
+        // 不变则长期有效）；歧义名（0/多文件）退化为 HEAD-scoped，任何提交后
+        // 过期重问。过期旧条目同时从 store 剪除。
         const resolvedClaims = decisions
           .filter(d => d.action === 'resolve' && d.kind === 'claim')
           .map(d => d.key.slice('claim\n'.length));
-        const persisted = resolvedClaims.length > 0
-          ? saveConfirmedClaims(agentDir, resolvedClaims)
-          : 0;
+        let persisted = 0;
+        if (resolvedClaims.length > 0) {
+          const confirmedAt = new Date().toISOString();
+          for (const raw of resolvedClaims) {
+            confirmedEntries = confirmedEntries.filter(e => e.raw !== raw);
+            confirmedEntries.push(this.fingerprintEntry(raw, repoHead, confirmedAt, hashOf));
+          }
+          persisted = resolvedClaims.length;
+          storeDirty = true;
+        }
         confirmSummary = {
           total: items.length,
           resolved: decisions.filter(d => d.action === 'resolve').length,
@@ -390,6 +413,10 @@ export class WikiService {
           persisted,
         };
       }
+    }
+    // 过期剪除/新增条目统一落盘（无会话或会话无待裁决项时也剪除过期条目）
+    if (storeDirty) {
+      saveConfirmedEntries(agentDir, confirmedEntries);
     }
 
     // ---- 阶段三：剥离 marker 脚手架 + 注入锚定块 + 写盘前闸门 + 写盘（update 模式在终稿上比较） ----
@@ -436,7 +463,10 @@ export class WikiService {
       writtenPages.push({ page, relPath, source, status: existed ? 'updated' : 'created' });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, thinkingOnly, llmDropped, outlineReport, claimStats, citationStats, intentCoverage, confirmSummary);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, thinkingOnly, llmDropped, outlineReport, claimStats, citationStats, intentCoverage, confirmSummary, {
+      valid: persistedConfirmed.size,
+      staleRaws: staleConfirmed.map(e => e.raw),
+    });
     return filenames;
   }
 
@@ -514,6 +544,30 @@ export class WikiService {
 
   /** 源码行缓存（断言核验的命中行分类用；读失败缓存 null → fail-open） */
   private sourceLineCache = new Map<string, string[] | null>();
+
+  /**
+   * claim 原文 → v2 指纹条目：末段名在符号索引（production 优先，all 兜底）
+   * 唯一命中时存文件 + 内容哈希（文件不变则跨提交长期有效）；歧义名
+   * （0/多文件：依赖名、跨文件同名、纯词法命中）无稳定指纹，files 置空
+   * 退化为 HEAD-scoped——任何提交后过期重新裁决。
+   */
+  private fingerprintEntry(
+    raw: string,
+    head: string,
+    confirmedAt: string,
+    hashOf: (file: string) => string | null,
+  ): ConfirmedEntry {
+    const name = raw.replace(/\(\s*\)$/, '').split('.').pop() ?? raw;
+    let files: string[] = [];
+    for (const scope of ['production', 'all'] as const) {
+      const set = this.getSymbolIndex(scope).files.get(name);
+      if (set && set.size === 1) {
+        files = [...set];
+        break;
+      }
+    }
+    return { raw, files, hashes: files.map(f => hashOf(f) ?? ''), head, confirmedAt };
+  }
 
   /**
    * 断言核验三级通道（词法证据分类）：search_code compact 命中 (file, line)
@@ -810,6 +864,7 @@ export class WikiService {
     citationStats: Array<{ page: string; cited: number; invalid: number }>,
     intentCoverage: Array<{ page: string; counts: Record<string, number> }>,
     confirmSummary: ConfirmSummary | null,
+    confirmedFingerprints?: { valid: number; staleRaws: string[] },
   ): void {
     const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -904,6 +959,14 @@ export class WikiService {
       lines.push(
         `  人工裁决：${confirmSummary.total} 项待确认（确认 ${confirmSummary.resolved} / 保持 ${confirmSummary.kept}），新增持久化确认 ${confirmSummary.persisted} 条（confirmations.json，后续构建免标）`,
       );
+    }
+
+    // 持久化确认指纹状态（过期条目重新进入待确认队列，绝不静默沿用）
+    if (confirmedFingerprints && (confirmedFingerprints.valid > 0 || confirmedFingerprints.staleRaws.length > 0)) {
+      const staleNote = confirmedFingerprints.staleRaws.length > 0
+        ? `，${confirmedFingerprints.staleRaws.length} 条已过期重新裁决（${confirmedFingerprints.staleRaws.slice(0, 5).join('、')}${confirmedFingerprints.staleRaws.length > 5 ? ' 等' : ''}）`
+        : '';
+      lines.push(`  持久化确认：${confirmedFingerprints.valid} 条指纹有效免标${staleNote}`);
     }
 
     if (llmDropped.length > 0) {

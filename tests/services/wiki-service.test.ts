@@ -675,9 +675,10 @@ describe('WikiService', () => {
     expect(overview).toContain('`ghostThing`');
     expect(overview).not.toContain('`ghostThing`（待确认）');
 
-    // 确认的 claim 持久化
+    // 确认的 claim 持久化（v2 指纹条目；tmpDir 非 git 仓库 → head=''，HEAD-scoped）
     const store = JSON.parse(readFileSync(join(agentDir, 'confirmations.json'), 'utf-8'));
-    expect(store.confirmed).toContain('ghostThing');
+    expect(store.version).toBe(2);
+    expect(store.entries.map((e: { raw: string }) => e.raw)).toContain('ghostThing');
 
     // 第二次构建：白名单免标 → 无待确认项 → 会话不再触发
     await service.buildWiki(wikiDir, { model: 'test-model', pages: ['overview'], confirmSession });

@@ -559,6 +559,8 @@ export interface TopicContext {
   boundaries: Array<{ from: string; to: string; callCount: number }>;
   /** 意图证据（注释/首提交/测试行为，「设计动机」的锚点源） */
   intent?: IntentEvidence[];
+  /** 证据索引（evidence-ID 试点）：符号/边/边界/意图的稳定编号，供 LLM 以 [E#] 引用声明证据 */
+  evidenceIndex?: import('./evidence-id.js').EvidenceRef[];
 }
 
 /** Context for outline chapter pages（章节页：outline.json 锁定，brief 驱动） */

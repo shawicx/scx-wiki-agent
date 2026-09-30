@@ -261,3 +261,33 @@ describe('incomplete-page（截断残页检测）', () => {
     expect(r.passed).toBe(true);
   });
 });
+
+describe('unanchored-dependency（tech-stack 依赖 import 点核验）', () => {
+  const techOpts: ValidateOptions = { ...baseOpts, page: 'tech-stack', pagePath: 'tech-stack.md' };
+  const withAnchor = '# 技术栈\n\n## 核心依赖\n\n| 依赖 | 版本 | 首个 import 点 |\n|---|---|---|\n| vue | ^3.4 | src/main.ts |\n| commander | ^12 | src/cli/index.ts:10 |';
+  const withoutAnchor = '# 技术栈\n\n## 核心依赖\n\n| 依赖 | 版本 | 首个 import 点 |\n|---|---|---|\n| vue | ^3.4 | - |\n| commander | ^12 | 未知 |';
+
+  it('依赖表格行带 import 点锚点：无告警', () => {
+    const r = validatePageContent(withAnchor, techOpts);
+    expect(r.issues.some(i => i.rule === 'unanchored-dependency')).toBe(false);
+  });
+
+  it('依赖表格行缺 import 点锚点：warn 并列出依赖名', () => {
+    const r = validatePageContent(withoutAnchor, techOpts);
+    const issue = r.issues.find(i => i.rule === 'unanchored-dependency');
+    expect(issue?.severity).toBe('warn');
+    expect(issue?.message).toContain('vue');
+    expect(issue?.message).toContain('commander');
+  });
+
+  it('版本号不算锚点；「声明未用」小节豁免；非 tech-stack 页不检查', () => {
+    // 版本号 ^4.0.0 不构成锚点 → 仍告警
+    const versionOnly = '# 技术栈\n\n## 开发依赖\n\n| 依赖 | 版本 | import 点 |\n|---|---|---|\n| vitest | ^4.0.0 | - |';
+    expect(validatePageContent(versionOnly, techOpts).issues.some(i => i.rule === 'unanchored-dependency')).toBe(true);
+    // 声明未用依赖小节合法无 import 点
+    const unused = '# 技术栈\n\n## 声明未用依赖\n\n| 依赖 | 版本 |\n|---|---|\n| left-pad | ^1 |';
+    expect(validatePageContent(unused, techOpts).issues.some(i => i.rule === 'unanchored-dependency')).toBe(false);
+    // 其他页同名结构不检查
+    expect(validatePageContent(withoutAnchor, baseOpts).issues.some(i => i.rule === 'unanchored-dependency')).toBe(false);
+  });
+});

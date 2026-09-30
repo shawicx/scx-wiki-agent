@@ -83,5 +83,11 @@ export function createMockClient(overrides?: Partial<{
       const matches = overrides?.searchCounts?.get(pattern) ?? 0;
       return { totalGrepMatches: matches, files: matches > 0 ? ['src/index.ts'] : [] };
     }),
+    searchCodeMatches: vi.fn().mockImplementation((pattern: string) => {
+      const matches = overrides?.searchCounts?.get(pattern) ?? 0;
+      // 命中行指向 src/index.ts:1（测试扫描结果的根目录通常不存在实体文件 →
+      // readSourceLine 失败 → fail-open 判 usage，与旧 files 模式语义一致）
+      return matches > 0 ? [{ file: 'src/index.ts', line: 1 }] : [];
+    }),
   };
 }

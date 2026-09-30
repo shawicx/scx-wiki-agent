@@ -19,6 +19,7 @@ import { findSymbolDefinitions } from './source-fallback.js';
 import { IntentEvidenceProvider } from './intent-evidence.js';
 import { isTauriProject, scanIpcSurface } from './tauri-ipc.js';
 import type { TopicDefinition } from './topic-discovery.js';
+import { buildEvidenceIndex } from './evidence-id.js';
 import type { OutlineChapter } from './outline.js';
 import type {
   OverviewContext,
@@ -1421,14 +1422,21 @@ export class WikiContextBuilder {
     if (!def) return null;
 
     const { symbols, edges, boundaries } = this.fileEvidence(def.files);
-    return {
+    const base = {
       id: def.id,
       title: def.title,
       files: def.files,
       symbols,
       edges,
       boundaries,
-      ...(this.intentProvider ? { intent: this.intentProvider.intentForFiles(def.files) } : {}),
+    };
+    // 证据索引在并入 intent 前构建也无妨——buildEvidenceIndex 接受 intent 可选；
+    // 这里先组 intent 再建索引，保证编号覆盖意图证据。
+    const intent = this.intentProvider ? this.intentProvider.intentForFiles(def.files) : undefined;
+    return {
+      ...base,
+      ...(intent ? { intent } : {}),
+      evidenceIndex: buildEvidenceIndex({ ...base, ...(intent ? { intent } : {}) }),
     };
   }
 

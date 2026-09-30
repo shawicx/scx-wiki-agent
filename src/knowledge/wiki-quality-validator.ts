@@ -17,6 +17,8 @@
  * - incomplete-page (warn/error)：疑似截断残页（未闭合代码块 / 末尾表格残行）。
  *   默认 warn；当生成期已知该页续写后仍截断（opts.truncated）时升级为 error，
  *   拒绝写盘并降级规则路径重建。
+ * - unanchored-dependency (warn)：tech-stack 页核心/开发/测试依赖表格行缺
+ *   import 点锚点（R3 事后核验：依赖"用途"须有 import 点佐证，不能只报名字）。
  *
  * error 拒绝写盘；warn 记入构建报告。纯函数，不做 I/O。
  */
@@ -36,7 +38,8 @@ export type QualityRule =
   | 'mermaid-ghost'
   | 'diagram-misuse'
   | 'unanchored-rationale'
-  | 'incomplete-page';
+  | 'incomplete-page'
+  | 'unanchored-dependency';
 
 export interface QualityIssue {
   rule: QualityRule;
@@ -100,6 +103,7 @@ export function validatePageContent(content: string, opts: ValidateOptions): Pag
   checkMermaid(text, opts, issues);
   checkUnanchoredRationale(text, issues);
   checkIncompletePage(text, opts, issues);
+  checkUnanchoredDependency(text, opts, issues);
 
   return {
     page: opts.page,
@@ -293,4 +297,50 @@ function checkIncompletePage(text: string, opts: ValidateOptions, issues: Qualit
     severity: opts.truncated ? 'error' : 'warn',
     message: `疑似截断残页（${signals.join('、')}）${opts.truncated ? '：续写耗尽后仍截断' : ''}`,
   });
+}
+
+/** 需要逐行 import 点锚点的依赖小节（R3：用途须有 import 点佐证；「声明未用」小节豁免） */
+const DEPENDENCY_SECTIONS = ['核心依赖', '开发依赖', '测试专用依赖'];
+
+/** 表格行内的 import 点锚点特征：源文件路径（扩展名 ≥2 字母，点前须含字母，排除版本号）或 file:line */
+const IMPORT_ANCHOR_RE = /[\w.@-]*[A-Za-z][\w.@-]*\.[A-Za-z]{2,4}\b(?::\d+)?/;
+
+/**
+ * R3 事后核验（tech-stack 页专用）：核心/开发/测试依赖小节的表格行必须携带
+ * import 点锚点（源文件路径或 file:line）。依赖"用途/选型"只有名字没有 import
+ * 点佐证的，提示读者该行叙述可能缺实据。只影响 tech-stack 页，warn 不拦截。
+ */
+function checkUnanchoredDependency(text: string, opts: ValidateOptions, issues: QualityIssue[]): void {
+  if (opts.page !== 'tech-stack') return;
+  const lines = text.split('\n');
+  const sectionStarts: Array<{ title: string; from: number; to: number }> = [];
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^##\s+(.{1,40})/);
+    if (m) sectionStarts.push({ title: m[1].trim(), from: i, to: lines.length });
+  }
+  for (let s = 0; s < sectionStarts.length; s++) {
+    sectionStarts[s].to = s + 1 < sectionStarts.length ? sectionStarts[s + 1].from : lines.length;
+  }
+  const missing: string[] = [];
+  for (const { title, from, to } of sectionStarts) {
+    if (!DEPENDENCY_SECTIONS.some(t => title.includes(t))) continue;
+    for (let i = from + 1; i < to; i++) {
+      const line = lines[i].trim();
+      if (!line.startsWith('|')) continue;
+      const cells = line.split('|').map(c => c.trim()).filter(c => c.length > 0);
+      // 表头分隔行（|---|---|）与表头行（含「依赖」「版本」字样）跳过
+      if (cells.length === 0 || cells.every(c => /^:?-{2,}:?$/.test(c))) continue;
+      if (cells.some(c => c.includes('依赖') || c.includes('版本') || c.includes('import'))) continue;
+      if (IMPORT_ANCHOR_RE.test(line)) continue;
+      const depName = cells.find(c => c.length > 0 && !/^\d/.test(c)) ?? '';
+      if (depName) missing.push(depName.slice(0, 30));
+    }
+  }
+  if (missing.length > 0) {
+    issues.push({
+      rule: 'unanchored-dependency',
+      severity: 'warn',
+      message: `依赖表格行缺 import 点锚点（R3）：${missing.slice(0, 5).join('、')}${missing.length > 5 ? ` 等 ${missing.length} 行` : ''}`,
+    });
+  }
 }

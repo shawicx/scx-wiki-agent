@@ -8,8 +8,8 @@ import { WikiPageGenerator } from '../knowledge/wiki-page-generator.js';
 import { sanitizeWikiOutput } from '../knowledge/wiki-output-sanitizer.js';
 import { validatePageContent } from '../knowledge/wiki-quality-validator.js';
 import type { PageQualityReport } from '../knowledge/wiki-quality-validator.js';
-import { verifyAndAnnotateClaims, collectContextKeys } from '../knowledge/claim-verifier.js';
-import type { ClaimStats } from '../knowledge/claim-verifier.js';
+import { verifyAndAnnotateClaims, collectContextKeys, isCommentLine } from '../knowledge/claim-verifier.js';
+import type { ClaimStats, ProbeEvidenceKind } from '../knowledge/claim-verifier.js';
 import {
   collectPendingConfirmations,
   applyConfirmations,
@@ -25,6 +25,8 @@ import { TopicDiscovery, loadTopics, saveTopics } from '../knowledge/topic-disco
 import type { TopicDefinition } from '../knowledge/topic-discovery.js';
 import { loadOutline, saveOutline, validateOutline } from '../knowledge/outline.js';
 import type { OutlineFileData, OutlineKnown, OutlineReport } from '../knowledge/outline.js';
+import { resolveEvidenceCitations } from '../knowledge/evidence-id.js';
+import type { EvidenceRef } from '../knowledge/evidence-id.js';
 import { OutlinePlanner } from '../knowledge/outline-planner.js';
 import {
   PAGE_REGISTRY, ALL_PAGE_NAMES, tier2PagesFor,
@@ -33,6 +35,13 @@ import {
   isChapterPage, chapterPageName, CHAPTER_DIR, ownedNumberedDirs,
 } from '../knowledge/page-registry.js';
 import type { WikiBuildOptions, DataFlowContext } from '../knowledge/types.js';
+
+/** 图谱符号索引（getSymbolIndex 产物）：简名全集 + qualified 全串 + 简名→文件集 */
+interface SymbolIndex {
+  names: Set<string>;
+  qualified: Set<string>;
+  files: Map<string, Set<string>>;
+}
 
 /** 单页产出结果：最终内容 + 走的生成路径 + LLM 路径放弃原因（仅降级时） */
 interface PageProduced {
@@ -243,6 +252,7 @@ export class WikiService {
 
     const qualityReports: PageQualityReport[] = [];
     const claimStats: Array<{ page: string } & ClaimStats> = [];
+    const citationStats: Array<{ page: string; cited: number; invalid: number }> = [];
     const intentCoverage: Array<{ page: string; counts: Record<string, number> }> = [];
 
     // 持久化确认白名单（confirmations.json）：上次构建确认过的 claim 本次直接免标
@@ -306,27 +316,38 @@ export class WikiService {
         });
       }
 
-      // 正文断言校验（仅 LLM 页）：三级核验后，查无实据的标识符标注「待确认」。
+      // 正文断言校验（仅 LLM 页）：三级核验后，查无实据/仅提及的标识符标注「待确认」。
       // universe 并入：源码回落符号 + 声明依赖名 + 本页 context 数据字段名
       // （前两者防真实符号/依赖被误杀，后者防工具自家数据契约字段被误杀）；
+      // qualifiedNames 供点链声明后缀匹配；symbolFiles 供同名歧义统计（过滤到页作用域，
+      // 排除 .wiki 自引用）；probe 为词法命中行分类（代码实据 vs 纯注释/配置提及）；
       // confirmed 为人工确认白名单（confirmations.json），命中即免标。
       let bodyContent = produced.content;
       if (produced.source === 'llm') {
-        const universe = new Set(this.getSymbolUniverse(
-          contextBuilder.getFallbackSymbolNames(),
-          page === 'testing' ? 'all' : 'production',
-        ));
+        // 证据引用解析（topic 页 evidence-ID 试点）：确定性剥离 [E#] 脚手架，
+        // 统计有效/无效引用（无效 = LLM 编造编号，grounded generation 遵从率度量）
+        const evidenceIndex = (pageContext as { evidenceIndex?: EvidenceRef[] }).evidenceIndex;
+        if (isTopicPage(page) && evidenceIndex && evidenceIndex.length > 0) {
+          const resolved = resolveEvidenceCitations(bodyContent, evidenceIndex);
+          bodyContent = resolved.content;
+          citationStats.push({ page, cited: resolved.cited, invalid: resolved.invalid });
+        }
+        const index = this.getSymbolIndex(page === 'testing' ? 'all' : 'production');
+        const universe = new Set<string>(index.names);
+        for (const n of contextBuilder.getFallbackSymbolNames()) universe.add(n);
         for (const dep of contextBuilder.getDepNames()) universe.add(dep);
         for (const key of collectContextKeys(pageContext)) universe.add(key);
+        const symbolFiles = new Map<string, Set<string>>();
+        for (const [name, files] of index.files) {
+          const scoped = new Set([...files].filter(f => pageKnownFiles.has(f) && !f.startsWith('.wiki/')));
+          if (scoped.size > 0) symbolFiles.set(name, scoped);
+        }
         const verified = verifyAndAnnotateClaims(bodyContent, {
           symbols: universe,
+          qualifiedNames: index.qualified,
+          symbolFiles,
           knownFiles: pageKnownFiles,
-          grepCount: pattern => {
-            const result = this.client.searchCode(pattern, 20);
-            return result.files.some(file => pageKnownFiles.has(file))
-              ? result.totalGrepMatches
-              : 0;
-          },
+          probe: name => this.probeClaimEvidence(name, pageKnownFiles),
           confirmed: persistedConfirmed,
         });
         bodyContent = verified.content;
@@ -414,7 +435,7 @@ export class WikiService {
       writtenPages.push({ page, relPath, source, status: existed ? 'updated' : 'created' });
     }
 
-    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, thinkingOnly, llmDropped, outlineReport, claimStats, intentCoverage, confirmSummary);
+    this.printBuildReport(writtenPages, skippedPages, qualityReports, legacyRemoved, continuations, sectionedPages, thinkingOnly, llmDropped, outlineReport, claimStats, citationStats, intentCoverage, confirmSummary);
     return filenames;
   }
 
@@ -450,37 +471,81 @@ export class WikiService {
     return valid.length > 0 ? valid : allPages;
   }
 
-  /** 图谱符号名全集（断言校验一级核验；按页面作用域缓存）。
-   *  fallback 为源码回落/IPC 扫描找到的名字——必须并入，否则工具自己注入的
-   *  证据会被断言校验反手标成「待确认」（自证矛盾）。production 作用域只采纳
-   *  能定位到生产扫描文件的图谱符号，防止 is_test 标记失准的测试符号背书。 */
-  private symbolUniverses = new Map<'all' | 'production', Set<string>>();
-  private getSymbolUniverse(
-    fallback?: ReadonlySet<string>,
-    scope: 'all' | 'production' = 'all',
-  ): Set<string> {
-    let universe = this.symbolUniverses.get(scope);
-    if (universe === undefined) {
+  /** 图谱符号索引（断言校验一级核验；按页面作用域缓存）。
+   *  names/qualified/files 一次查询同源构建：qualified 供点链声明后缀匹配
+   *  （消灭 qualified 假阴性），files 供同名歧义统计。
+   *  production 作用域只采纳能定位到生产扫描文件的图谱符号，
+   *  防止 is_test 标记失准的测试符号背书。 */
+  private symbolIndexes = new Map<'all' | 'production', SymbolIndex>();
+  private getSymbolIndex(scope: 'all' | 'production' = 'all'): SymbolIndex {
+    let index = this.symbolIndexes.get(scope);
+    if (index === undefined) {
       const q = this.client.queryGraph(
-        'MATCH (n) WHERE n.is_test = false RETURN n.name AS name, n.file_path AS file LIMIT 5000',
+        'MATCH (n) WHERE n.is_test = false RETURN n.name AS name, n.file_path AS file, n.qualified_name AS qn LIMIT 5000',
         5000,
       );
       const productionPaths = new Set(this.scanResult.productionFiles.map(f => f.relativePath));
-      universe = new Set();
+      const names = new Set<string>();
+      const qualified = new Set<string>();
+      const files = new Map<string, Set<string>>();
       for (const row of q.rows) {
         const rawFile = String(row[1] ?? '');
         const file = isAbsolute(rawFile)
           ? relative(this.scanResult.rootDir, rawFile).replace(/\\/g, '/')
           : rawFile;
         if (scope === 'production' && !productionPaths.has(file)) continue;
-        universe.add(String(row[0]));
+        const name = String(row[0] ?? '');
+        if (!name) continue;
+        names.add(name);
+        if (file) {
+          let set = files.get(name);
+          if (set === undefined) files.set(name, (set = new Set()));
+          set.add(file);
+        }
+        const qn = row[2];
+        if (typeof qn === 'string' && qn) qualified.add(qn);
       }
-      this.symbolUniverses.set(scope, universe);
+      index = { names, qualified, files };
+      this.symbolIndexes.set(scope, index);
     }
-    if (!fallback || fallback.size === 0) return universe;
-    const merged = new Set(universe);
-    for (const n of fallback) merged.add(n);
-    return merged;
+    return index;
+  }
+
+  /** 源码行缓存（断言核验的命中行分类用；读失败缓存 null → fail-open） */
+  private sourceLineCache = new Map<string, string[] | null>();
+
+  /**
+   * 断言核验三级通道（词法证据分类）：search_code compact 命中 (file, line)
+   * 后读取命中行原文——纯注释/配置行不算功能实据（mention），其余（代码/
+   * import/调用/定义行）算实据（usage）。作用域过滤排除 .wiki 自引用。
+   * 无作用域内命中返回 null；binary 不支持 compact 模式时抛错由核验方
+   * fail-open 回退（按有实据处理，宁漏勿误）。
+   */
+  private probeClaimEvidence(name: string, scopeFiles: ReadonlySet<string>): ProbeEvidenceKind | null {
+    const matches = this.client.searchCodeMatches(name, 20);
+    const scoped = matches.filter(m => scopeFiles.has(m.file) && !m.file.startsWith('.wiki/'));
+    if (scoped.length === 0) return null;
+    for (const m of scoped) {
+      const line = this.readSourceLine(m.file, m.line);
+      if (line === null) return 'usage'; // 源不可读：fail-open 按实据
+      if (isCommentLine(line, m.file)) continue;
+      return 'usage';
+    }
+    return 'mention'; // 作用域内命中全在注释/提及行
+  }
+
+  private readSourceLine(file: string, lineNo: number): string | null {
+    let lines = this.sourceLineCache.get(file);
+    if (lines === undefined) {
+      try {
+        lines = readFileSync(join(this.scanResult.rootDir, file), 'utf-8').split('\n');
+      } catch {
+        lines = null;
+      }
+      this.sourceLineCache.set(file, lines);
+    }
+    if (lines === null || lineNo < 1 || lineNo > lines.length) return null;
+    return lines[lineNo - 1];
   }
 
   /**
@@ -741,6 +806,7 @@ export class WikiService {
     llmDropped: Array<{ page: string; reason: string }>,
     outline: OutlineReport | null,
     claimStats: Array<{ page: string } & ClaimStats>,
+    citationStats: Array<{ page: string; cited: number; invalid: number }>,
     intentCoverage: Array<{ page: string; counts: Record<string, number> }>,
     confirmSummary: ConfirmSummary | null,
   ): void {
@@ -801,15 +867,34 @@ export class WikiService {
 
     if (claimStats.length > 0) {
       const sum = claimStats.reduce(
-        (acc, c) => ({ total: acc.total + c.total, unverified: acc.unverified + c.unverified, skipped: acc.skipped + c.skipped }),
-        { total: 0, unverified: 0, skipped: 0 },
+        (acc, c) => ({
+          total: acc.total + c.total,
+          unverified: acc.unverified + c.unverified,
+          mentionOnly: acc.mentionOnly + (c.mentionOnly ?? 0),
+          ambiguous: acc.ambiguous + (c.ambiguous ?? 0),
+          skipped: acc.skipped + c.skipped,
+        }),
+        { total: 0, unverified: 0, mentionOnly: 0, ambiguous: 0, skipped: 0 },
       );
       const flagged = claimStats
         .filter(c => c.unverified > 0)
         .map(c => `${c.page} ${c.unverified}`)
         .join('、');
+      const mentionNote = sum.mentionOnly > 0 ? `，其中仅注释/配置提及 ${sum.mentionOnly}` : '';
+      const ambiguityNote = sum.ambiguous > 0 ? `；同名歧义 ${sum.ambiguous} 处（多文件同名，叙述请以锚点为准）` : '';
       lines.push(
-        `  断言校验 ${claimStats.length} 页：${sum.total - sum.unverified - sum.skipped}/${sum.total} 有实据，待确认 ${sum.unverified}${flagged ? `（${flagged}）` : ''}${sum.skipped > 0 ? `，未核验 ${sum.skipped}（超探测上限）` : ''}`,
+        `  断言校验 ${claimStats.length} 页：${sum.total - sum.unverified - sum.skipped}/${sum.total} 有实据，待确认 ${sum.unverified}${mentionNote}${flagged ? `（${flagged}）` : ''}${sum.skipped > 0 ? `，未核验 ${sum.skipped}（超探测上限）` : ''}${ambiguityNote}`,
+      );
+    }
+
+    // 证据引用（topic 页 evidence-ID 试点：grounded generation 遵从率度量）
+    if (citationStats.length > 0) {
+      const detail = citationStats
+        .map(c => `${c.page}（有效 ${c.cited}${c.invalid > 0 ? `·无效 ${c.invalid}` : ''}）`)
+        .join('、');
+      const totalInvalid = citationStats.reduce((n, c) => n + c.invalid, 0);
+      lines.push(
+        `  证据引用（topic 试点）${citationStats.length} 页：${detail}${totalInvalid > 0 ? '——存在编造编号，建议复查' : ''}`,
       );
     }
 

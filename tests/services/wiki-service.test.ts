@@ -577,8 +577,8 @@ describe('WikiService', () => {
     const overview = readFileSync(join(wikiDir, '01-overview', 'overview.md'), 'utf-8');
     expect(overview).toContain('`ghostThing`（待确认）');
     expect(overview).not.toContain('realThing`（待确认）');
-    expect(client.searchCode).toHaveBeenCalledWith('realThing', 20);
-    expect(client.searchCode).toHaveBeenCalledWith('ghostThing', 20);
+    expect(client.searchCodeMatches).toHaveBeenCalledWith('realThing', 20);
+    expect(client.searchCodeMatches).toHaveBeenCalledWith('ghostThing', 20);
   });
 
   it('claim 核验按页面作用域过滤：非 testing 页不采纳测试文件证据，testing 页可采纳', async () => {
@@ -593,10 +593,10 @@ describe('WikiService', () => {
     })) as any);
 
     const client = createMockClient();
-    client.searchCode.mockImplementation((pattern: string) =>
+    client.searchCodeMatches.mockImplementation((pattern: string) =>
       pattern === 'TEST_ONLY_SYMBOL'
-        ? { totalGrepMatches: 1, files: ['tests/config.test.ts'] }
-        : { totalGrepMatches: 0, files: [] });
+        ? [{ file: 'tests/config.test.ts', line: 1 }]
+        : []);
     client.queryGraph.mockImplementation((cypher: string) =>
       cypher.includes('RETURN n.name AS name, n.file_path AS file')
         ? {

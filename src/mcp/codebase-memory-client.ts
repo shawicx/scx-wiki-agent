@@ -202,6 +202,49 @@ export class CodebaseMemoryClient {
     };
   }
 
+  /**
+   * 词法搜索的 (file, line) 命中清单（compact 模式）：
+   * 图谱符号内命中（rows[].matches 行号）+ 符号外原始命中（raw_matches.rows）合并。
+   * 断言核验的证据分类通道：调用方可读取命中行内容，区分代码实据与纯注释/配置提及。
+   * 无命中返回空数组；老版本 binary 不支持 compact JSON 时抛错（调用方 fail-open 回退）。
+   */
+  searchCodeMatches(pattern: string, limit = 20): Array<{ file: string; line: number }> {
+    const raw = this.exec('search_code', {
+      project: this.projectName,
+      pattern,
+      mode: 'compact',
+      limit,
+      format: 'json',
+    }) as {
+      cols?: string[];
+      rows?: unknown[][];
+      raw_matches?: { cols?: string[]; rows?: unknown[][] };
+    };
+    const out: Array<{ file: string; line: number }> = [];
+    // 图谱符号内命中：cols = [qn, label, file, lines, matches, in, out, ...]
+    const cols = raw.cols ?? [];
+    const fileIdx = cols.indexOf('file');
+    const matchesIdx = cols.indexOf('matches');
+    for (const row of raw.rows ?? []) {
+      const file = fileIdx >= 0 ? row[fileIdx] : undefined;
+      const lines = matchesIdx >= 0 ? row[matchesIdx] : undefined;
+      if (typeof file !== 'string' || !Array.isArray(lines)) continue;
+      for (const line of lines) {
+        if (typeof line === 'number') out.push({ file, line });
+      }
+    }
+    // 符号外原始命中：cols = [file, line, content]
+    const rawCols = raw.raw_matches?.cols ?? [];
+    const rawFileIdx = rawCols.indexOf('file');
+    const rawLineIdx = rawCols.indexOf('line');
+    for (const row of raw.raw_matches?.rows ?? []) {
+      const file = rawFileIdx >= 0 ? row[rawFileIdx] : row[0];
+      const line = rawLineIdx >= 0 ? row[rawLineIdx] : row[1];
+      if (typeof file === 'string' && typeof line === 'number') out.push({ file, line });
+    }
+    return out;
+  }
+
   // --- 内部方法 ---
 
   private exec(tool: string, args: Record<string, unknown>): unknown {

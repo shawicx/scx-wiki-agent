@@ -723,6 +723,15 @@ ${hasIpc ? `
   }
 
   async generateTopic(ctx: TopicContext, onChunk: (text: string) => void): Promise<string> {
+    // evidence-ID 试点契约：数据带证据索引时要求 [E#] 引用，成稿由工具确定性解析剥离
+    const evidenceContract = (ctx.evidenceIndex && ctx.evidenceIndex.length > 0)
+      ? `
+证据引用契约（evidence-ID 试点）：
+- 数据中的 evidenceIndex 提供带编号的证据清单（E1、E2…，含锚点）
+- 凡事实性声明（符号职责/调用关系/边界/动机引用），在该句末尾标注支撑证据编号，如 [E3]，可多选 [E1][E5]
+- 无任何证据编号支撑的动机/评价性表述必须标注「推断」（R7）
+- [E#] 编号必须来自 evidenceIndex，严禁编造不存在的编号`
+      : '';
     return this.generate(onChunk, {
       systemPrompt: `你是一个资深软件架构师。请根据主题数据生成详尽、专业的仓库专属主题文档页面（Markdown格式）。
 
@@ -737,7 +746,7 @@ ${hasIpc ? `
 - "跨模块边界"：基于 boundaries 分析该主题与外部的耦合点及修改代价
 - "设计动机"：如提供 intent（文件头自述/符号注释/首提交/测试行为承诺），必须优先引用证据原文并携带锚点（file:line / commit 哈希+日期，R7）；无证据的动机推断须显式标注「推断」并写明推断依据（命名/协作模式）
 - 描述运行机制（生命周期、时序、等待/释放语义等）时，必须有数据中调用边或符号的 file:line 锚点佐证；无锚点佐证的机制描述必须显式标注「推断」，禁止以确定语气叙述
-- 严禁编造数据外的方法、参数或行为（R1/R3）`,
+- 严禁编造数据外的方法、参数或行为（R1/R3）${evidenceContract}`,
       userPrompt: JSON.stringify({
         id: ctx.id,
         title: ctx.title,
@@ -757,6 +766,9 @@ ${hasIpc ? `
         })),
         boundaries: ctx.boundaries,
         intent: intentToPrompt(ctx.intent),
+        ...(ctx.evidenceIndex && ctx.evidenceIndex.length > 0
+          ? { evidenceIndex: ctx.evidenceIndex.map(e => ({ id: e.id, kind: e.kind, name: e.name, anchor: e.anchor })) }
+          : {}),
       }, null, 2),
     });
   }

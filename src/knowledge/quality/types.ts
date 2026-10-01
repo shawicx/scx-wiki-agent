@@ -8,6 +8,7 @@ export type QualityRule =
   | 'dead-link'
   | 'broken-anchor'
   | 'thin-evidence'
+  | 'evidence-coverage'
   | 'mermaid-ghost'
   | 'diagram-misuse'
   | 'unanchored-rationale'
@@ -31,6 +32,8 @@ export interface PageQualityReport {
   anchors: { total: number; valid: number; outOfRange: number; comment: number; doc: number; usage: number };
   /** 证据锚定块内源文件数 */
   evidence: number;
+  /** 证据覆盖度：正文引用文件被锚定块覆盖的比例（evidence-coverage 度量） */
+  evidenceCoverage: { cited: number; covered: number; missingSample: string[] };
   /** 事实句支撑率（claim-support 度量） */
   claimSupport: { factual: number; supported: number; unsupportedSample: string[] };
 }

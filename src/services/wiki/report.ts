@@ -188,7 +188,15 @@ export function printBuildReport(
 
   const evidenceCovered = reports.filter(r => r.evidence > 0).length;
   if (reports.length > 0) {
-    lines.push(`  证据锚定：${evidenceCovered}/${reports.length} 页含源文件锚定块`);
+    // 覆盖率口径：正文引用文件被锚定块覆盖的比例（比文件数量更接近 grounding 真实度）
+    const cov = reports.reduce(
+      (acc, r) => ({ cited: acc.cited + r.evidenceCoverage.cited, covered: acc.covered + r.evidenceCoverage.covered }),
+      { cited: 0, covered: 0 },
+    );
+    const covNote = cov.cited > 0
+      ? `，正文引用覆盖 ${cov.covered}/${cov.cited}（${Math.round((cov.covered / cov.cited) * 100)}%）`
+      : '';
+    lines.push(`  证据锚定：${evidenceCovered}/${reports.length} 页含源文件锚定块${covNote}`);
   }
 
   // 意图证据覆盖（「为什么」含量度量：注释/git/文档/测试四通道）

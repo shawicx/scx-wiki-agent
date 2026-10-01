@@ -1,7 +1,7 @@
 /** 各 error/warn 规则（原 wiki-quality-validator.ts 拆分，零逻辑变化） */
 
 import { posix } from 'node:path';
-import { EVIDENCE_MIN_FILES, EVIDENCE_SUMMARY } from '../wiki-evidence.js';
+import { EVIDENCE_MIN_FILES, EVIDENCE_SUMMARY, evidenceCoverage } from '../wiki-evidence.js';
 import { endsWithIncompleteTableRow, hasUnclosedFence } from '../wiki-continuation.js';
 import { ANCHOR_TEST_RE, COMMIT_ANCHOR_RE, DOC_ANCHOR_RE } from './anchors.js';
 import type { QualityIssue, ValidateOptions } from './types.js';
@@ -130,6 +130,23 @@ export function checkThinEvidence(text: string, opts: ValidateOptions, issues: Q
     });
   }
   return count;
+}
+
+/** evidence-coverage（warn）：正文引用文件未被锚定块覆盖（引用 ≥3 且覆盖不全时告警） */
+export function checkEvidenceCoverage(
+  text: string,
+  opts: ValidateOptions,
+  issues: QualityIssue[],
+): { cited: number; covered: number; missingSample: string[] } {
+  const { cited, covered, missing } = evidenceCoverage(text, opts.knownFiles);
+  if (cited >= 3 && covered < cited) {
+    issues.push({
+      rule: 'evidence-coverage',
+      severity: 'warn',
+      message: `正文引用文件 ${cited} 个，锚定块仅覆盖 ${covered} 个（缺失：${missing.slice(0, 5).join('、')}${missing.length > 5 ? ' 等' : ''}）`,
+    });
+  }
+  return { cited, covered, missingSample: missing.slice(0, 5) };
 }
 
 /** Mermaid 图质量：幽灵文件节点 + sequenceDiagram 误用（R2） */

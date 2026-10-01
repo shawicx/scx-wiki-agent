@@ -32,6 +32,7 @@ import {
   checkClaimSupport,
   checkDeadLinks,
   checkEmptyShell,
+  checkEvidenceCoverage,
   checkIncompletePage,
   checkMermaid,
   checkSecrets,
@@ -51,6 +52,7 @@ export function validatePageContent(content: string, opts: ValidateOptions): Pag
   checkDeadLinks(text, opts, issues);
   checkFragmentLinks(text, opts, issues);
   const evidence = checkThinEvidence(text, opts, issues);
+  const evidenceCov = checkEvidenceCoverage(text, opts, issues);
   checkMermaid(text, opts, issues);
   checkUnanchoredRationale(text, issues);
   checkIncompletePage(text, opts, issues);
@@ -63,6 +65,7 @@ export function validatePageContent(content: string, opts: ValidateOptions): Pag
     issues,
     anchors,
     evidence,
+    evidenceCoverage: evidenceCov,
     claimSupport,
   };
 }

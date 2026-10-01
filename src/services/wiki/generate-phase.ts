@@ -8,7 +8,7 @@ import { validatePageContent } from '../../knowledge/wiki-quality-validator.js';
 import { verifyAndAnnotateClaims, collectContextKeys } from '../../knowledge/claim-verifier.js';
 import type { ClaimStats } from '../../knowledge/claim-verifier.js';
 import { countIntentEvidence } from '../../knowledge/intent-evidence.js';
-import { collectEvidenceFiles } from '../../knowledge/wiki-evidence.js';
+import { collectEvidenceFiles, rankEvidenceFiles } from '../../knowledge/wiki-evidence.js';
 import { resolveEvidenceCitations } from '../../knowledge/evidence-id.js';
 import type { EvidenceRef } from '../../knowledge/evidence-id.js';
 import { pageRelPath, isTopicPage } from '../../knowledge/page-registry.js';
@@ -127,7 +127,8 @@ export async function generateAllPages(
       relPath,
       source: produced.source,
       content: bodyContent,
-      evidenceFiles: collectEvidenceFiles(pageContext, pageKnownFiles, rootDir),
+      // 分层相关性排序（T1 正文引用置顶 > 符号定义 > 意图证据 > 入口/代表 > 配置兜底）
+      evidenceFiles: rankEvidenceFiles(pageContext, bodyContent, pageKnownFiles, rootDir),
       context: pageContext,
     });
   }

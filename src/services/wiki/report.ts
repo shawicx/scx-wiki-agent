@@ -3,6 +3,7 @@
 import type { PageQualityReport } from '../../knowledge/wiki-quality-validator.js';
 import type { ClaimStats } from '../../knowledge/claim-verifier.js';
 import type { OutlineReport } from '../../knowledge/outline.js';
+import type { CrossPageAction, CrossPageIssue } from '../../knowledge/crosspage/types.js';
 
 export type PageStatus = 'created' | 'updated' | 'unchanged';
 
@@ -35,6 +36,7 @@ export function printBuildReport(
   intentCoverage: Array<{ page: string; counts: Record<string, number> }>,
   confirmSummary: ConfirmSummary | null,
   confirmedFingerprints?: { valid: number; staleRaws: string[] },
+  crossPage?: { issues: CrossPageIssue[]; actions: CrossPageAction[] },
 ): void {
   const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -197,6 +199,20 @@ export function printBuildReport(
     }
     const detail = Object.entries(totals).sort().map(([k, n]) => `${k} ${n}`).join(' / ');
     lines.push(`  意图证据：${intentCoverage.length} 页携带（${detail}）`);
+  }
+
+  // 跨页审校（全局 pass：重复/越界/一致性 warn + 确定性降级动作）
+  if (crossPage && (crossPage.issues.length > 0 || crossPage.actions.length > 0)) {
+    lines.push(`  跨页审校：${crossPage.issues.length} 项告警，${crossPage.actions.length} 个降级动作`);
+    for (const a of crossPage.actions) {
+      lines.push(`    - [${a.kind}] ${a.page}`);
+    }
+    for (const i of crossPage.issues.slice(0, 10)) {
+      lines.push(`    - [${i.rule}] ${i.message}`);
+    }
+    if (crossPage.issues.length > 10) {
+      lines.push(`    - …另有 ${crossPage.issues.length - 10} 条`);
+    }
   }
 
   const warns = reports.flatMap(r => r.issues.filter(i => i.severity === 'warn'));

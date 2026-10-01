@@ -41,6 +41,8 @@ import { runConfirmPhase } from './confirm-phase.js';
 import { writeProducedPages } from './write-phase.js';
 import { generateAllPages } from './generate-phase.js';
 import { resolvePages } from './resolve.js';
+import { crosspageReview } from '../../knowledge/crosspage/index.js';
+import { applyCrossPageActions } from '../../knowledge/crosspage/actions.js';
 import type { ProducedEntry } from './types.js';
 
 /**
@@ -260,6 +262,21 @@ export class WikiService {
       claimStats, citationStats, intentCoverage,
     );
 
+    // ---- 跨页审校（阶段一产物上的全局 pass：重复检测/确定性降级/Related 亲和度） ----
+    // 时序：降级动作必须在阶段二（confirmation）之前——待确认项收集依赖改写后的正文。
+    const contexts = new Map<string, unknown>(
+      producedEntries.filter(e => e.context !== undefined).map(e => [e.page, e.context as unknown]),
+    );
+    const { report: crossReport, crossLinks } = crosspageReview({
+      pages: producedEntries.map(e => ({ page: e.page, content: e.content, evidenceFiles: e.evidenceFiles })),
+      contexts,
+      plannedPages: pages,
+    });
+    for (const entry of producedEntries) {
+      if (crossReport.actions.length === 0) break;
+      entry.content = applyCrossPageActions(entry.content, entry.context, entry.page, crossReport.actions);
+    }
+
     // ---- 阶段二：待确认项人工裁决（生成后、写盘前，单次会话跨页去重） ----
     const confirmResult = await runConfirmPhase(
       options, producedEntries, repoHead, hashOf, confirmedEntries, staleConfirmed.length, this.verify,
@@ -273,6 +290,7 @@ export class WikiService {
     // ---- 阶段三：写盘（write-phase 模块负责闸门与 update 比较） ----
     const writeResult = writeProducedPages(
       wikiDir, mode, producedEntries, pages, plannedPaths, knownFiles, productionKnownFiles, this.verify,
+      crossLinks,
     );
 
     printBuildReport(
@@ -293,6 +311,7 @@ export class WikiService {
         valid: persistedConfirmed.size,
         staleRaws: staleConfirmed.map(e => e.raw),
       },
+      { issues: crossReport.issues, actions: crossReport.actions },
     );
     return writeResult.filenames;
   }

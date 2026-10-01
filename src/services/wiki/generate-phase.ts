@@ -128,6 +128,7 @@ export async function generateAllPages(
       source: produced.source,
       content: bodyContent,
       evidenceFiles: collectEvidenceFiles(pageContext, pageKnownFiles, rootDir),
+      context: pageContext,
     });
   }
   return producedEntries;

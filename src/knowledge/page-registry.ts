@@ -190,7 +190,17 @@ export function chapterPageName(chapter: string, page: string): string {
  * 页底 Related 区块（project-wiki「页底 Related 链接」要求）。
  * 只链接本次构建计划内的页面，保证零死链；数据全部来自 PAGE_REGISTRY。
  */
-export function buildRelatedSection(page: string, plannedPages: readonly string[]): string {
+/** 跨目录关联链接（crosspage 亲和度/互补页产物）：page → 链接目标 + 展示原因 */
+export interface CrossLink {
+  target: string;
+  reason: string;
+}
+
+export function buildRelatedSection(
+  page: string,
+  plannedPages: readonly string[],
+  crossLinks?: ReadonlyArray<CrossLink>,
+): string {
   const desc = findPageDescriptor(page);
   if (!desc || page === 'readme') return '';
 
@@ -222,6 +232,14 @@ export function buildRelatedSection(page: string, plannedPages: readonly string[
       return `[${label}](${label})`;
     });
     items.push(`- 同目录：${links.join(' · ')}`);
+  }
+  // 跨目录关联（共享文件/符号的相似页 + 互补职责页）；只链接计划内页面，保证零死链
+  if (crossLinks && crossLinks.length > 0) {
+    for (const link of crossLinks) {
+      if (link.target === page || !plannedPages.includes(link.target)) continue;
+      const label = `${link.target}.md`;
+      items.push(`- ${link.reason}：[${label}](../${pageRelPath(link.target)})`);
+    }
   }
   if (plannedPages.includes('readme')) {
     const readmeLink = desc.dir ? '../README.md' : 'README.md';

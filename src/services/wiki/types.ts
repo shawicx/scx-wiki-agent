@@ -17,4 +17,6 @@ export interface ProducedEntry {
   /** 正文（已过断言校验标注，待裁决改写后注入锚定块写盘） */
   content: string;
   evidenceFiles: string[];
+  /** 页面 context（跨页审校与降级动作用；只读引用，不参与序列化） */
+  context?: unknown;
 }

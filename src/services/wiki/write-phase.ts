@@ -7,6 +7,7 @@ import { stripPendingMarkers } from '../../knowledge/wiki-markers.js';
 import { validatePageContent } from '../../knowledge/wiki-quality-validator.js';
 import type { PageQualityReport } from '../../knowledge/wiki-quality-validator.js';
 import { buildRelatedSection, findPageDescriptor } from '../../knowledge/page-registry.js';
+import type { CrossLink } from '../../knowledge/page-registry.js';
 import type { VerificationHub } from './verification.js';
 import type { ProducedEntry, WrittenPage } from './types.js';
 
@@ -26,6 +27,7 @@ export function writeProducedPages(
   knownFiles: Set<string>,
   productionKnownFiles: Set<string>,
   verify: VerificationHub,
+  crossLinks?: ReadonlyMap<string, CrossLink[]>,
 ): WritePhaseResult {
   const filenames: string[] = [];
   const writtenPages: WrittenPage[] = [];
@@ -38,7 +40,7 @@ export function writeProducedPages(
     // pending marker 是确认会话期脚手架，绝不写盘（keep 项的可见「待确认」文本保留）
     const content =
       injectEvidenceBlock(stripPendingMarkers(entry.content), buildEvidenceBlock(entry.evidenceFiles)) +
-      buildRelatedSection(page, pages);
+      buildRelatedSection(page, pages, crossLinks?.get(page));
 
     // 写盘前质量闸门（LLM 与规则路径都过闸；注入式真锚点核验访问器）
     const report = validatePageContent(

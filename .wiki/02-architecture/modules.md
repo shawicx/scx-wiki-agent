@@ -15,20 +15,20 @@
 - src/knowledge/config-detector/detector.ts
 - src/knowledge/context/calls.ts
 - src/knowledge/context/data-flow.ts
-- src/knowledge/context/readme.ts
-- src/knowledge/dataflow/stage-builder.ts
-- src/knowledge/fallback/index.ts
+- src/knowledge/context/db-schema.ts
+- src/knowledge/context/frontend.ts
+- src/knowledge/context/workspaces.ts
 </details>
 
 ## knowledge
 
-文件数：91
+文件数：99
 
-语言：ts × 91
+语言：ts × 99
 
-关键导出：`buildByName`（src/knowledge/fallback/index.ts:49）, `buildStage`（src/knowledge/dataflow/stage-builder.ts:47）, `buildCallsContext`（src/knowledge/context/calls.ts:51）, `buildDataFlowContext`（src/knowledge/context/data-flow.ts:29）, `buildReadmeContext`（src/knowledge/context/readme.ts:11）
+关键导出：`buildByName`（src/knowledge/fallback/index.ts:55）, `buildCallsContext`（src/knowledge/context/calls.ts:51）, `buildDbSchemaContext`（src/knowledge/context/db-schema.ts:118）, `buildDataFlowContext`（src/knowledge/context/data-flow.ts:29）, `buildEdges`（src/knowledge/context/workspaces.ts:106）
 
-依赖：`shared`, `mcp`, `cli`
+依赖：`shared`, `cli`, `mcp`, `core`
 
 被依赖：`services`
 
@@ -42,16 +42,16 @@
 
 | 文件 | 关键符号 |
 | --- | --- |
-| `src/knowledge/fallback/index.ts` | `buildByName`（src/knowledge/fallback/index.ts:49） |
-| `src/knowledge/dataflow/stage-builder.ts` | `buildStage`（src/knowledge/dataflow/stage-builder.ts:47） |
+| `src/knowledge/fallback/index.ts` | `buildByName`（src/knowledge/fallback/index.ts:55） |
 | `src/knowledge/context/calls.ts` | `buildCallsContext`（src/knowledge/context/calls.ts:51） |
+| `src/knowledge/context/db-schema.ts` | `buildDbSchemaContext`（src/knowledge/context/db-schema.ts:118） |
 | `src/knowledge/context/data-flow.ts` | `buildDataFlowContext`（src/knowledge/context/data-flow.ts:29） |
-| `src/knowledge/context/readme.ts` | `buildReadmeContext`（src/knowledge/context/readme.ts:11） |
+| `src/knowledge/context/workspaces.ts` | `buildEdges`（src/knowledge/context/workspaces.ts:106） |
 | `src/knowledge/fallback/structure.ts` | `buildArchitecture`（src/knowledge/fallback/structure.ts:72） |
 | `src/knowledge/fallback/surface.ts` | `buildOnboarding`（src/knowledge/fallback/surface.ts:118） |
 | `src/knowledge/generator/structure.ts` | `buildGlossarySections`（src/knowledge/generator/structure.ts:229） |
-| `src/knowledge/page-registry.ts` | `buildRelatedSection`（src/knowledge/page-registry.ts:199） |
 | `src/knowledge/outline-planner.ts` | `buildInputs`（src/knowledge/outline-planner.ts:70） |
+| `src/knowledge/context/frontend.ts` | `buildComponentsContext`（src/knowledge/context/frontend.ts:67） |
 | `src/knowledge/claim-verifier.ts` | 未检出已索引符号 |
 | `src/knowledge/config-detector/detector.ts` | 未检出已索引符号 |
 
@@ -61,7 +61,7 @@
 
 语言：ts × 12
 
-依赖：`knowledge`, `core`
+依赖：`knowledge`
 
 被依赖：`cli`
 
@@ -95,7 +95,7 @@
 
 关键导出：`adaptTrace`（src/mcp/codebase-memory-client.ts:92）, `asObjects`（src/mcp/codebase-memory-client.ts:35）, `adaptArchitecture`（src/mcp/codebase-memory-client.ts:45）, `adaptSide`（src/mcp/codebase-memory-client.ts:93）
 
-被依赖：`knowledge`
+被依赖：`knowledge`, `cli`
 
 扇入/扇出：0 / 0
 
@@ -117,7 +117,7 @@
 
 依赖：`shared`
 
-被依赖：`services`, `cli`
+被依赖：`cli`, `knowledge`
 
 扇入/扇出：0 / 0
 
@@ -137,7 +137,7 @@
 
 语言：ts × 6
 
-依赖：`shared`, `services`, `core`
+依赖：`shared`, `services`, `core`, `mcp`
 
 被依赖：`knowledge`
 

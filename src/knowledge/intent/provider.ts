@@ -8,26 +8,18 @@ import { readFileSync } from 'fs';
 import type { ScanResult } from '../../core/scanner.js';
 import { isTestPath, languageDomainOf } from '../../shared/utils.js';
 import type {
-  FileChurnInfo,
-  FileGitInfo,
-  GitCommitRef,
-  GitRunner,
-  IntentEvidence,
-  ModuleGitInfo,
+  FileChurnInfo, FileGitInfo, GitCommitRef, GitRunner,
+  IntentEvidence, ModuleGitInfo,
 } from './shared.js';
 import {
-  dedupeByAnchor,
-  DOC_FILE_CAP,
-  DOC_TOTAL_CAP,
-  escapeRe,
-  GIT_FILE_CAP,
-  GIT_LOG_LIMIT,
-  MODULE_INTENT_CAP,
-  PAGE_INTENT_CAP,
-  REPO_LOG_LIMIT,
+  dedupeByAnchor, DOC_FILE_CAP, DOC_TOTAL_CAP, escapeRe, GIT_FILE_CAP,
+  GIT_LOG_LIMIT, MODULE_INTENT_CAP, PAGE_INTENT_CAP, REPO_LOG_LIMIT,
 } from './shared.js';
 import type { IntentCandidateStats } from './shared.js';
-import { commitAnchor, countFileChurn, defaultGitRunner, extractThemes, parseGitLog } from './git.js';
+import {
+  commitAnchor, countFileChurn, defaultGitRunner, extractThemes,
+  firstCommitOfFile, isShallowClone, parseGitLog, rootCommits,
+} from './git.js';
 import { loadIntentGitCache, saveIntentGitCache } from './git-cache.js';
 import { groupFilesByModule, mineModuleGit } from './modules.js';
 import { collectCommentEvidence } from './comments.js';
@@ -57,6 +49,8 @@ export class IntentEvidenceProvider {
   private churn: FileChurnInfo[] = [];
   private churnCountsCache: Map<string, number> | null = null;
   private candidateStatsValue: IntentCandidateStats | null = null;
+  private rootCommitRef: GitCommitRef | null = null;
+  private rootCommitQueried = false;
 
   constructor(private scanResult: ScanResult, opts?: IntentProviderOptions) {
     this.runGit = opts?.runGit ?? defaultGitRunner(scanResult.rootDir);
@@ -108,7 +102,8 @@ export class IntentEvidenceProvider {
 
   // --- git 证据 ---
 
-  /** 单文件 git 聚合（不可用/无提交返回 null；构建内缓存） */
+  /** 单文件 git 聚合（缓存）。窗口截断时先 --reverse 精查真首提交，失败则
+   *  first=null + firstTruncated（绝不把窗口最旧冒称「首次提交」）。 */
   gitForFile(rel: string): FileGitInfo | null {
     if (!this.gitAvailable) return null;
     if (this.gitByFile.has(rel)) return this.gitByFile.get(rel) ?? null;
@@ -118,16 +113,29 @@ export class IntentEvidenceProvider {
       return null;
     }
     const commits = parseGitLog(raw);
-    const info: FileGitInfo | null = commits.length === 0
-      ? null
-      : {
-          count: commits.length,
-          first: commits[commits.length - 1],
-          last: commits[0],
-          subjects: commits.map(c => c.subject),
-        };
+    const truncated = commits.length >= GIT_LOG_LIMIT;
+    // 窗口截断时窗口最旧≠真首次：--reverse 精查；失败则 first=null（不冒称首次）
+    const trueFirst = truncated ? firstCommitOfFile(this.runGit, rel) : null;
+    const info: FileGitInfo | null = commits.length === 0 ? null : {
+      count: commits.length,
+      first: truncated ? trueFirst : commits[commits.length - 1],
+      last: commits[0],
+      subjects: commits.map(c => c.subject),
+      ...(truncated && trueFirst === null ? { firstTruncated: true } : {}),
+    };
     this.gitByFile.set(rel, info);
     return info;
+  }
+
+  /** 真·仓库首提交（rev-list --max-parents=0；shallow 返回 null 走降级口径） */
+  rootCommit(): GitCommitRef | null {
+    if (this.rootCommitQueried) return this.rootCommitRef;
+    this.rootCommitQueried = true;
+    if (this.gitAvailable && !isShallowClone(this.runGit)) {
+      const roots = rootCommits(this.runGit);
+      this.rootCommitRef = roots !== null && roots.length > 0 ? roots[0] : null;
+    }
+    return this.rootCommitRef;
   }
 
   /** 仓库级近期提交（依赖引入决策的证据池） */
@@ -152,12 +160,7 @@ export class IntentEvidenceProvider {
       const re = new RegExp(`\\b${escapeRe(dep)}\\b`, 'i');
       const hits = subjects.filter(c => re.test(c.subject)).slice(0, 2);
       for (const c of hits) {
-        out.push({
-          kind: 'git-commit',
-          target: { symbol: dep },
-          text: `依赖 ${dep} 相关提交：${c.subject}`,
-          anchor: commitAnchor(c),
-        });
+        out.push({ kind: 'git-commit', target: { symbol: dep }, text: `依赖 ${dep} 相关提交：${c.subject}`, anchor: commitAnchor(c) });
       }
     }
     return out.slice(0, 8);
@@ -166,11 +169,8 @@ export class IntentEvidenceProvider {
   /** 高频变更信号（troubleshooting 维护风险 / decisions 热点） */
   churnEvidence(limit: number): IntentEvidence[] {
     return this.churn.slice(0, limit).map(c => ({
-      kind: 'git-churn' as const,
-      target: { file: c.file },
-      text: c.last
-        ? `高频变更：${c.commitCount} 次提交，最近「${c.last.subject}」`
-        : `高频变更：${c.commitCount} 次提交`,
+      kind: 'git-churn' as const, target: { file: c.file },
+      text: c.last ? `高频变更：${c.commitCount} 次提交，最近「${c.last.subject}」` : `高频变更：${c.commitCount} 次提交`,
       anchor: c.last ? commitAnchor(c.last) : c.file,
     }));
   }
@@ -271,11 +271,16 @@ export class IntentEvidenceProvider {
     const subjects = this.repoGitSubjects();
     const themes = extractThemes(subjects.map(c => c.subject), 4);
     if (themes.length > 0) {
-      items.push({ kind: 'git-theme', target: {}, text: `仓库高频提交主题：${themes.join('、')}`, anchor: subjects.length > 0 ? commitAnchor(subjects[0]) : 'git-log' });
+      // 口径诚实：themes 只基于近 REPO_LOG_LIMIT 条，不冒称全仓
+      items.push({ kind: 'git-theme', target: {}, text: `近 ${REPO_LOG_LIMIT} 条提交高频主题：${themes.join('、')}`, anchor: subjects.length > 0 ? commitAnchor(subjects[0]) : 'git-log' });
     }
-    const oldest = [...subjects].sort((a, b) => (a.date < b.date ? -1 : 1))[0];
-    if (oldest) {
-      items.push({ kind: 'git-commit', target: {}, text: `仓库首次提交：${oldest.subject}`, anchor: commitAnchor(oldest) });
+    const root = this.rootCommit();
+    if (root) {
+      items.push({ kind: 'git-commit', target: {}, text: `仓库首次提交：${root.subject}`, anchor: commitAnchor(root) });
+    } else {
+      // root 不可用（shallow / 无 git / rev-list 失败）：降级为窗口口径，不冒称首次
+      const oldest = [...subjects].sort((a, b) => (a.date < b.date ? -1 : 1))[0];
+      if (oldest) items.push({ kind: 'git-commit', target: {}, text: `近 ${REPO_LOG_LIMIT} 条提交中最旧提交：${oldest.subject}`, anchor: commitAnchor(oldest) });
     }
     return dedupeByAnchor(items).slice(0, PAGE_INTENT_CAP);
   }
@@ -342,10 +347,14 @@ export class IntentEvidenceProvider {
       this.gitByFile.set(file, info);
     }
     this.repoSubjects = cached.repoSubjects;
+    if (cached.rootCommit !== undefined) {
+      this.rootCommitRef = cached.rootCommit;
+      this.rootCommitQueried = true;
+    }
   }
 
   private saveGitCache(): void {
     if (!this.gitAvailable) return;
-    saveIntentGitCache(this.agentDir, this.runGit, this.gitByFile, this.repoGitSubjects());
+    saveIntentGitCache(this.agentDir, this.runGit, this.gitByFile, this.repoGitSubjects(), this.rootCommitQueried ? this.rootCommitRef : this.rootCommit());
   }
 }

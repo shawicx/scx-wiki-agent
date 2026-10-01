@@ -22,8 +22,8 @@
 | --- | --- | --- |
 | services | knowledge | 49 |
 | knowledge | shared | 46 |
-| knowledge | mcp | 3 |
 | knowledge | cli | 3 |
+| knowledge | mcp | 3 |
 | cli | services | 2 |
 
 ## 设计动机（意图证据）

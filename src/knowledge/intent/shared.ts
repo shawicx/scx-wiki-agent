@@ -36,6 +36,8 @@ export interface FileGitInfo {
   first: GitCommitRef | null;
   last: GitCommitRef | null;
   subjects: string[];
+  /** The log window may be truncated (count reaches the limit) and the precise first-commit lookup also failed: first has been set to null, do not treat the window's oldest as the "first commit" */
+  firstTruncated?: boolean;
 }
 
 /** 模块级演进聚合（decisions 页主体数据） */

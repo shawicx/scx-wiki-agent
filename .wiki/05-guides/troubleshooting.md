@@ -82,10 +82,10 @@
 | `DATA_FLOW_MAX_EXPRESSION` | `120` | src/knowledge/dataflow/shapes.ts:9 |
 | `DATA_FLOW_MAX_TYPE_DEFS` | `20` | src/knowledge/dataflow/type-defs.ts:11 |
 | `DATA_FLOW_MAX_TYPE_TEXT` | `1200` | src/knowledge/dataflow/type-defs.ts:13 |
-| `GIT_LOG_LIMIT` | `200` | src/knowledge/intent/shared.ts:63 |
-| `GIT_TIMEOUT_MS` | `15_000` | src/knowledge/intent/shared.ts:64 |
-| `REPO_LOG_LIMIT` | `400` | src/knowledge/intent/shared.ts:70 |
-| `CHURN_LOG_LIMIT` | `2000` | src/knowledge/intent/shared.ts:72 |
+| `GIT_LOG_LIMIT` | `200` | src/knowledge/intent/shared.ts:65 |
+| `GIT_TIMEOUT_MS` | `15_000` | src/knowledge/intent/shared.ts:66 |
+| `REPO_LOG_LIMIT` | `400` | src/knowledge/intent/shared.ts:72 |
+| `CHURN_LOG_LIMIT` | `2000` | src/knowledge/intent/shared.ts:74 |
 | `MAX_FILES_PER_MODULE` | `15` | src/knowledge/outline-planner.ts:38 |
 | `MAX_CANDIDATE_FILES` | `90` | src/knowledge/outline-planner.ts:40 |
 | `MAX_CHAPTERS` | `8` | src/knowledge/outline.ts:80 |
@@ -119,9 +119,9 @@
 | TODO: /FIXME 风险标记 + git 高频变更热点（作者自认的真实风险） | 风险标记 | src/knowledge/fallback/surface.ts | src/knowledge/fallback/surface.ts:230 |
 | TODO: /FIXME/HACK/... 标记（≤5 条/文件） | 风险标记 | src/knowledge/intent/comments.ts | src/knowledge/intent/comments.ts:70 |
 | TODO: /FIXME 真实风险信号）+ git 高频变更 | 风险标记 | src/knowledge/types/pages-meta.ts | src/knowledge/types/pages-meta.ts:49 |
-| 高频变更：10 次提交，最近「feat: 新增跨页审校 pass 实现重复检测、职责越界与术语依赖一致性校验并增强 Related 跨目录链接」 | 变更热点 | src/knowledge/page-registry.ts | commit:60f3618b (2026-10-01) |
+| 高频变更：11 次提交，最近「feat: 实现 Tier-2 动态 surface 页面并新增 library 项目类型探测」 | 变更热点 | src/knowledge/page-registry.ts | commit:e2826e7c (2026-10-01) |
 | 高频变更：9 次提交，最近「feat: 新增待确认项交互裁决与确认结果持久化」 | 变更热点 | src/cli/commands/build.ts | commit:19eb6f9f (2026-09-29) |
-| 高频变更：7 次提交，最近「feat: 分离生产与测试证据提升Wiki准确性」 | 变更热点 | src/core/scanner.ts | commit:284f1e41 (2026-09-30) |
+| 高频变更：8 次提交，最近「feat: 实现 Tier-2 动态 surface 页面并新增 library 项目类型探测」 | 变更热点 | src/core/scanner.ts | commit:e2826e7c (2026-10-01) |
 | 高频变更：6 次提交，最近「feat: 升级断言校验为证据分类核验（点链匹配/注释提及识别/同名歧义统计）并试点 topic 页证据引用」 | 变更热点 | src/mcp/codebase-memory-client.ts | commit:e1a30092 (2026-10-01) |
 | 高频变更：5 次提交，最近「fix: 待确认收集改为 marker 准入并豁免证据引用，消除 --confirm 伪待办」 | 变更热点 | src/knowledge/claim-verifier.ts | commit:2c369d53 (2026-10-01) |
 

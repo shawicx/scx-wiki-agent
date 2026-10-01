@@ -102,5 +102,5 @@ node dist/bin.js build
 - 同目录：[testing.md](testing.md) · [troubleshooting.md](troubleshooting.md)
 - 共享 13 个源文件、共享 13 个符号：[overview.md](../01-overview/overview.md)
 - 共享 3 个源文件、共享 3 个符号：[tech-stack.md](../01-overview/tech-stack.md)
-- 共享 3 个源文件、共享 3 个符号：[modules.md](../02-architecture/modules.md)
+- 共享 5 个符号：[environment.md](../01-overview/environment.md)
 - 总入口：[README](../README.md)

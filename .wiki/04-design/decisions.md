@@ -24,10 +24,10 @@
 
 | 模块 | 提交数 | 首次提交 | 最近提交 | 高频主题 |
 | --- | --- | --- | --- | --- |
-| knowledge | 47 | `76565d14`（2026-06-02）feat: 功能基本可用 | `2c369d53`（2026-10-01）fix: 待确认收集改为 marker 准入并豁免证据引用，消除 --confirm 伪待办 | 将超标源文件拆分至 ≤360 行并新增行数防回潮检查（×8）、修复 vue/tauri/bun 场景下的探测误报与图谱虚构边，补齐 llm 页面生成路径（×4）、分离生产与测试证据提升wiki准确性（×3） |
+| knowledge | 53 | `76565d14`（2026-06-02）feat: 功能基本可用 | `2c369d53`（2026-10-01）fix: 待确认收集改为 marker 准入并豁免证据引用，消除 --confirm 伪待办 | 将超标源文件拆分至 ≤360 行并新增行数防回潮检查（×8）、意图候选文件改为多信号重要性排序并优化回退路径中文可读性（×5）、修复 vue/tauri/bun 场景下的探测误报与图谱虚构边，补齐 llm 页面生成路径（×4） |
 | cli | 17 | `76565d14`（2026-06-02）feat: 功能基本可用 | `19eb6f9f`（2026-09-29）feat: 新增待确认项交互裁决与确认结果持久化 | 功能基本可用（×4）、修复 vue/tauri/bun 场景下的探测误报与图谱虚构边，补齐 llm 页面生成路径（×2）、支持全局配置（×2） |
-| core | 7 | `76565d14`（2026-06-02）feat: 功能基本可用 | `284f1e41`（2026-09-30）feat: 分离生产与测试证据提升Wiki准确性 | - |
-| shared | 6 | `76565d14`（2026-06-02）feat: 功能基本可用 | `19eb6f9f`（2026-09-29）feat: 新增待确认项交互裁决与确认结果持久化 | - |
+| core | 8 | `76565d14`（2026-06-02）feat: 功能基本可用 | `e2826e7c`（2026-10-01）feat: 实现 Tier-2 动态 surface 页面并新增 library 项目类型探测 | - |
+| shared | 7 | `76565d14`（2026-06-02）feat: 功能基本可用 | `dd5b0fa3`（2026-10-01）feat: 意图候选文件改为多信号重要性排序并优化回退路径中文可读性 | - |
 | mcp | 6 | `9ef4fd6f`（2026-06-24）refactor: 重构为基于 codebase-memory-mcp 知识图谱生成 wiki | `e1a30092`（2026-10-01）feat: 升级断言校验为证据分类核验（点链匹配/注释提及识别/同名歧义统计）并试点 topic 页证据引用 | - |
 
 ## 文档记录的决策
@@ -46,13 +46,13 @@
 
 | 文件 | 提交数 | 最近提交 |
 | --- | --- | --- |
-| src/knowledge/page-registry.ts | 10 | `60f3618b`（2026-10-01）feat: 新增跨页审校 pass 实现重复检测、职责越界与术语依赖一致性校验并增强 Related 跨目录链接 |
+| src/knowledge/page-registry.ts | 11 | `e2826e7c`（2026-10-01）feat: 实现 Tier-2 动态 surface 页面并新增 library 项目类型探测 |
 | src/cli/commands/build.ts | 9 | `19eb6f9f`（2026-09-29）feat: 新增待确认项交互裁决与确认结果持久化 |
-| src/core/scanner.ts | 7 | `284f1e41`（2026-09-30）feat: 分离生产与测试证据提升Wiki准确性 |
+| src/core/scanner.ts | 8 | `e2826e7c`（2026-10-01）feat: 实现 Tier-2 动态 surface 页面并新增 library 项目类型探测 |
 | src/mcp/codebase-memory-client.ts | 6 | `e1a30092`（2026-10-01）feat: 升级断言校验为证据分类核验（点链匹配/注释提及识别/同名歧义统计）并试点 topic 页证据引用 |
 | src/knowledge/claim-verifier.ts | 5 | `2c369d53`（2026-10-01）fix: 待确认收集改为 marker 准入并豁免证据引用，消除 --confirm 伪待办 |
 | src/knowledge/topic-discovery.ts | 5 | `284f1e41`（2026-09-30）feat: 分离生产与测试证据提升Wiki准确性 |
-| src/shared/utils.ts | 4 | `a0003124`（2026-09-26）fix: 修复 Vue/Tauri/bun 场景下的探测误报与图谱虚构边，补齐 LLM 页面生成路径 |
+| src/shared/utils.ts | 5 | `dd5b0fa3`（2026-10-01）feat: 意图候选文件改为多信号重要性排序并优化回退路径中文可读性 |
 | src/knowledge/wiki-output-sanitizer.ts | 3 | `24e6660d`（2026-09-21）feat: 引入证据锚定、薄证据补强与图表闸门等 wiki 质量机制并清理旧管线死代码 |
 | src/knowledge/wiki-continuation.ts | 3 | `b98ffb05`（2026-09-30）feat: 截断页尾部愈合并新增 incomplete-page 闸门规则，残页降级规则路径重建 |
 | src/knowledge/outline-planner.ts | 3 | `284f1e41`（2026-09-30）feat: 分离生产与测试证据提升Wiki准确性 |
@@ -69,6 +69,6 @@
 ## Related
 
 - 共享 4 个源文件：[calls.md](../07-reference/calls.md)
-- 共享 4 个源文件：[glossary.md](../07-reference/glossary.md)
 - 共享 1 个源文件、共享 2 个符号：[overview.md](../01-overview/overview.md)
+- 共享 3 个源文件：[architecture.md](../02-architecture/architecture.md)
 - 总入口：[README](../README.md)

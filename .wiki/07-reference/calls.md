@@ -25,16 +25,16 @@
 
 | 符号 | 文件 | 扇入 |
 | --- | --- | --- |
+| renderFactsAndUnknowns |  | 28 |
 | isTestPath |  | 26 |
-| renderFactsAndUnknowns |  | 20 |
-| generate | src/knowledge/generator/shared.ts | 14 |
+| generate | src/knowledge/generator/shared.ts | 22 |
 | languageDomainOf |  | 12 |
-| isProductionGraphFile |  | 9 |
-| intentTable | src/knowledge/fallback/shared.ts | 9 |
+| intentTable |  | 10 |
+| intentToPrompt |  | 9 |
+| hasIntent | src/knowledge/fallback/shared.ts | 9 |
 | isChapterPage |  | 9 |
 | isTopicPage |  | 9 |
-| matchPackageForFile |  | 9 |
-| hasIntent | src/knowledge/fallback/shared.ts | 8 |
+| isProductionGraphFile |  | 9 |
 
 ## registerBuildCommand
 
@@ -86,13 +86,13 @@
 | createProgram | registerInitCommand | src/cli/commands/init.ts:8 |
 | createProgram | registerScanCommand | src/cli/commands/scan.ts:4 |
 | createProgram | registerBuildCommand | src/cli/commands/build.ts:11 |
-| registerScanCommand | ScanService | src/services/scan-service.ts:3 |
 | registerInitCommand | globalConfigPath | src/shared/config.ts:34 |
 | registerBuildCommand | loadGlobalConfig | src/shared/config.ts:111 |
 | registerBuildCommand | globalConfigPath | src/shared/config.ts:34 |
 | registerBuildCommand | FileScanner | src/core/scanner.ts:43 |
 | registerBuildCommand | CodebaseMemoryClient | src/mcp/codebase-memory-client.ts:119 |
 | registerBuildCommand | WikiService | src/services/wiki/service.ts:62 |
+| registerScanCommand | ScanService | src/services/scan-service.ts:3 |
 | loadGlobalConfig | globalConfigPath | src/shared/config.ts:34 |
 | loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:63 |
 
@@ -114,10 +114,10 @@
 | verifyAndAnnotateClaims | fileStems | src/knowledge/claim-verifier.ts:201 |
 | verifyAndAnnotateClaims | locallyVerified | src/knowledge/claim-verifier.ts:126 |
 | verifyAndAnnotateClaims | pendingMarker | src/knowledge/wiki-markers.ts:33 |
-| pendingMarker | encodeIdentity | src/knowledge/wiki-markers.ts:27 |
 | extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:95 |
 | locallyVerified | chainCandidates | src/knowledge/claim-verifier.ts:106 |
 | locallyVerified | matchesQualified | src/knowledge/claim-verifier.ts:112 |
+| pendingMarker | encodeIdentity | src/knowledge/wiki-markers.ts:27 |
 
 ## 本页确定知道的事实
 

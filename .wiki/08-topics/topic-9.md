@@ -41,13 +41,14 @@
 | adaptArchitecture | lastSegment | src/mcp/codebase-memory-client.ts:42 |
 | adaptTrace | adaptSide | src/mcp/codebase-memory-client.ts:93 |
 | asObjects | tableToObjects | src/mcp/codebase-memory-client.ts:27 |
+| constructor | loadGitignore | src/core/scanner.ts:53 |
 | constructor | findBinary | src/mcp/codebase-memory-client.ts:293 |
 | constructor | toProjectName | src/mcp/codebase-memory-client.ts:289 |
-| constructor | loadGitignore | src/core/scanner.ts:53 |
 | createProgram | getCliVersion | src/cli/index.ts:9 |
 | createProgram | registerScanCommand | src/cli/commands/scan.ts:4 |
 | createProgram | registerBuildCommand | src/cli/commands/build.ts:11 |
-| detectProjectType | workspaceHasPackages | src/core/scanner.ts:245 |
+| detectProjectType | workspaceHasPackages | src/core/scanner.ts:265 |
+| detectProjectType | looksLikeLibrary | src/core/scanner.ts:252 |
 | detectTechStack | collectImportedPackages | src/core/scanner.ts:192 |
 | ensureIndexed | exec | src/mcp/codebase-memory-client.ts:250 |
 | exec | parseJsonOutput | src/mcp/codebase-memory-client.ts:273 |
@@ -60,9 +61,9 @@
 | 调用方 | 被调用方 | 调用次数 |
 | --- | --- | --- |
 | core | shared | 4 |
-| knowledge | mcp | 3 |
 | cli | shared | 3 |
 | knowledge | cli | 3 |
+| knowledge | mcp | 3 |
 | cli | services | 2 |
 
 ## 设计动机（意图证据）
@@ -78,7 +79,7 @@
 ## 本页确定知道的事实
 
 - 覆盖文件 5 个、关键符号 8 个（跨 2 个文件）
-- 协作调用边 17 条、跨模块边界 5 条
+- 协作调用边 18 条、跨模块边界 5 条
 - 设计动机证据 5 条（均带锚点）
 ## Related
 

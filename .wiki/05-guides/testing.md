@@ -19,7 +19,7 @@
 | 运行命令 | `vitest run` |
 | 测试目录 | tests, tests/cli, tests/core, tests/integration, tests/knowledge, tests/knowledge/config-detector, tests/knowledge/context, tests/knowledge/crosspage, tests/knowledge/dataflow, tests/knowledge/generator, tests/knowledge/intent, tests/knowledge/quality, tests/mcp, tests/services, tests/services/wiki, tests/shared |
 | 夹具目录 | tests/fixtures |
-| 文件规模 | 生产文件 126 / 测试文件 67 |
+| 文件规模 | 生产文件 134 / 测试文件 69 |
 
 ## 测试专用环境变量
 
@@ -52,7 +52,7 @@
 
 ## 本页确定知道的事实
 
-- 测试文件 67 个（生产文件 126 个，测试/生产比 0.53）
+- 测试文件 69 个（生产文件 134 个，测试/生产比 0.51）
 - 测试框架：vitest（配置 vitest.config.ts）
 - 运行命令：`vitest run`
 - 测试专用依赖 0 个、专用环境变量 9 个、专用常量 6 个

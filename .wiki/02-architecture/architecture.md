@@ -5,8 +5,8 @@
 
 - src/knowledge/context/calls.ts
 - src/knowledge/context/data-flow.ts
-- src/knowledge/context/readme.ts
-- src/knowledge/dataflow/stage-builder.ts
+- src/knowledge/context/db-schema.ts
+- src/knowledge/context/workspaces.ts
 - src/knowledge/fallback/index.ts
 - src/knowledge/fallback/structure.ts
 - src/mcp/codebase-memory-client.ts
@@ -24,13 +24,13 @@
 
 ## knowledge
 
-文件数：91
+文件数：99
 
-语言：ts × 91
+语言：ts × 99
 
 扇入/扇出：0 / 0
 
-关键导出：`buildByName`（src/knowledge/fallback/index.ts:49）, `buildStage`（src/knowledge/dataflow/stage-builder.ts:47）, `buildCallsContext`（src/knowledge/context/calls.ts:51）, `buildDataFlowContext`（src/knowledge/context/data-flow.ts:29）, `buildReadmeContext`（src/knowledge/context/readme.ts:11）
+关键导出：`buildByName`（src/knowledge/fallback/index.ts:55）, `buildCallsContext`（src/knowledge/context/calls.ts:51）, `buildDbSchemaContext`（src/knowledge/context/db-schema.ts:118）, `buildDataFlowContext`（src/knowledge/context/data-flow.ts:29）, `buildEdges`（src/knowledge/context/workspaces.ts:106）
 
 ## services
 
@@ -81,8 +81,8 @@
 | 正文断言校验（DeepWiki-Open 文本断言交叉核验的确定性实现）。 抽取 LLM 生成正文 inline 代码片段中的标识符声明，三级核验： 图谱符号全集（简名 + qualified_name 后缀匹配，点链全串优先、逐级回退到末段） → 扫描文件名干 → 词法证据探测（注入式回调，区分代码实据与纯注释/配置提及： 仅 definition/usage 算功能实据）。 查无实据或仅提及的声明改写为「待确认」标注（R5 风格，保留信息量）， 统计进构建报告（含仅提及与 | 文件头自述 | src/knowledge/claim-verifier.ts | src/knowledge/claim-verifier.ts:1 |
 | 页首证据锚定块（DeepWiki grounding 机制的确定性实现）。 从页面 Context 递归提取真实源文件路径（过滤到扫描清单），按分层相关性排序 （正文引用 > 符号定义 > 意图证据 > 入口/代表文件 > 配置/文档兜底）， 生成 <details> 折叠块注入页首。LLM 与规则路径统一由工具注入， LLM 无法伪造锚定块内容。 / | 文件头自述 | src/knowledge/wiki-evidence.ts | src/knowledge/wiki-evidence.ts:1 |
 | WikiBuilder — fluent utility for constructing markdown wiki pages. Each method returns `this` so calls can be chained. Call `build()` at the end to get the final markdown string. / | 文件头自述 | src/knowledge/wiki-builder.ts | src/knowledge/wiki-builder.ts:1 |
-| 页面所属层级。 - structure：结构层——描述"代码是什么"（架构、模块、API、调用关系等），可机器生成 - operations：运行规约层——描述"怎么跑/必须遵守什么"（环境、规约、测试、约束），需人工提炼 - surface：表层——描述"对外入口是什么"，按项目类型替换（CLI/后端/前端各不同） / | 文件头自述 | src/knowledge/page-registry.ts | src/knowledge/page-registry.ts:1 |
 | env 用途的确定性提取（R3：只采集可复核证据，不做语义推断）。 | 文件头自述 | src/knowledge/config-detector/env-purpose.ts | src/knowledge/config-detector/env-purpose.ts:1 |
+| 页面所属层级。 - structure：结构层——描述"代码是什么"（架构、模块、API、调用关系等），可机器生成 - operations：运行规约层——描述"怎么跑/必须遵守什么"（环境、规约、测试、约束），需人工提炼 - surface：表层——描述"对外入口是什么"，按项目类型替换（CLI/后端/前端各不同） / | 文件头自述 | src/knowledge/page-registry.ts | src/knowledge/page-registry.ts:1 |
 | 签名与类型形状推断（自 data-flow-shape.ts 拆出；纯搬移，零逻辑变化）。 承载：文本级括号/字符串扫描工具、图谱签名解析、实参字面量保守推断、 返回类型归一与 void 解释、name@file 键与语言域判定。 / | 文件头自述 | src/knowledge/dataflow/shapes.ts | src/knowledge/dataflow/shapes.ts:1 |
 
 ## 设计依据：services
@@ -128,11 +128,11 @@
 
 | 包 | 层级 | 依据 |
 | --- | --- | --- |
-| cli | internal | fan-in=3, fan-out=6 |
+| cli | internal | fan-in=3, fan-out=7 |
 | core | internal | fan-in=2, fan-out=4 |
 | knowledge | internal | fan-in=49, fan-out=53 |
-| mcp | leaf | only inbound calls, no outbound |
-| services | internal | fan-in=2, fan-out=50 |
+| mcp | core | high fan-in (4 in, 0 out) |
+| services | internal | fan-in=2, fan-out=49 |
 | shared | core | high fan-in (53 in, 0 out) |
 
 ## 模块间调用边界
@@ -142,12 +142,13 @@
 | services | knowledge | 49 |
 | knowledge | shared | 46 |
 | core | shared | 4 |
-| knowledge | mcp | 3 |
 | cli | shared | 3 |
 | knowledge | cli | 3 |
+| knowledge | mcp | 3 |
 | cli | services | 2 |
-| services | core | 1 |
 | cli | core | 1 |
+| cli | mcp | 1 |
+| knowledge | core | 1 |
 
 ## 模块依赖
 
@@ -156,20 +157,21 @@
 | services | knowledge |
 | knowledge | shared |
 | core | shared |
-| knowledge | mcp |
 | cli | shared |
 | knowledge | cli |
+| knowledge | mcp |
 | cli | services |
-| services | core |
 | cli | core |
+| cli | mcp |
+| knowledge | core |
 
 ## 本页确定知道的事实
 
 - 生产模块 6 个（knowledge、services、mcp、core、cli、shared）
 - 其中 2 个模块检出图谱符号（类/函数/方法）
-- 模块间调用边界 9 条
+- 模块间调用边界 10 条
 - 分层记录 6 条
-- 模块依赖对 9 条（去重后，最多展示 20 条）
+- 模块依赖对 10 条（去重后，最多展示 20 条）
 
 ## 未知项
 

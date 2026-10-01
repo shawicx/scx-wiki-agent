@@ -80,3 +80,28 @@ export function countFileChurn(runGit: GitRunner): Map<string, number> | null {
   }
   return counts;
 }
+
+/** True root commit: rev-list --max-parents=0 (multiple roots in historical merge repos → sorted by date ascending).
+ *  fail-open: git failure / empty returns null; shallow clone truncation point is not the true first (caller detects and downgrades) */
+export function rootCommits(runGit: GitRunner): GitCommitRef[] | null {
+  const hashes = runGit(['rev-list', '--max-parents=0', 'HEAD']);
+  if (hashes === null) return null;
+  const list = hashes.split('\n').map(s => s.trim()).filter(Boolean).slice(0, 50);
+  if (list.length === 0) return null;
+  const raw = runGit(['show', '-s', '--format=%H%x09%as%x09%s', ...list]);
+  if (raw === null) return null;
+  return parseGitLog(raw).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+/** True first commit of a file (precise lookup for gitForFile truncated files): git log --reverse -n 1 */
+export function firstCommitOfFile(runGit: GitRunner, rel: string): GitCommitRef | null {
+  const raw = runGit(['log', '--reverse', '--format=%H%x09%as%x09%s', '-n', '1', '--', rel]);
+  if (raw === null) return null;
+  return parseGitLog(raw)[0] ?? null;
+}
+
+/** shallow clone detection (truncation points returned by rev-list are not the true root) */
+export function isShallowClone(runGit: GitRunner): boolean {
+  const out = runGit(['rev-parse', '--is-shallow-repository']);
+  return out !== null && out.trim() === 'true';
+}

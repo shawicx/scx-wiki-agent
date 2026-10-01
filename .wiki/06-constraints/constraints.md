@@ -9,6 +9,7 @@
 - src/knowledge/context/architecture.ts
 - src/knowledge/context/calls.ts
 - src/knowledge/context/data-flow.ts
+- src/knowledge/context/frontend.ts
 - src/knowledge/context/modules-api.ts
 - src/knowledge/crosspage/actions.ts
 - src/knowledge/dataflow/index.ts
@@ -17,7 +18,6 @@
 - src/knowledge/fallback/data-flow.ts
 - src/knowledge/fallback/index.ts
 - src/knowledge/fallback/meta-ops.ts
-- src/knowledge/fallback/meta.ts
 </details>
 
 项目边界与代价：性能预算、复杂度上限、已知限制。
@@ -47,10 +47,10 @@
 | `DATA_FLOW_MAX_EXPRESSION` | `120` | src/knowledge/dataflow/shapes.ts:9 |
 | `DATA_FLOW_MAX_TYPE_DEFS` | `20` | src/knowledge/dataflow/type-defs.ts:11 |
 | `DATA_FLOW_MAX_TYPE_TEXT` | `1200` | src/knowledge/dataflow/type-defs.ts:13 |
-| `GIT_LOG_LIMIT` | `200` | src/knowledge/intent/shared.ts:63 |
-| `GIT_TIMEOUT_MS` | `15_000` | src/knowledge/intent/shared.ts:64 |
-| `REPO_LOG_LIMIT` | `400` | src/knowledge/intent/shared.ts:70 |
-| `CHURN_LOG_LIMIT` | `2000` | src/knowledge/intent/shared.ts:72 |
+| `GIT_LOG_LIMIT` | `200` | src/knowledge/intent/shared.ts:65 |
+| `GIT_TIMEOUT_MS` | `15_000` | src/knowledge/intent/shared.ts:66 |
+| `REPO_LOG_LIMIT` | `400` | src/knowledge/intent/shared.ts:72 |
+| `CHURN_LOG_LIMIT` | `2000` | src/knowledge/intent/shared.ts:74 |
 | `MAX_FILES_PER_MODULE` | `15` | src/knowledge/outline-planner.ts:38 |
 | `MAX_CANDIDATE_FILES` | `90` | src/knowledge/outline-planner.ts:40 |
 | `MAX_CHAPTERS` | `8` | src/knowledge/outline.ts:80 |
@@ -96,7 +96,7 @@
 | 表达式截断长度 | 常量注释 | DATA_FLOW_MAX_EXPRESSION | src/knowledge/dataflow/shapes.ts:9 |
 | 类型定义条数上限 | 常量注释 | DATA_FLOW_MAX_TYPE_DEFS | src/knowledge/dataflow/type-defs.ts:11 |
 | 单条类型定义文本上限（字符） | 常量注释 | DATA_FLOW_MAX_TYPE_TEXT | src/knowledge/dataflow/type-defs.ts:13 |
-| 全仓 churn 排名用 log 上限（--name-only 批量一次；只取相对频次，无需全历史） | 常量注释 | CHURN_LOG_LIMIT | src/knowledge/intent/shared.ts:72 |
+| 全仓 churn 排名用 log 上限（--name-only 批量一次；只取相对频次，无需全历史） | 常量注释 | CHURN_LOG_LIMIT | src/knowledge/intent/shared.ts:74 |
 | 每模块候选文件上限（锚点候选池规模控制） | 常量注释 | MAX_FILES_PER_MODULE | src/knowledge/outline-planner.ts:38 |
 | 全局候选文件上限 | 常量注释 | MAX_CANDIDATE_FILES | src/knowledge/outline-planner.ts:40 |
 | 与主题页 MIN_TOPIC_FILES 对齐：防章节页天然薄证据 | 常量注释 | MIN_PAGE_FILES | src/knowledge/outline.ts:84 |
@@ -116,18 +116,18 @@
 | buildApi | src/knowledge/fallback/surface.ts | 6 | 0 |
 | buildApiContext | src/knowledge/context/modules-api.ts | 5 | 1 |
 | buildArchitecture | src/knowledge/fallback/structure.ts | 10 | 1 |
-| buildByName | src/knowledge/fallback/index.ts | 22 | 0 |
+| buildByName | src/knowledge/fallback/index.ts | 30 | 0 |
 | buildCallChainFromEdges | src/knowledge/context/data-flow.ts | 10 | 2 |
 | buildCalls | src/knowledge/fallback/reference.ts | 4 | 1 |
 | buildCallsContext | src/knowledge/context/calls.ts | 14 | 2 |
 | buildChapterPage | src/knowledge/fallback/topic.ts | 4 | 0 |
 | buildClasses | src/knowledge/fallback/reference.ts | 5 | 1 |
 | buildCli | src/knowledge/fallback/meta-ops.ts | 4 | 1 |
+| buildComponentsContext | src/knowledge/context/frontend.ts | 8 | 1 |
 | buildConstraints | src/knowledge/fallback/meta.ts | 4 | 0 |
 | buildConventions | src/knowledge/fallback/meta.ts | 4 | 1 |
 | buildDataFlow | src/knowledge/fallback/data-flow.ts | 5 | 1 |
 | buildDataFlowContext | src/knowledge/context/data-flow.ts | 11 | 2 |
-| buildDecisions | src/knowledge/fallback/meta-ops.ts | 4 | 0 |
 
 ## 本页确定知道的事实
 

@@ -7,6 +7,8 @@ import type { FileGitInfo, GitCommitRef, GitRunner } from './shared.js';
 export interface GitCacheData {
   gitByFile: Map<string, FileGitInfo>;
   repoSubjects: GitCommitRef[];
+  /** 真·root commit（rev-list --max-parents=0）；旧缓存无此字段 → undefined 触发一次查询并回写 */
+  rootCommit?: GitCommitRef | null;
 }
 
 /** 读取缓存；HEAD 不一致/不可读返回 null（fail-open，按无缓存继续） */
@@ -19,7 +21,7 @@ export function loadIntentGitCache(
     const path = join(agentDir, 'cache', 'intent.json');
     const raw = JSON.parse(readFileSync(path, 'utf-8')) as {
       version?: number; head?: string; git?: Record<string, FileGitInfo>;
-      repoSubjects?: GitCommitRef[];
+      repoSubjects?: GitCommitRef[]; rootCommit?: GitCommitRef | null;
     };
     if (raw.version !== 1 || typeof raw.head !== 'string') return null;
     const head = runGit(['rev-parse', 'HEAD']);
@@ -28,7 +30,7 @@ export function loadIntentGitCache(
     for (const [file, info] of Object.entries(raw.git ?? {})) {
       if (info && typeof info.count === 'number') gitByFile.set(file, info);
     }
-    return { gitByFile, repoSubjects: raw.repoSubjects ?? [] };
+    return { gitByFile, repoSubjects: raw.repoSubjects ?? [], rootCommit: raw.rootCommit };
   } catch {
     return null;
   }
@@ -40,6 +42,7 @@ export function saveIntentGitCache(
   runGit: GitRunner,
   gitByFile: ReadonlyMap<string, FileGitInfo | null>,
   repoSubjects: GitCommitRef[],
+  rootCommit?: GitCommitRef | null,
 ): void {
   if (!agentDir) return;
   try {
@@ -55,6 +58,7 @@ export function saveIntentGitCache(
       head: head.trim(),
       git,
       repoSubjects,
+      ...(rootCommit !== undefined ? { rootCommit } : {}),
     }), 'utf-8');
   } catch {
     // 写缓存失败不影响构建

@@ -85,7 +85,7 @@ describe('页面治理与主题/章节页', () => {
     const second = await service.buildWiki(wikiDir, { noLlm: true, mode: 'update' });
     expect(second).toEqual(first);
     expect(readFileSync(overviewPath, 'utf-8')).not.toBe('# tampered');
-    expect(readFileSync(overviewPath, 'utf-8')).toContain('# Project Overview');
+    expect(readFileSync(overviewPath, 'utf-8')).toContain('# 项目概览');
 
     // full 模式：所有页面无条件重写（文件仍正确）
     const third = await service.buildWiki(wikiDir, { noLlm: true, mode: 'full' });
@@ -132,7 +132,7 @@ describe('页面治理与主题/章节页', () => {
     // 只列扫描清单内的真实文件（overview ctx 的 entryFiles）
     expect(overview).toContain('- src/index.ts');
     // 注入位置：紧跟首个 # 标题之后（标题 + 空行 + 锚定块）
-    expect(overview.startsWith('# Project Overview\n\n<details>')).toBe(true);
+    expect(overview.startsWith('# 项目概览\n\n<details>')).toBe(true);
   });
 
   it('should generate locked topic pages, index them in README, and clean stale topic files', async () => {

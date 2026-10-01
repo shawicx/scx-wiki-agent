@@ -3,7 +3,7 @@
 import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 import type { GitCommitRef, GitRunner } from './shared.js';
-import { GIT_TIMEOUT_MS } from './shared.js';
+import { CHURN_LOG_LIMIT, GIT_TIMEOUT_MS } from './shared.js';
 
 /** git 子进程默认执行器（fail-open：无 git/超时/非仓库 → null） */
 export function defaultGitRunner(rootDir: string): GitRunner {
@@ -62,4 +62,21 @@ export function parseGitLog(raw: string): GitCommitRef[] {
     commits.push({ hash, date, subject: subject.slice(0, 120) });
   }
   return commits;
+}
+
+/**
+ * 全仓 churn 计数：一次 `git log --name-only --format=` 批量调用统计每文件提交次数。
+ * 比逐文件 log 便宜，且能给全部文件排序（不只截断后的 GIT_FILE_CAP 个）。
+ * fail-open：git 失败返回 null（调用方静默降级为空信号）。
+ */
+export function countFileChurn(runGit: GitRunner): Map<string, number> | null {
+  const raw = runGit(['log', '--no-merges', '--name-only', '--format=', '-n', `${CHURN_LOG_LIMIT}`]);
+  if (raw === null) return null;
+  const counts = new Map<string, number>();
+  for (const line of raw.split('\n')) {
+    const p = line.trim().replace(/\\/g, '/');
+    if (!p) continue;
+    counts.set(p, (counts.get(p) ?? 0) + 1);
+  }
+  return counts;
 }

@@ -1,76 +1,100 @@
-# Architecture
+# 架构
 
 <details>
 <summary>Relevant source files</summary>
 
-- src/cli/confirm-interaction.ts
-- src/core/scanner.ts
-- src/knowledge/confirmation.ts
-- src/knowledge/intent-evidence.ts
-- src/knowledge/outline.ts
-- src/knowledge/page-registry.ts
-- src/knowledge/topic-discovery.ts
-- src/knowledge/wiki-quality-validator.ts
+- src/knowledge/context/calls.ts
+- src/knowledge/context/data-flow.ts
+- src/knowledge/context/readme.ts
+- src/knowledge/dataflow/stage-builder.ts
+- src/knowledge/fallback/index.ts
+- src/knowledge/fallback/structure.ts
 - src/mcp/codebase-memory-client.ts
-- src/mcp/types.ts
-- src/services/scan-service.ts
-- src/services/wiki-service.ts
-- src/shared/config.ts
-- src/shared/utils.ts
+- src/cli/commands/build.ts
+- src/cli/commands/init.ts
+- src/cli/commands/scan.ts
+- src/cli/commands/types.ts
+- src/cli/confirm-interaction.ts
+- src/cli/index.ts
+- src/core/scanner.ts
+- src/core/types.ts
 </details>
 
-Module overview:
+模块概览：
 
 ## knowledge
 
-Key exports: `addBulletList`, `addCodeBlock`, `addNewline`, `addParagraph`, `addSection`
+文件数：91
+
+语言：ts × 91
+
+扇入/扇出：0 / 0
+
+关键导出：`buildByName`（src/knowledge/fallback/index.ts:49）, `buildStage`（src/knowledge/dataflow/stage-builder.ts:47）, `buildCallsContext`（src/knowledge/context/calls.ts:51）, `buildDataFlowContext`（src/knowledge/context/data-flow.ts:29）, `buildReadmeContext`（src/knowledge/context/readme.ts:11）
 
 ## services
 
-No top-level symbols detected
+文件数：12
+
+语言：ts × 12
+
+扇入/扇出：0 / 0
 
 ## mcp
 
-Key exports: `adaptArchitecture`, `adaptTrace`, `asObjects`
+文件数：2
+
+语言：ts × 2
+
+扇入/扇出：0 / 0
+
+关键导出：`adaptTrace`（src/mcp/codebase-memory-client.ts:92）, `asObjects`（src/mcp/codebase-memory-client.ts:35）, `adaptArchitecture`（src/mcp/codebase-memory-client.ts:45）, `adaptSide`（src/mcp/codebase-memory-client.ts:93）
 
 ## core
 
-No top-level symbols detected
+文件数：2
+
+语言：ts × 2
+
+扇入/扇出：0 / 0
 
 ## cli
 
-No top-level symbols detected
+文件数：6
 
-## fixtures
+语言：ts × 6
 
-No top-level symbols detected
+扇入/扇出：0 / 0
 
 ## shared
 
-No top-level symbols detected
+文件数：3
 
-## helpers
+语言：ts × 3
 
-No top-level symbols detected
+扇入/扇出：0 / 0
 
 ## 设计依据：knowledge
 
 | 证据 | 类型 | 目标 | 锚点 |
 | --- | --- | --- | --- |
-| 意图证据层（Intent Evidence）：为「为什么」类叙述提供确定性证据源。 图谱数据只回答「是什么」（谁调谁、复杂度、扇入），动机/设计依据/演进脉络 必须来自仓库中真实存在的意图载体。本模块以正则级提取（ADR-001 先例： 无 AST、无持久索引）采集四类证据，全部携带锚点，LLM 只负责综合引用： - 注释：文件头（模块自述）、符号定义行上方紧邻注释、TODO/FIXME/HACK/WHY 标记、限制常量的同行/上邻注释 - git 提交：单文件首末提交（诞生 | 文件头自述 | src/knowledge/intent-evidence.ts | src/knowledge/intent-evidence.ts:1 |
-| 章节树（outline）：仓库自适应文档结构的锁定数据契约与确定性校验器。 与 topics.json 的分工（共存，不迁移）： - topics 是无 LLM 的确定性保底（跨模块协作面），--no-llm 下仍可用； - outline 是 LLM 提议 / 手工编辑的增强层（章 > 页 两级树，深度由类型系统强制）。 校验哲学：坏 outline 降级不失败——无效页剔除 → 空章剔除 → 全空则整体不生效， 固定 PageRegistry 页面照常构建。所有剔除与告警 | 文件头自述 | src/knowledge/outline.ts | src/knowledge/outline.ts:1 |
-| 写盘前质量闸门（project-wiki 方法论「质量闸门」的代码化）。 规则与严重级： - empty-shell (error)：无正文空壳页。诚实标注"无数据"的页面（标题 + 一句说明）不算空壳，只有完全没有非标题正文时才拦截。 - secret (error)：疑似密钥/凭证值泄漏，拒绝写盘（LLM 路径降级规则生成）。 - dead-link (warn) ：markdown 相对导航链接指向本次不产出的页面。 - broken-anchor (warn) ：fi | 文件头自述 | src/knowledge/wiki-quality-validator.ts | src/knowledge/wiki-quality-validator.ts:1 |
+| 正文断言校验（DeepWiki-Open 文本断言交叉核验的确定性实现）。 抽取 LLM 生成正文 inline 代码片段中的标识符声明，三级核验： 图谱符号全集（简名 + qualified_name 后缀匹配，点链全串优先、逐级回退到末段） → 扫描文件名干 → 词法证据探测（注入式回调，区分代码实据与纯注释/配置提及： 仅 definition/usage 算功能实据）。 查无实据或仅提及的声明改写为「待确认」标注（R5 风格，保留信息量）， 统计进构建报告（含仅提及与 | 文件头自述 | src/knowledge/claim-verifier.ts | src/knowledge/claim-verifier.ts:1 |
+| 页首证据锚定块（DeepWiki grounding 机制的确定性实现）。 从页面 Context 递归提取真实源文件路径（过滤到扫描清单），按分层相关性排序 （正文引用 > 符号定义 > 意图证据 > 入口/代表文件 > 配置/文档兜底）， 生成 <details> 折叠块注入页首。LLM 与规则路径统一由工具注入， LLM 无法伪造锚定块内容。 / | 文件头自述 | src/knowledge/wiki-evidence.ts | src/knowledge/wiki-evidence.ts:1 |
+| WikiBuilder — fluent utility for constructing markdown wiki pages. Each method returns `this` so calls can be chained. Call `build()` at the end to get the final markdown string. / | 文件头自述 | src/knowledge/wiki-builder.ts | src/knowledge/wiki-builder.ts:1 |
 | 页面所属层级。 - structure：结构层——描述"代码是什么"（架构、模块、API、调用关系等），可机器生成 - operations：运行规约层——描述"怎么跑/必须遵守什么"（环境、规约、测试、约束），需人工提炼 - surface：表层——描述"对外入口是什么"，按项目类型替换（CLI/后端/前端各不同） / | 文件头自述 | src/knowledge/page-registry.ts | src/knowledge/page-registry.ts:1 |
-| 自适应主题页：确定性主题发现（DeepWiki 动态大纲的 CLI 化）。 发现规则全确定性（无 LLM 参与）： - clusters 主路径：成员 ≥5 且 top_nodes 文件跨 ≥2 个 packages（跨模块协作面）， 按 members×cohesion 排序取前 4；单一 package 的职责由 modules 页覆盖，不立题。 - boundaries 兜底：无合格 cluster 时，取 call_count 最高的跨包边界对为题。 - 探测不出就一 | 文件头自述 | src/knowledge/topic-discovery.ts | src/knowledge/topic-discovery.ts:1 |
-| 待确认项交互裁决层：全部页面生成完成后、写盘前的批量人工确认（R5 闭环）。 待确认项四种形态（全 wiki 可 grep「待确认」定位）： - claim：断言校验标注的 `` `标识符`（待确认） `` ——确认=移除标记，可持久化免标 - cell：fallback 表格单元 ⚠️ 待确认——确认=填入用户输入的确认内容 - note：块级降级说明（unconfirmedNote）——确认=移除提示行（或替换为补充说明） - prose：LLM R5 自由文本待确认—— | 文件头自述 | src/knowledge/confirmation.ts | src/knowledge/confirmation.ts:1 |
+| env 用途的确定性提取（R3：只采集可复核证据，不做语义推断）。 | 文件头自述 | src/knowledge/config-detector/env-purpose.ts | src/knowledge/config-detector/env-purpose.ts:1 |
+| 签名与类型形状推断（自 data-flow-shape.ts 拆出；纯搬移，零逻辑变化）。 承载：文本级括号/字符串扫描工具、图谱签名解析、实参字面量保守推断、 返回类型归一与 void 解释、name@file 键与语言域判定。 / | 文件头自述 | src/knowledge/dataflow/shapes.ts | src/knowledge/dataflow/shapes.ts:1 |
 
 ## 设计依据：services
 
 | 证据 | 类型 | 目标 | 锚点 |
 | --- | --- | --- | --- |
-| 首次提交：feat: 功能基本可用 | 提交记录 | services | commit:76565d14 (2026-06-02) |
-| 行为承诺（tests/services/scan-service.test.ts）：ScanService；should return a complete scan result | 行为承诺 | src/services/scan-service.ts | tests/services/scan-service.test.ts:7 |
-| 行为承诺（tests/services/wiki-service.test.ts）：WikiService；should generate common pages；should write files to disk in numbered directories；should include scan result data in overview page；should append Related section linking planned sibling pages；should clean up legacy flat output when rebuilding；should wipe .wiki wholesale in full mode (tool-exclusive directory, no warnings)；update mode should silently remove foreign numbered dirs and unplanned files in owned dirs；should call ensureIndexed on the client；should generate all pages in noLlm mode | 行为承诺 | src/services/wiki-service.ts | tests/services/wiki-service.test.ts:45 |
+| WikiService：build 编排（两阶段构建：内存生成 → 裁决 → 闸门写盘）。 | 文件头自述 | src/services/wiki/service.ts | src/services/wiki/service.ts:1 |
+| 断言核验基础设施：图谱符号索引、源码行缓存、指纹条目、词法探测、outline 参考集。 | 文件头自述 | src/services/wiki/verification.ts | src/services/wiki/verification.ts:1 |
+| 两阶段构建·阶段一：全部页面内存生成 + 断言校验（不写盘）。 | 文件头自述 | src/services/wiki/generate-phase.ts | src/services/wiki/generate-phase.ts:1 |
+| 兼容壳：实现已拆分至 src/services/wiki/（service/cleanup/report/verification/阶段二·三）。 | 文件头自述 | src/services/wiki-service.ts | src/services/wiki-service.ts:1 |
+| .wiki 目录治理（update 模式路径；full 模式整目录重建跳过）。 | 文件头自述 | src/services/wiki/cleanup.ts | src/services/wiki/cleanup.ts:1 |
+| 两阶段构建·阶段三：剥离 marker + 注入锚定块 + 写盘前闸门 + 写盘（update 模式在终稿上比较）。 | 文件头自述 | src/services/wiki/write-phase.ts | src/services/wiki/write-phase.ts:1 |
 
 ## 设计依据：mcp
 
@@ -78,15 +102,12 @@ No top-level symbols detected
 | --- | --- | --- | --- |
 | codebase-memory-mcp index_repository 返回 | 文件头自述 | src/mcp/types.ts | src/mcp/types.ts:1 |
 | 首次提交：refactor: 重构为基于 codebase-memory-mcp 知识图谱生成 wiki | 提交记录 | mcp | commit:9ef4fd6f (2026-06-24) |
-| 高频提交主题：引入证据锚定、薄证据补强与图表闸门等 wiki 质量机制并清理旧管线死代码（×2）、重构为基于 codebase-memory-mcp 知识图谱生成 wiki（×2） | 高频主题 | mcp | commit:a430c66b (2026-09-23) |
-| 行为承诺（tests/mcp/codebase-memory-client.test.ts）：CodebaseMemoryClient；项目名转义：路径 → MCP 标识符；getArchitecture 解析 JSON 输出；跳过 stderr 日志行解析 JSON；二进制不存在时抛友好错误；queryGraph 透传 Cypher | 行为承诺 | src/mcp/codebase-memory-client.ts | tests/mcp/codebase-memory-client.test.ts:9 |
 
 ## 设计依据：core
 
 | 证据 | 类型 | 目标 | 锚点 |
 | --- | --- | --- | --- |
 | 首次提交：feat: 功能基本可用 | 提交记录 | core | commit:76565d14 (2026-06-02) |
-| 行为承诺（tests/core/scanner.test.ts）：FileScanner；should scan all source files；should not include node_modules files；should detect correct language for each file；should detect tech stack from package.json；should detect project type；仅含 allowBuilds 的 pnpm-workspace.yaml 不判为 monorepo（审批配置 ≠ workspace）；扫描 .vue/.rs/.css 文件；import 提取覆盖 Vue SFC 与 CSS @import（不再误报死依赖）；动态 import()、副作用导入（后跟 from 行）、node_modules 相对引用均可提取包名 | 行为承诺 | src/core/scanner.ts | tests/core/scanner.test.ts:9 |
 
 ## 设计依据：cli
 
@@ -94,8 +115,7 @@ No top-level symbols detected
 | --- | --- | --- | --- |
 | 待确认项交互会话（@clack/prompts）。 注入 WikiBuildOptions.confirmSession，在全部页面生成后、写盘前调用一次： 逐项展示「疑问 + 上下文 + 选项」，用户裁决确认或保持。 安全性：非 TTY（CI/管道/测试）直接返回空（全部保持待确认）； Ctrl-C 中断时保留已裁决项，其余按保持处理。 / | 文件头自述 | src/cli/confirm-interaction.ts | src/cli/confirm-interaction.ts:1 |
 | 首次提交：feat: 功能基本可用 | 提交记录 | cli | commit:76565d14 (2026-06-02) |
-| 高频提交主题：功能基本可用（×4）、修复 vue/tauri/bun 场景下的探测误报与图谱虚构边，补齐 llm 页面生成路径（×2）、支持全局配置（×2） | 高频主题 | cli | commit:b06d40e4 (2026-09-27) |
-| 行为承诺（tests/cli/confirm-interaction.test.ts）：runConfirmationSession；非 TTY 环境直接返回空（CI/管道安全），不启动会话；TTY：claim 项裁决 resolve → 返回决定；keep → 不产出决定；TTY：cell 项 resolve 后追问确认内容（必填校验走 clack validate）；取消中断：保留已裁决项并停止（其余按保持处理） | 行为承诺 | src/cli/confirm-interaction.ts | tests/cli/confirm-interaction.test.ts:40 |
+| 高频提交主题：功能基本可用（×4）、修复 vue/tauri/bun 场景下的探测误报与图谱虚构边，补齐 llm 页面生成路径（×2）、支持全局配置（×2） | 高频主题 | cli | commit:19eb6f9f (2026-09-29) |
 
 ## 设计依据：shared
 
@@ -103,51 +123,62 @@ No top-level symbols detected
 | --- | --- | --- | --- |
 | 全局配置：~/.scx/wiki-agent/config.yaml（YAML）。 优先级：CLI 参数 > 全局配置文件 > 内置默认。 api_key 支持 ${ENV_VAR} 环境变量引用（展开失败置空并告警，不把字面量发往 API）。 配置缺失/解析失败一律降级为「无配置」并告警，绝不阻断构建。 / | 文件头自述 | src/shared/config.ts | src/shared/config.ts:1 |
 | 首次提交：feat: 功能基本可用 | 提交记录 | shared | commit:76565d14 (2026-06-02) |
-| 行为承诺（tests/shared/config.test.ts）：parseGlobalConfig；解析 provider 与 build 字段，provider 缺省 base_url 按名称映射；build.confirm 解析：true 时携带，缺省不携带（CLI --confirm 的一次性开关互不影响）；显式 base_url 优先于 provider 缺省映射；api_key 支持 ${ENV_VAR} 引用；未定义变量置空并告警；provider 缺 name/model、坏 YAML、非对象内容均返回 null（不抛异常）；非法 build 字段值被忽略（类型/枚举校验）；loadGlobalConfig；文件不存在返回 null；存在则解析；模板本身可被解析；读取失败（目录路径）告警并返回 null | 行为承诺 | src/shared/config.ts | tests/shared/config.test.ts:7 |
-| 行为承诺（tests/shared/utils.test.ts）：utils；getFileLanguage detects TypeScript；relativePath returns relative path from root；isTestPath 识别测试目录/文件，不误伤生产路径；languageDomainOf 划分语言域：代码文件归 ts/rust，非代码文件为 null；matchPackageForFile 路径段精确归属，多段包名取最长（修复 src-tauri/src 与 src 撞名） | 行为承诺 | src/shared/utils.ts | tests/shared/utils.test.ts:4 |
 
-## Layers
+## 分层
 
-| Package | Layer | Reason |
+| 包 | 层级 | 依据 |
 | --- | --- | --- |
-| cli | internal | fan-in=3, fan-out=7 |
-| core | internal | fan-in=2, fan-out=3 |
-| helpers | leaf | only inbound calls, no outbound |
-| knowledge | internal | fan-in=40, fan-out=50 |
+| cli | internal | fan-in=3, fan-out=6 |
+| core | internal | fan-in=2, fan-out=4 |
+| knowledge | internal | fan-in=49, fan-out=53 |
 | mcp | leaf | only inbound calls, no outbound |
-| services | internal | fan-in=2, fan-out=41 |
-| shared | core | high fan-in (52 in, 0 out) |
+| services | internal | fan-in=2, fan-out=50 |
+| shared | core | high fan-in (53 in, 0 out) |
 
-## Module Boundaries
+## 模块间调用边界
 
-| From | To | Call Count |
+| 调用方 | 被调用方 | 调用次数 |
 | --- | --- | --- |
+| services | knowledge | 49 |
 | knowledge | shared | 46 |
-| services | knowledge | 40 |
+| core | shared | 4 |
+| knowledge | mcp | 3 |
 | cli | shared | 3 |
 | knowledge | cli | 3 |
-| core | shared | 3 |
 | cli | services | 2 |
-| knowledge | helpers | 1 |
 | services | core | 1 |
 | cli | core | 1 |
-| cli | mcp | 1 |
 
-## Module Dependencies
+## 模块依赖
 
-| From | To |
+| 依赖方 | 被依赖方 |
 | --- | --- |
-| knowledge | shared |
 | services | knowledge |
+| knowledge | shared |
+| core | shared |
+| knowledge | mcp |
 | cli | shared |
 | knowledge | cli |
-| core | shared |
 | cli | services |
-| knowledge | helpers |
 | services | core |
 | cli | core |
-| cli | mcp |
+
+## 本页确定知道的事实
+
+- 生产模块 6 个（knowledge、services、mcp、core、cli、shared）
+- 其中 2 个模块检出图谱符号（类/函数/方法）
+- 模块间调用边界 9 条
+- 分层记录 6 条
+- 模块依赖对 9 条（去重后，最多展示 20 条）
+
+## 未知项
+
+- 4 个模块未检出图谱符号（文件存在但无已索引的类/函数/方法）
 ## Related
 
-- 同目录：[data-flow.md](data-flow.md) · [modules.md](modules.md)
+- 同目录：[modules.md](modules.md)
+- 互补职责：[modules.md](../02-architecture/modules.md)
+- 共享 5 个源文件、共享 3 个符号：[topic:topic-9.md](../08-topics/topic-9.md)
+- 共享 7 个源文件：[calls.md](../07-reference/calls.md)
+- 共享 6 个源文件：[tech-stack.md](../01-overview/tech-stack.md)
 - 总入口：[README](../README.md)

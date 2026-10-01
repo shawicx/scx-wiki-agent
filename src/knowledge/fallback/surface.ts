@@ -7,11 +7,11 @@ import type {
   TroubleshootingContext,
   ReadmeContext,
 } from '../types.js';
-import { hasIntent, intentTable } from './shared.js';
+import { hasIntent, intentTable, summarizeDocstring, renderFactsAndUnknowns } from './shared.js';
 
 export function buildApi(ctx: ApiContext): string {
   const builder = new WikiBuilder()
-    .addTitle('API Reference');
+    .addTitle('API 参考');
 
   // Tauri IPC 面（desktop 项目 API 的主体，置前）
   if (ctx.ipc && (ctx.ipc.commands.length > 0 || ctx.ipc.events.length > 0)) {
@@ -40,8 +40,8 @@ export function buildApi(ctx: ApiContext): string {
 
   const commands = ctx.commands.filter((c, i, a) => a.findIndex(t => t.name === c.name) === i);
   if (commands.length > 0) {
-    builder.addSection('CLI Commands', '').addTable(
-      ['Command', 'File', 'Line'],
+    builder.addSection('CLI 命令', '').addTable(
+      ['命令', '文件', '行号'],
       commands.map(c => [c.name, c.filePath, String(c.startLine)]),
     );
   }
@@ -50,37 +50,66 @@ export function buildApi(ctx: ApiContext): string {
     .filter((f, i, a) => a.findIndex(t => t.name === f.name) === i)
     .slice(0, 20);
   if (functions.length > 0) {
-    builder.addSection('Exported Functions', '').addTable(
-      ['Function', 'Signature', 'File'],
+    builder.addSection('导出函数', '').addTable(
+      ['函数', '签名', '文件'],
       functions.map(f => [f.name, f.signature ?? '', f.filePath]),
     );
   }
 
   const hasIpc = !!ctx.ipc && (ctx.ipc.commands.length > 0 || ctx.ipc.events.length > 0);
   if (!hasIpc && commands.length === 0 && functions.length === 0) {
-    builder.addParagraph('No API surface detected.');
+    builder.addParagraph('未检出 API 面：无 IPC 命令、CLI 命令与导出函数证据。');
   }
+
+  renderFactsAndUnknowns(
+    builder,
+    [
+      ...(ctx.ipc ? [`Tauri IPC 命令 ${ctx.ipc.commands.length} 个（双侧 ${ctx.ipc.commands.filter(c => c.rustDef && c.frontendCalls.length > 0).length} / 仅前端 ${ctx.ipc.commands.filter(c => !c.rustDef).length}）`, `Tauri IPC 事件 ${ctx.ipc.events.length} 个`] : []),
+      `CLI 命令 ${commands.length} 个（去重后）`,
+      `导出函数 ${ctx.exportedFunctions.length} 个（展示前 ${functions.length} 个）`,
+    ],
+    [
+      ...(ctx.ipc && ctx.ipc.commands.some(c => c.rustDef === null)
+        ? [`${ctx.ipc.commands.filter(c => c.rustDef === null).length} 个命令未检出 Rust 侧定义`] : []),
+      ...(ctx.exportedFunctions.length > functions.length
+        ? [`${ctx.exportedFunctions.length - functions.length} 个导出函数超出展示上限未列出`] : []),
+    ],
+  );
 
   return builder.build();
 }
 
 export function buildGlossary(ctx: GlossaryContext): string {
-  const builder = new WikiBuilder().addTitle('Key Concepts');
+  const builder = new WikiBuilder()
+    .addTitle('核心概念');
 
   if (ctx.symbols.length === 0) {
-    builder.addParagraph('No symbols found.');
+    builder.addParagraph('未检出带 docstring 的核心符号（图谱 Class/Method/Function/Interface 节点为空或均无注释）。');
     return builder.build();
   }
 
   builder.addTable(
-    ['Name', 'Type', 'Signature', 'Docstring', 'File'],
+    ['名称', '类型', '签名', '说明', '源文件:行号'],
     ctx.symbols.map(s => [
       s.name,
       s.type,
       s.signature ?? '',
-      s.docstring ?? '',
+      summarizeDocstring(s.docstring),
       s.startLine && s.startLine > 0 ? `${s.filePath}:${s.startLine}` : s.filePath,
     ]),
+  );
+
+  const documented = ctx.symbols.filter(s => s.docstring && s.docstring.trim().length > 0).length;
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `核心符号 ${ctx.symbols.length} 个（图谱检出，按 类 → 方法 → 函数 → 接口 排序）`,
+      `带 docstring 说明的符号 ${documented} 个，说明列为第一段确定性摘要`,
+    ],
+    [
+      ...(ctx.symbols.length - documented > 0
+        ? [`${ctx.symbols.length - documented} 个符号无 docstring，说明列以签名与源文件锚点为准`] : []),
+    ],
   );
 
   return builder.build();
@@ -88,27 +117,27 @@ export function buildGlossary(ctx: GlossaryContext): string {
 
 export function buildOnboarding(ctx: OnboardingContext): string {
   const builder = new WikiBuilder()
-    .addTitle('Getting Started');
+    .addTitle('快速上手');
 
   const prereqs: string[] = [];
   if (ctx.nodeVersion) prereqs.push(`- Node.js ${ctx.nodeVersion}`);
   if (ctx.hasTypeScript) prereqs.push(`- TypeScript`);
   if (ctx.packageManager !== 'npm') prereqs.push(`- ${ctx.packageManager}`);
   if (prereqs.length > 0) {
-    builder.addSection('Prerequisites', prereqs.join('\n'));
+    builder.addSection('环境要求', prereqs.join('\n'));
   }
 
-  builder.addSection('Installation', `\`\`\`bash\n# Install dependencies\n${ctx.packageManager} install\n\`\`\``);
+  builder.addSection('安装', `\`\`\`bash\n# 安装依赖\n${ctx.packageManager} install\n\`\`\``);
 
   // 首次运行最小示例（可复制执行）
   if (ctx.firstRunExample) {
-    builder.addSection('First Run (最小示例)', '复制执行以下命令验证环境是否就绪');
+    builder.addSection('首次运行（最小示例）', '复制执行以下命令验证环境是否就绪');
     builder.addCodeBlock('bash', ctx.firstRunExample);
   }
 
   // 可用脚本命令
   if (ctx.scripts && Object.keys(ctx.scripts).length > 0) {
-    builder.addSection('Available Scripts', '');
+    builder.addSection('可用脚本', '');
     builder.addTable(
       ['命令', '脚本'],
       Object.entries(ctx.scripts).map(([k, v]) => [`\`${k}\``, `\`${v}\``]),
@@ -116,38 +145,52 @@ export function buildOnboarding(ctx: OnboardingContext): string {
   }
 
   if (ctx.cliCommands.length > 0) {
-    builder.addSection('CLI Commands', '').addTable(
-      ['Command', 'Description'],
+    builder.addSection('CLI 命令', '').addTable(
+      ['命令', '说明'],
       ctx.cliCommands.map(c => [c.name, c.description]),
     );
   }
 
   if (ctx.entryFiles.length > 0) {
-    builder.addSection('Entry Points', ctx.entryFiles.map(f => `- \`${f.path}\``).join('\n'));
+    builder.addSection('入口文件', ctx.entryFiles.map(f => `- \`${f.path}\``).join('\n'));
   }
 
   if (ctx.sourceDirs.length > 0) {
-    builder.addSection('Project Structure', ctx.sourceDirs.map(d => `- ${d}/`).join('\n'));
+    builder.addSection('项目结构', ctx.sourceDirs.map(d => `- ${d}/`).join('\n'));
   }
 
   if (ctx.envVars && ctx.envVars.length > 0) {
-    builder.addSection('Environment Variables', 'Production source references only');
+    builder.addSection('环境变量', '仅统计生产源码引用');
     builder.addTable(
-      ['Variable', 'Sensitive', 'Production references'],
+      ['变量名', '敏感', '用途', '生产引用'],
       ctx.envVars.map(v => [
         v.name,
-        v.sensitive ? '⚠️ Yes' : 'No',
+        v.sensitive ? '⚠️ 是' : '否',
+        v.purpose ?? '见生产引用',
         v.filePaths.join('<br>') || '-',
       ]),
     );
   }
+
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `入口文件 ${ctx.entryFiles.length} 个、源码目录 ${ctx.sourceDirs.length} 个`,
+      `可用脚本 ${ctx.scripts ? Object.keys(ctx.scripts).length : 0} 条、CLI 命令 ${ctx.cliCommands.length} 个`,
+      ...(ctx.envVars ? [`生产环境变量 ${ctx.envVars.length} 个（敏感 ${ctx.envVars.filter(v => v.sensitive).length} 个）`] : []),
+    ],
+    [
+      ...(ctx.nodeVersion ? [] : ['未指定 Node.js 版本要求（.nvmrc / engines.node 均未检出）']),
+      ...(!ctx.firstRunExample ? ['未推导出首次运行最小示例（无构建脚本与 CLI 入口）'] : []),
+    ],
+  );
 
   return builder.build();
 }
 
 export function buildTroubleshooting(ctx: TroubleshootingContext): string {
   const builder = new WikiBuilder()
-    .addTitle('Troubleshooting');
+    .addTitle('故障排查');
 
   builder.addParagraph(
     unconfirmedNote('本页为规则模板生成，仅基于项目类型/技术栈/运行态探测，未采集项目真实错误日志与告警，具体条目'),
@@ -169,8 +212,8 @@ export function buildTroubleshooting(ctx: TroubleshootingContext): string {
     builder.addSection('排障起点（入口文件）', ctx.entryFiles.map(f => `- \`${f}\``).join('\n'));
   }
 
-  builder.addSection('Build Issues', 'If the build fails, check that all dependencies are installed.');
-  builder.addSection('Runtime Issues', 'Common runtime issues and their solutions.');
+  builder.addSection('构建问题', '构建失败时，优先确认依赖已完整安装（见快速上手页），再检查构建脚本的退出输出。');
+  builder.addSection('运行时问题', '运行时故障先核对运行环境速查中的命令与版本，再对照下方限制常量排查越界场景。');
 
   if (ctx.constants && ctx.constants.length > 0) {
     builder.addSection('限制常量（超界即故障的边界）', '');
@@ -193,19 +236,34 @@ export function buildTroubleshooting(ctx: TroubleshootingContext): string {
   if (ctx.envVars && ctx.envVars.length > 0) {
     builder.addSection('环境变量', '从生产源码 process.env 引用提取');
     builder.addTable(
-      ['变量名', '敏感', '生产引用'],
+      ['变量名', '敏感', '用途', '生产引用'],
       ctx.envVars.map(v => [
         v.name,
         v.sensitive ? '⚠️ 是' : '否',
+        v.purpose ?? '见生产引用',
         v.filePaths.join('<br>') || '-',
       ]),
     );
   }
 
   if (ctx.techStack.length > 0) {
-    builder.addSection('Technology-Specific Issues',
-      `Key technologies: ${ctx.techStack.join(', ')}\n\nRefer to the official documentation for each technology for specific troubleshooting guides.`);
+    builder.addSection('技术栈相关问题',
+      `关键技术：${ctx.techStack.join('、')}。各技术的具体排障指南以其官方文档为准。`);
   }
+
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `排障入口文件 ${ctx.entryFiles?.length ?? 0} 个、速查表项 ${envRows.length} 条`,
+      ...(ctx.constants ? [`限制常量 ${ctx.constants.length} 个（超界即故障边界）`] : []),
+      ...(ctx.envVars ? [`生产环境变量 ${ctx.envVars.length} 个（敏感 ${ctx.envVars.filter(v => v.sensitive).length} 个）`] : []),
+      ...(hasIntent(ctx.intent) ? [`风险信号证据 ${ctx.intent!.length} 条（TODO/FIXME 标记与高频变更文件，均带锚点）`] : []),
+    ],
+    [
+      '未采集项目真实错误日志与告警（无数据源）',
+      ...(!hasIntent(ctx.intent) ? ['未检出源码 TODO/FIXME 标记与变更热点证据'] : []),
+    ],
+  );
 
   return builder.build();
 }
@@ -217,7 +275,7 @@ export function buildTroubleshooting(ctx: TroubleshootingContext): string {
  */
 export function buildReadme(ctx: ReadmeContext): string {
   const builder = new WikiBuilder()
-    .addTitle(ctx.projectName || 'Project Wiki');
+    .addTitle(ctx.projectName || '项目 Wiki');
 
   if (ctx.description) {
     builder.addParagraph(ctx.description);

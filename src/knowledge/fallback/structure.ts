@@ -4,14 +4,15 @@ import type {
   OverviewContext,
   ArchitectureContext,
   ModulesContext,
-  CallsContext,
-  ClassesContext,
 } from '../types.js';
-import { hasIntent, intentTable, symbolAnchorText, languageSummary } from './shared.js';
+import {
+  hasIntent, intentTable, symbolAnchorText, languageSummary,
+  summarizeDocstring, renderFactsAndUnknowns,
+} from './shared.js';
 
 export function buildOverview(ctx: OverviewContext): string {
   const builder = new WikiBuilder()
-    .addTitle('Project Overview');
+    .addTitle('项目概览');
 
   if (ctx.packageDescription) {
     builder.addParagraph(ctx.packageDescription);
@@ -20,24 +21,24 @@ export function buildOverview(ctx: OverviewContext): string {
   const productionCount = ctx.productionFileCount ?? ctx.fileCount;
   const testCount = ctx.testFileCount ?? 0;
   builder.addParagraph(
-    `A ${ctx.projectType} project with ${productionCount} production files and ${testCount} test files (total ${ctx.fileCount}).`,
+    `${ctx.projectType} 类型项目：生产文件 ${productionCount} 个、测试文件 ${testCount} 个（共 ${ctx.fileCount} 个）。`,
   );
 
   if (ctx.techStack.length > 0) {
-    builder.addSection('Tech Stack', ctx.techStack.map(t => `- ${t}`).join('\n'));
+    builder.addSection('技术栈', ctx.techStack.map(t => `- ${t}`).join('\n'));
   }
 
   if (ctx.entryFiles.length > 0) {
-    builder.addSection('Entry Files', ctx.entryFiles.map(f => `- \`${f.path}\``).join('\n'));
+    builder.addSection('入口文件', ctx.entryFiles.map(f => `- \`${f.path}\``).join('\n'));
   }
 
   if (ctx.sourceDirs.length > 0) {
-    builder.addSection('Source Directories', ctx.sourceDirs.map(d => `- ${d}`).join('\n'));
+    builder.addSection('源码目录', ctx.sourceDirs.map(d => `- ${d}`).join('\n'));
   }
 
   if (ctx.topSymbols.length > 0) {
-    builder.addSection('Hotspots (high fan-in)', '').addTable(
-      ['Symbol', 'Type', 'Complexity'],
+    builder.addSection('热点符号（高扇入）', '').addTable(
+      ['符号', '类型', '复杂度'],
       ctx.topSymbols.map(s => [s.name, s.type, String(s.complexity ?? '')]),
     );
   }
@@ -47,13 +48,31 @@ export function buildOverview(ctx: OverviewContext): string {
     builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.intent));
   }
 
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `生产文件 ${productionCount} 个、测试文件 ${testCount} 个、扫描文件共 ${ctx.fileCount} 个`,
+      `技术栈检出 ${ctx.techStack.length} 项${ctx.techStack.length > 0 ? `（${ctx.techStack.slice(0, 5).join('、')}${ctx.techStack.length > 5 ? ' 等' : ''}）` : ''}`,
+      `入口文件 ${ctx.entryFiles.length} 个、源码目录 ${ctx.sourceDirs.length} 个`,
+      `高扇入热点符号 ${ctx.topSymbols.length} 个`,
+      ...(hasIntent(ctx.intent)
+        ? [`意图证据 ${ctx.intent!.length} 条（源码注释 / git 提交 / 仓库文档，均带锚点）`]
+        : []),
+    ],
+    [
+      ...(ctx.packageDescription ? [] : ['package.json 未提供项目描述（packageDescription 为空）']),
+      ...(ctx.topSymbols.length === 0 ? ['未检出高扇入热点符号'] : []),
+      ...(!hasIntent(ctx.intent) ? ['未检出意图证据（源码无注释标记 / 无 git 历史 / 无文档小节可用）'] : []),
+    ],
+  );
+
   return builder.build();
 }
 
 export function buildArchitecture(ctx: ArchitectureContext): string {
   const builder = new WikiBuilder()
-    .addTitle('Architecture')
-    .addParagraph('Module overview:');
+    .addTitle('架构')
+    .addParagraph('模块概览：');
 
   for (const mod of ctx.modules) {
     const topExports = mod.symbols
@@ -61,14 +80,14 @@ export function buildArchitecture(ctx: ArchitectureContext): string {
       .slice(0, 5);
     const facts: string[] = [];
     if (mod.fileCount !== undefined || mod.files.length > 0) {
-      facts.push(`Files: ${mod.fileCount ?? mod.files.length}`);
+      facts.push(`文件数：${mod.fileCount ?? mod.files.length}`);
     }
     const languages = languageSummary(mod.languages);
-    if (languages) facts.push(`Languages: ${languages}`);
+    if (languages) facts.push(`语言：${languages}`);
     if (mod.fanIn !== undefined || mod.fanOut !== undefined) {
-      facts.push(`Fan-in/out: ${mod.fanIn ?? 0} / ${mod.fanOut ?? 0}`);
+      facts.push(`扇入/扇出：${mod.fanIn ?? 0} / ${mod.fanOut ?? 0}`);
     }
-    if (topExports.length > 0) facts.push(`Key exports: ${topExports.map(symbolAnchorText).join(', ')}`);
+    if (topExports.length > 0) facts.push(`关键导出：${topExports.map(symbolAnchorText).join(', ')}`);
     builder.addSection(mod.name, facts.join('\n\n'));
   }
 
@@ -81,16 +100,16 @@ export function buildArchitecture(ctx: ArchitectureContext): string {
 
   // 分层信息（来自 MCP get_architecture，消费侧过滤后）
   if (ctx.layers && ctx.layers.length > 0) {
-    builder.addSection('Layers', '').addTable(
-      ['Package', 'Layer', 'Reason'],
+    builder.addSection('分层', '').addTable(
+      ['包', '层级', '依据'],
       ctx.layers.map(l => [l.name, l.layer, l.reason]),
     );
   }
 
   // 模块间调用边界（来自 MCP get_architecture）
   if (ctx.boundaries && ctx.boundaries.length > 0) {
-    builder.addSection('Module Boundaries', '').addTable(
-      ['From', 'To', 'Call Count'],
+    builder.addSection('模块间调用边界', '').addTable(
+      ['调用方', '被调用方', '调用次数'],
       ctx.boundaries.map(b => [b.from, b.to, String(b.callCount)]),
     );
   }
@@ -100,18 +119,40 @@ export function buildArchitecture(ctx: ArchitectureContext): string {
     .slice(0, 20);
 
   if (uniqueRelations.length > 0) {
-    builder.addSection('Module Dependencies', '').addTable(
-      ['From', 'To'],
+    builder.addSection('模块依赖', '').addTable(
+      ['依赖方', '被依赖方'],
       uniqueRelations.map(r => [r.source, r.target]),
     );
   }
+
+  const moduleNames = ctx.modules.map(m => m.name);
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `生产模块 ${ctx.modules.length} 个（${moduleNames.slice(0, 8).join('、')}${moduleNames.length > 8 ? ' 等' : ''}）`,
+      ...(() => {
+        const withExports = ctx.modules.filter(m => m.symbols.length > 0).length;
+        return [`其中 ${withExports} 个模块检出图谱符号（类/函数/方法）`];
+      })(),
+      ...(ctx.boundaries ? [`模块间调用边界 ${ctx.boundaries.length} 条`] : []),
+      ...(ctx.layers ? [`分层记录 ${ctx.layers.length} 条`] : []),
+      `模块依赖对 ${uniqueRelations.length} 条（去重后，最多展示 20 条）`,
+    ],
+    [
+      ...(ctx.modules.some(m => m.symbols.length === 0)
+        ? [`${ctx.modules.filter(m => m.symbols.length === 0).length} 个模块未检出图谱符号（文件存在但无已索引的类/函数/方法）`]
+        : []),
+      ...(!ctx.layers || ctx.layers.length === 0 ? ['图谱未提供分层（layers）数据'] : []),
+      ...(!ctx.boundaries || ctx.boundaries.length === 0 ? ['图谱未提供模块间调用边界数据'] : []),
+    ],
+  );
 
   return builder.build();
 }
 
 export function buildModules(ctx: ModulesContext): string {
   const builder = new WikiBuilder()
-    .addTitle('Modules');
+    .addTitle('模块');
 
   for (const mod of ctx.modules) {
     const topExports = mod.symbols
@@ -125,18 +166,23 @@ export function buildModules(ctx: ModulesContext): string {
 
     const parts: string[] = [];
     if (mod.fileCount !== undefined || mod.files.length > 0) {
-      parts.push(`Files: ${mod.fileCount ?? mod.files.length}`);
+      parts.push(`文件数：${mod.fileCount ?? mod.files.length}`);
     }
     const languages = languageSummary(mod.languages);
-    if (languages) parts.push(`Languages: ${languages}`);
-    if (topExports) parts.push(`Key exports: ${topExports}`);
-    if (dependsOn.length > 0) parts.push(`Depends on: ${dependsOn.map(d => `\`${d}\``).join(', ')}`);
-    if (usedBy.length > 0) parts.push(`Used by: ${usedBy.map(u => `\`${u}\``).join(', ')}`);
+    if (languages) parts.push(`语言：${languages}`);
+    if (topExports) parts.push(`关键导出：${topExports}`);
+    if (dependsOn.length > 0) parts.push(`依赖：${dependsOn.map(d => `\`${d}\``).join(', ')}`);
+    if (usedBy.length > 0) parts.push(`被依赖：${usedBy.map(u => `\`${u}\``).join(', ')}`);
     if (mod.fanIn !== undefined || mod.fanOut !== undefined) {
-      parts.push(`Fan-in/out: ${mod.fanIn ?? 0} / ${mod.fanOut ?? 0}`);
+      parts.push(`扇入/扇出：${mod.fanIn ?? 0} / ${mod.fanOut ?? 0}`);
     }
 
-    builder.addSection(mod.name, parts.length > 0 ? parts.join('\n\n') : 'No details available.');
+    builder.addSection(
+      mod.name,
+      parts.length > 0
+        ? parts.join('\n\n')
+        : `该模块仅有图谱边界记录：未检出文件清单、符号与依赖证据（扇入/扇出 ${mod.fanIn ?? 0} / ${mod.fanOut ?? 0}）。`,
+    );
 
     if (hasIntent(mod.intent)) {
       builder.addSubSection('设计依据（意图证据）', '');
@@ -144,12 +190,12 @@ export function buildModules(ctx: ModulesContext): string {
     }
 
     if (mod.fileSymbols.length > 0) {
-      builder.addSubSection('File Structure', '');
+      builder.addSubSection('文件结构', '');
       builder.addTable(
-        ['File', 'Key Symbols'],
+        ['文件', '关键符号'],
         mod.fileSymbols.map(fs => [
           `\`${fs.file}\``,
-          fs.symbols.slice(0, 5).map(symbolAnchorText).join(', ') || '-',
+          fs.symbols.slice(0, 5).map(symbolAnchorText).join(', ') || '未检出已索引符号',
         ]),
       );
     }
@@ -167,110 +213,23 @@ export function buildModules(ctx: ModulesContext): string {
     );
   }
 
-  return builder.build();
-}
-
-/**
- * calls.md：调用边表（R2 边表优于时序图）。
- * 纯规则生成，不使用 sequenceDiagram。
- */
-export function buildCalls(ctx: CallsContext): string {
-  const builder = new WikiBuilder()
-    .addTitle('Calls')
-    .addParagraph('调用关系边表（按入口/热点分组）。每条边可被 trace_path / CALLS 查询复现。');
-
-  const calleeLabel = (e: { callee: string; calleeParent?: string | null }) =>
-    e.calleeParent ? `${e.calleeParent}.${e.callee}` : e.callee;
-
-  if (ctx.groups.length === 0 && ctx.fanIn.length === 0 && !ctx.ipc) {
-    builder.addParagraph('No call edges traced.');
-    return builder.build();
-  }
-
-  // Tauri IPC：真实跨语言执行边（前端 invoke → Rust 命令），置前
-  if (ctx.ipc && ctx.ipc.commands.length > 0) {
-    builder.addSection(
-      'Tauri IPC 调用边（跨语言）',
-      '前端 invoke ↔ Rust #[tauri::command] 对表（正则扫描；图谱 CALLS 边不覆盖跨语言边界，invoke(变量) 动态命令名不在内）',
-    ).addTable(
-      ['命令', '前端调用点', 'Rust 定义'],
-      ctx.ipc.commands.slice(0, 40).map(c => [
-        `\`${c.name}\``,
-        c.frontendCalls.slice(0, 3).map(r => `${r.file}:${r.line}`).join('<br>') || '-',
-        c.rustDef ? `${c.rustDef.file}:${c.rustDef.line}` : '-',
-      ]),
-    );
-  }
-
-  // 扇入表（被调用最多的符号）
-  if (ctx.fanIn.length > 0) {
-    builder.addSection('Fan-in（被调用次数）', '');
-    builder.addTable(
-      ['符号', '文件', '扇入'],
-      ctx.fanIn.map(f => [f.symbol, f.file, String(f.inDegree)]),
-    );
-  }
-
-  // 按入口分组的调用边表（hotspot 组诚实标注为热点锚定，非应用入口）
-  for (const group of ctx.groups) {
-    const subtitle = group.kind === 'hotspot'
-      ? `高扇入热点锚定（非应用入口）：${group.entryFile}`
-      : `入口文件：${group.entryFile}`;
-    builder.addSection(group.entry, subtitle);
-    builder.addTable(
-      ['调用方', '被调用方', '源文件:行号'],
-      group.edges.map(e => [
-        e.caller,
-        calleeLabel(e),
-        e.calleeLine > 0 ? `${e.calleeFile}:${e.calleeLine}` : e.calleeFile,
-      ]),
-    );
-  }
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `详述模块 ${ctx.modules.length} 个${ctx.otherModules ? `，聚合概要模块 ${ctx.otherModules.length} 个` : ''}`,
+      `检出依赖关系的模块 ${ctx.modules.filter(m => m.outgoingRelations.length > 0 || m.incomingRelations.length > 0).length} 个`,
+      `检出意图证据（注释/提交/文档）的模块 ${ctx.modules.filter(m => hasIntent(m.intent)).length} 个`,
+    ],
+    [
+      ...(ctx.modules.filter(m => m.symbols.length === 0).length > 0
+        ? [`${ctx.modules.filter(m => m.symbols.length === 0).length} 个详述模块未检出图谱符号`]
+        : []),
+      ...(ctx.modules.filter(m => m.outgoingRelations.length === 0 && m.incomingRelations.length === 0).length > 0
+        ? [`${ctx.modules.filter(m => m.outgoingRelations.length === 0 && m.incomingRelations.length === 0).length} 个详述模块未检出模块间依赖证据`]
+        : []),
+    ],
+  );
 
   return builder.build();
 }
 
-/**
- * classes.md：类层次与多态（降级适配）。
- * MCP 无 INHERITS 边，只做"类清单 + 每类方法表"，诚实标注数据局限。
- */
-export function buildClasses(ctx: ClassesContext): string {
-  const builder = new WikiBuilder()
-    .addTitle('Classes');
-
-  if (ctx.classes.length === 0) {
-    builder.addParagraph('No classes found.');
-    return builder.build();
-  }
-
-  // 数据局限说明（R1 诚实标注）
-  if (!ctx.hasInheritance) {
-    builder.addParagraph(
-      unconfirmedNote('MCP 知识图谱未提供继承关系（INHERITS 边），本页只列出类清单与成员方法，不含继承树；多态方法的子类实现'),
-    );
-  }
-
-  for (const cls of ctx.classes) {
-    const header = `${cls.filePath}:${cls.startLine}`;
-    builder.addSection(cls.name, `源文件：\`${header}\`  限定名：\`${cls.qualifiedName}\``);
-
-    if (cls.parentClass) {
-      builder.addParagraph(`继承自：\`${cls.parentClass}\``);
-    }
-
-    if (cls.methods.length > 0) {
-      builder.addTable(
-        ['方法', '可见性', '签名', '说明', '源文件:行号'],
-        cls.methods.map(m => [
-          m.name,
-          m.visibility,
-          m.signature ? `\`${m.signature}\`` : '-',
-          m.docstring ?? '-',
-          m.startLine > 0 ? `${m.filePath}:${m.startLine}` : m.filePath,
-        ]),
-      );
-    }
-  }
-
-  return builder.build();
-}

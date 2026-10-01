@@ -58,7 +58,7 @@ describe('WikiFallbackBuilder 意图证据渲染', () => {
       }],
     };
     expect(builder.buildTopic(withIntent)).toContain('## 设计动机（意图证据）');
-    expect(builder.buildTopic(base)).not.toContain('设计动机');
+    expect(builder.buildTopic(base)).not.toContain('## 设计动机（意图证据）');
   });
 
   it('buildDecisions 渲染时间线/文档决策/依赖佐证/热点四节（commit 锚点保留）', () => {
@@ -99,6 +99,6 @@ describe('WikiFallbackBuilder 意图证据渲染', () => {
   it('buildDecisions 空 ctx 不产出空表（诚实空页）', () => {
     const out = builder.buildDecisions({ gitTimeline: [], docDecisions: [], hotFileChurn: [] });
     expect(out).not.toContain('## 演进时间线');
-    expect(out).toContain('# Design Decisions & Evolution');
+    expect(out).toContain('# 设计决策与演进');
   });
 });

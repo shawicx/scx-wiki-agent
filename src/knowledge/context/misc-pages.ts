@@ -1,4 +1,4 @@
-import { isTestPath } from '../../shared/utils.js';
+import { isTestPath, isMcpPlaceholder } from '../../shared/utils.js';
 import type {
   GlossaryContext,
   OnboardingContext,
@@ -48,6 +48,7 @@ export function buildGlossaryContext(deps: ContextDeps): GlossaryContext {
       complexity: row[4] as number | undefined,
     }))
     .filter(s => {
+      if (isMcpPlaceholder(s.name)) return false;
       if (seen.has(s.name)) return false;
       seen.add(s.name);
       return true;

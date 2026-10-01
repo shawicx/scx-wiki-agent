@@ -9,6 +9,7 @@ import { ConfigDetector } from '../config-detector.js';
 import { collectEvidenceFiles, toKnownRelativePath, EVIDENCE_MIN_FILES } from '../wiki-evidence.js';
 import { findSymbolDefinitions } from '../source-fallback.js';
 import { IntentEvidenceProvider } from '../intent-evidence.js';
+import { intentCandidateRanking } from './intent-ranking.js';
 import type { TopicDefinition } from '../topic-discovery.js';
 import type { OutlineChapter } from '../outline.js';
 import type { ModuleSummary, SupplementalSymbol, DepUsage } from '../types.js';
@@ -99,15 +100,15 @@ export function isProductionGraphFile(deps: ContextDeps, file: string): boolean 
     : !isTestPath(file);
 }
 
-/** 模块级意图证据预聚合（构建内幂等）：候选文件按体积降序作重要性代理，
+/** 模块级意图证据预聚合（构建内幂等）：候选文件按多信号重要性评分排序
+ *  （fan-in/入口/boundary/测试配对/docs 提及/churn，见 intent/ranking.ts），
  *  提供方内部截 GIT_FILE_CAP 控住子进程成本 */
 export function prepareIntentModules(deps: ContextDeps, pkgNames: string[]): void {
   if (!deps.intentProvider || deps.intentModulesReady) return;
   deps.intentModulesReady = true;
-  const candidates = [...deps.scanResult.productionFiles]
-    .sort((a, b) => b.size - a.size)
-    .map(f => f.relativePath);
-  deps.intentProvider.prepareModules(pkgNames, candidates);
+  const { ordered, stats } = intentCandidateRanking(deps, pkgNames);
+  deps.intentProvider.prepareModules(pkgNames, ordered);
+  deps.intentProvider.noteCandidateStats(stats);
 }
 
 /** 源文件文本缓存（I/O 扫描/类型定义摘录；不可读缓存为 null 不再重试） */

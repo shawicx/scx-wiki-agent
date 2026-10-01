@@ -1,4 +1,10 @@
-# Conventions
+# 规约
+
+<details>
+<summary>Relevant source files</summary>
+
+- src/shared/config.ts
+</details>
 
 ## 工具链检测
 
@@ -46,7 +52,21 @@ The core workflow is 3 commands:
 
 1. **Init** (`scx-wiki-agent init`) → idempotently creates `.wiki/` and `.scx-wiki-agent/cache/`
 2. **Scan** (`scx-wiki-agent scan`) → `FileScanner` walks the project (gitignore-aware), detects tech stack (dead-dependency filtered; import extractio
+
+## 本页确定知道的事实
+
+- lint 工具链：未检出
+- EditorConfig：未检出
+- AGENTS.md 存在，规约段落摘录前 5 段
+
+## 未知项
+
+- lint 规则清单未检出（配置文件缺失）
+- 无 .editorconfig，编辑器格式基线未约定
 ## Related
 
 - 同目录：[constraints.md](constraints.md)
+- 共享 2 个符号：[overview.md](../01-overview/overview.md)
+- 共享 1 个源文件、共享 1 个符号：[tech-stack.md](../01-overview/tech-stack.md)
+- 共享 2 个符号：[decisions.md](../04-design/decisions.md)
 - 总入口：[README](../README.md)

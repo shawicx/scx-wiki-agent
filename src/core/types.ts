@@ -8,6 +8,8 @@ export interface EnvVarEvidence {
   name: string;
   sensitive: boolean;
   filePaths: string[];
+  /** 确定性用途证据（引用点相邻注释 / 缺省值字面量 / .env.example 注释）；无证据时缺省 */
+  purpose?: string;
 }
 
 /** 源码中的限制常量证据 */

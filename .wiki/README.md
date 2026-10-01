@@ -11,7 +11,7 @@
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | 0.1.5 |
+| 版本 | 0.1.6 |
 | 许可证 | ISC |
 | 运行时 | ESM |
 
@@ -35,7 +35,6 @@
 | 文档 | 层级 | 回答的问题 |
 | --- | --- | --- |
 | [02-architecture/architecture.md](02-architecture/architecture.md) | structure | 分层结构、模块依赖、扇入扇出 |
-| [02-architecture/data-flow.md](02-architecture/data-flow.md) | structure | 数据形态与阶段转换（阶段表，非时序图） |
 | [02-architecture/modules.md](02-architecture/modules.md) | structure | 每个模块的文件、符号、职责 |
 
 ## 03-interface/

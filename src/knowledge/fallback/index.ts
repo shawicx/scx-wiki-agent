@@ -26,9 +26,8 @@ import {
   buildOverview,
   buildArchitecture,
   buildModules,
-  buildCalls,
-  buildClasses,
 } from './structure.js';
+import { buildCalls, buildClasses } from './reference.js';
 import {
   buildApi,
   buildGlossary,
@@ -41,10 +40,8 @@ import {
   buildTesting,
   buildConventions,
   buildConstraints,
-  buildDecisions,
-  buildCli,
-  buildTechStack,
 } from './meta.js';
+import { buildDecisions, buildCli, buildTechStack } from './meta-ops.js';
 import { buildTopic, buildChapterPage } from './topic.js';
 
 export class WikiFallbackBuilder {

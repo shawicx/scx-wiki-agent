@@ -103,7 +103,7 @@ describe('WikiFallbackBuilder.buildDataFlow（数据形态证据渲染）', () =
 
     // 阶段转换表：调用点（r.line）与 To 定义（callee start_line）分列
     expect(page).toContain('## 阶段转换');
-    expect(page).toContain('| From | To | 调用实参 | 调用点 | To 定义 |');
+    expect(page).toContain('| 从 | 到 | 调用实参 | 调用点 | 定义处 |');
     expect(page).toContain('src/index.ts:10');
     expect(page).toContain('src/config.ts:3');
 
@@ -138,7 +138,7 @@ describe('WikiFallbackBuilder.buildDataFlow（数据形态证据渲染）', () =
 
   it('证据局限如实转述覆盖率与低置信度边', () => {
     const page = new WikiFallbackBuilder().buildDataFlow(makeContext());
-    expect(page).toContain('## 证据局限');
+    expect(page).toContain('## 未知项');
     expect(page).toContain('1 个阶段未检出完整类型形态');
     expect(page).toContain('另有 3 条纯控制流边');
     expect(page).toContain('低置信度图谱边');

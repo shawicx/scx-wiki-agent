@@ -10,6 +10,7 @@ import {
   inline,
   shapesText,
   limitationNotes,
+  renderFactsAndUnknowns,
 } from './shared.js';
 
 /**
@@ -49,7 +50,7 @@ export function buildDataFlow(ctx: DataFlowContext): string {
   if (ctx.transitions.length > 0) {
     builder.addSection('阶段转换', '');
     builder.addTable(
-      ['From', 'To', '调用实参', '调用点', 'To 定义'],
+      ['从', '到', '调用实参', '调用点', '定义处'],
       ctx.transitions.map(t => [
         t.from,
         t.to,
@@ -87,9 +88,18 @@ export function buildDataFlow(ctx: DataFlowContext): string {
     }
   }
 
-  // 证据局限（诚实降级：只描述确定性事实，不编造）
-  builder.addSection('证据局限', '');
-  builder.addBulletList(limitationNotes(ctx));
+  // 本页确定知道的事实 + 未知项（证据局限平移并入，只描述确定性事实，不编造）
+  const c = ctx.shapeCoverage;
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `数据阶段 ${ctx.stages.length} 个（类型形态已知 ${c.typedStages} 个 / 未知 ${c.unknownStages} 个）`,
+      `带数据证据的调用转换 ${ctx.transitions.length} 条（数据承载 ${c.dataBearingTransitions} 条）`,
+      `I/O 边界事件 ${ctx.ioEvents.length} 个（读写文件/子进程/配置/env 等）`,
+      `本地类型定义 ${ctx.typeDefinitions.length} 个（interface/type/enum/class）`,
+    ],
+    limitationNotes(ctx),
+  );
 
   return builder.build();
 }

@@ -68,6 +68,17 @@ export const DOC_FILE_CAP = 12;
 export const DOC_TOTAL_CAP = 16;
 export const TITLES_PER_TEST_FILE = 10;
 export const REPO_LOG_LIMIT = 400;
+/** 全仓 churn 排名用 log 上限（--name-only 批量一次；只取相对频次，无需全历史） */
+export const CHURN_LOG_LIMIT = 2000;
+
+/** 意图候选文件统计（构建报告观测用：排序信号生效情况可回溯） */
+export interface IntentCandidateStats {
+  total: number;
+  /** 进入 git 挖掘的前 GIT_FILE_CAP 个文件 */
+  gitTop: string[];
+  gitTopEntryCount: number;
+  gitTopTestedCount: number;
+}
 
 export const WHY_MARKER_RE = /\b(TODO|FIXME|HACK|NOTE|WHY|SAFETY|PERF|GOTCHA|XXX)\b\s*[:：]?\s*(.*)/;
 

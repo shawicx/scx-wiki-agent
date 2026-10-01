@@ -34,9 +34,9 @@ describe('WikiFallbackBuilder architecture/modules production module rendering',
 
     const output = new WikiFallbackBuilder().buildArchitecture(ctx);
     expect(output).toContain('`WikiService`（src/services/wiki-service.ts:65）');
-    expect(output).toContain('Files: 4');
-    expect(output).toContain('Languages: ts × 4');
-    expect(output).toContain('Fan-in/out: 2 / 41');
+    expect(output).toContain('文件数：4');
+    expect(output).toContain('语言：ts × 4');
+    expect(output).toContain('扇入/扇出：2 / 41');
   });
 
   it('Modules without graph symbols still expose deterministic production module facts', () => {
@@ -60,11 +60,11 @@ describe('WikiFallbackBuilder architecture/modules production module rendering',
     };
 
     const output = new WikiFallbackBuilder().buildModules(ctx);
-    expect(output).toContain('Files: 3');
-    expect(output).toContain('Languages: ts × 2 / rust × 1');
-    expect(output).toContain('Depends on: `shared`');
-    expect(output).toContain('Used by: `services`');
-    expect(output).toContain('Fan-in/out: 2 / 3');
+    expect(output).toContain('文件数：3');
+    expect(output).toContain('语言：ts × 2 / rust × 1');
+    expect(output).toContain('依赖：`shared`');
+    expect(output).toContain('被依赖：`services`');
+    expect(output).toContain('扇入/扇出：2 / 3');
   });
 
   it('Modules aggregate fallback explains composite importance ranking', () => {
@@ -95,7 +95,7 @@ describe('WikiFallbackBuilder architecture/modules production module rendering',
     };
 
     const output = new WikiFallbackBuilder().buildEnvironment(ctx);
-    expect(output).toContain('| API_KEY | ⚠️ 是 | src/index.ts |');
+    expect(output).toContain('| API_KEY | ⚠️ 是 | 见生产引用 | src/index.ts |');
     expect(output).not.toContain('⚠️ 待确认');
   });
 

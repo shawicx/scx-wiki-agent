@@ -312,6 +312,7 @@ export class WikiService {
         staleRaws: staleConfirmed.map(e => e.raw),
       },
       { issues: crossReport.issues, actions: crossReport.actions },
+      intentProvider.candidateStats(),
     );
     return writeResult.filenames;
   }

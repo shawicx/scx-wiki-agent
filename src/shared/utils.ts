@@ -92,3 +92,9 @@ export function matchPackageForFile(filePath: string, packageNames: readonly str
   }
   return best;
 }
+
+/** MCP 上游会把「无数据」占位串（英文）当值写进图谱，消费侧统一识别后丢弃 */
+export function isMcpPlaceholder(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return /^no\s+[\w\s-]*?(?:detected|available|found|edges?\s+traced|symbols?)\s*$/i.test(text.trim());
+}

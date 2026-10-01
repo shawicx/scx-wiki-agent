@@ -3,6 +3,7 @@ import { join, relative, basename, dirname } from 'path';
 import { importedPackageName } from '../../shared/utils.js';
 import type { ConstantEvidence, EnvVarEvidence } from '../../core/types.js';
 import { detectEnvironment as detectEnvironmentImpl } from './package-manager.js';
+import { extractEnvPurposes } from './env-purpose.js';
 import type { EnvironmentInfo } from './package-manager.js';
 import { classifyFiles, scanAndClassifyFiles } from './source-classification.js';
 
@@ -71,7 +72,12 @@ export class ConfigDetector {
   }
 
   detectEnvironment(): EnvironmentInfo {
-    const envVars = this.extractEnvVars(this.getSourceFiles('production'));
+    // env 用途确定性提取（注释/缺省值/.env.example）：见 env-purpose.ts
+    const envVars = extractEnvPurposes(
+      this.rootDir,
+      this.getSourceFiles('all'),
+      this.extractEnvVars(this.getSourceFiles('production')),
+    );
     return detectEnvironmentImpl(this.rootDir, envVars);
   }
 

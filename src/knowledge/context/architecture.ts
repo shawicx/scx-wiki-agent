@@ -1,6 +1,6 @@
 import type { ArchitectureData } from '../../mcp/types.js';
 import type { RelationType } from '../../core/types.js';
-import { isTestPath, matchPackageForFile } from '../../shared/utils.js';
+import { isTestPath, matchPackageForFile, isMcpPlaceholder } from '../../shared/utils.js';
 import type { ArchitectureContext, ModuleSummary } from '../types.js';
 import {
   type ContextDeps,
@@ -65,7 +65,8 @@ export function moduleEvidence(deps: ContextDeps, pkgName: string, files: string
     const file = (row[5] as string) ?? '';
     if (!file || isTestPath(file) || !files.includes(file)) continue;
     const name = String(row[0] ?? '');
-    if (!name) continue;
+    // MCP 会把「No top-level symbols detected」等占位串当符号名写入图谱，消费侧丢弃
+    if (!name || isMcpPlaceholder(name)) continue;
     const startLine = Number(row[6] ?? 0) || undefined;
     const identity = `${name}@${file}:${startLine ?? 0}`;
     if (seen.has(identity)) continue;

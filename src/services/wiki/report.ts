@@ -4,6 +4,7 @@ import type { PageQualityReport } from '../../knowledge/wiki-quality-validator.j
 import type { ClaimStats } from '../../knowledge/claim-verifier.js';
 import type { OutlineReport } from '../../knowledge/outline.js';
 import type { CrossPageAction, CrossPageIssue } from '../../knowledge/crosspage/types.js';
+import type { IntentCandidateStats } from '../../knowledge/intent/shared.js';
 
 export type PageStatus = 'created' | 'updated' | 'unchanged';
 
@@ -37,6 +38,7 @@ export function printBuildReport(
   confirmSummary: ConfirmSummary | null,
   confirmedFingerprints?: { valid: number; staleRaws: string[] },
   crossPage?: { issues: CrossPageIssue[]; actions: CrossPageAction[] },
+  intentCandidates?: IntentCandidateStats | null,
 ): void {
   const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -207,6 +209,14 @@ export function printBuildReport(
     }
     const detail = Object.entries(totals).sort().map(([k, n]) => `${k} ${n}`).join(' / ');
     lines.push(`  意图证据：${intentCoverage.length} 页携带（${detail}）`);
+  }
+
+  // 意图候选排序观测（防「按体积截断挤掉小核心文件」回归：入口/被测占比可见）
+  if (intentCandidates && intentCandidates.gitTop.length > 0) {
+    lines.push(
+      `  意图候选：生产文件 ${intentCandidates.total} 个，git 挖掘 Top${intentCandidates.gitTop.length}`
+      + `（入口 ${intentCandidates.gitTopEntryCount}、被测 ${intentCandidates.gitTopTestedCount}；排序=fan-in/入口/boundary/测试/churn）`,
+    );
   }
 
   // 跨页审校（全局 pass：重复/越界/一致性 warn + 确定性降级动作）

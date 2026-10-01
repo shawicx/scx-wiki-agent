@@ -1,4 +1,4 @@
-# CLI
+# CLI 参考
 
 <details>
 <summary>Relevant source files</summary>
@@ -6,7 +6,6 @@
 - src/cli/commands/build.ts
 - src/cli/commands/init.ts
 - src/cli/commands/scan.ts
-- tests/knowledge/wiki-page-generator.test.ts
 </details>
 
 ## 命令
@@ -51,8 +50,20 @@
 | 码 | 上下文 | 源文件 |
 | --- | --- | --- |
 | 1 | `process.exit(1);` | src/cli/commands/build.ts |
-| 1 | `exitCodes: [{ code: 1, context: 'process.exit(1)', filePath: 'src/cli/build.ts' ` | tests/knowledge/wiki-page-generator.test.ts |
+
+## 本页确定知道的事实
+
+- CLI 命令 3 个（commander 注册提取，均带 file:line 锚点）
+- 命令参数共 14 个
+- 退出码 1 个（process.exit 调用点提取）
+
+## 未知项
+
+- 3 个命令无描述文本（docstring 与 .command('name', 'desc') 均未提供）
 ## Related
 
 - 同目录：[api.md](api.md)
+- 共享 3 个源文件：[tech-stack.md](../01-overview/tech-stack.md)
+- 共享 3 个源文件：[architecture.md](../02-architecture/architecture.md)
+- 共享 3 个源文件：[modules.md](../02-architecture/modules.md)
 - 总入口：[README](../README.md)

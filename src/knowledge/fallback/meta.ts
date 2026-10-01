@@ -2,15 +2,14 @@ import { WikiBuilder } from '../wiki-builder.js';
 import { unconfirmedNote } from '../wiki-markers.js';
 import type {
   EnvironmentContext, TestingContext, ConventionsContext, ConstraintsContext,
-  DecisionsContext, CliContext, TechStackContext,
 } from '../types.js';
-import { hasIntent, intentTable } from './shared.js';
+import { hasIntent, intentTable, renderFactsAndUnknowns } from './shared.js';
 /**
  * environment.md：运行态信息（包名/版本/运行时/脚本/env 变量）。
  * 纯规则生成，数据来自 ConfigDetector 探测的实际配置文件。
  */
 export function buildEnvironment(ctx: EnvironmentContext): string {
-  const builder = new WikiBuilder().addTitle('Environment');
+  const builder = new WikiBuilder().addTitle('运行环境');
 
   builder.addSection('项目信息', '');
   builder.addTable(
@@ -33,16 +32,34 @@ export function buildEnvironment(ctx: EnvironmentContext): string {
   }
 
   if (ctx.envVars.length > 0) {
-    builder.addSection('环境变量', '从生产源码 process.env 引用提取');
+    builder.addSection('环境变量', '从生产源码 process.env 引用提取；用途列仅采集注释/缺省值/.env.example 等确定性证据');
     builder.addTable(
-      ['变量名', '敏感', '生产引用'],
+      ['变量名', '敏感', '用途', '生产引用'],
       ctx.envVars.map(v => [
         v.name,
         v.sensitive ? '⚠️ 是' : '否',
+        v.purpose ?? '见生产引用',
         v.filePaths.join('<br>') || '-',
       ]),
     );
   }
+
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `脚本命令 ${Object.keys(ctx.scripts).length} 条（来自 package.json）`,
+      ...(ctx.envVars.length > 0
+        ? [`生产环境变量 ${ctx.envVars.length} 个（敏感 ${ctx.envVars.filter(v => v.sensitive).length} 个），其中 ${ctx.envVars.filter(v => v.purpose).length} 个带确定性用途证据`]
+        : []),
+      ...(ctx.nodeVersion ? [`Node 版本要求：${ctx.nodeVersion}`] : []),
+    ],
+    [
+      ...(ctx.envVars.filter(v => !v.purpose).length > 0
+        ? [`${ctx.envVars.filter(v => !v.purpose).length} 个环境变量未检出用途证据（引用点无相邻注释/缺省值，.env.example 未提供）`]
+        : []),
+      ...(!ctx.nodeVersion ? ['未指定 Node 版本要求（.nvmrc / engines.node 均未检出）'] : []),
+    ],
+  );
 
   return builder.build();
 }
@@ -52,7 +69,7 @@ export function buildEnvironment(ctx: EnvironmentContext): string {
  * 纯规则生成，诚实标注未检测到的项。
  */
 export function buildTesting(ctx: TestingContext): string {
-  const builder = new WikiBuilder().addTitle('Testing');
+  const builder = new WikiBuilder().addTitle('测试');
 
   builder.addTable(
     ['项', '值'],
@@ -103,6 +120,21 @@ export function buildTesting(ctx: TestingContext): string {
     );
   }
 
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `测试文件 ${ctx.testFileCount} 个（生产文件 ${ctx.productionFileCount} 个，测试/生产比 ${(ctx.testFileCount / Math.max(ctx.productionFileCount, 1)).toFixed(2)}）`,
+      ...(ctx.framework ? [`测试框架：${ctx.framework}${ctx.configPath ? `（配置 ${ctx.configPath}）` : '（无独立配置文件，从依赖/脚本反推）'}`] : []),
+      ...(ctx.runCommand ? [`运行命令：\`${ctx.runCommand}\``] : []),
+      `测试专用依赖 ${ctx.testOnlyDeps.length} 个、专用环境变量 ${ctx.testOnlyEnvVars.length} 个、专用常量 ${ctx.testOnlyConstants.length} 个`,
+    ],
+    [
+      ...(!ctx.framework ? ['未检测到测试框架（无配置文件，依赖与脚本中也无已知框架）'] : []),
+      ...(!ctx.fixturesDir ? ['未检出夹具目录'] : []),
+      ...(!ctx.configPath ? ['测试框架无独立配置文件（从依赖/脚本反推）'] : []),
+    ],
+  );
+
   return builder.build();
 }
 
@@ -112,7 +144,7 @@ export function buildTesting(ctx: TestingContext): string {
  * 从 AGENTS.md 提取关键规约段落。
  */
 export function buildConventions(ctx: ConventionsContext): string {
-  const builder = new WikiBuilder().addTitle('Conventions');
+  const builder = new WikiBuilder().addTitle('规约');
 
   // 工具链检测状态（诚实标注）
   builder.addSection('工具链检测', '');
@@ -147,6 +179,20 @@ export function buildConventions(ctx: ConventionsContext): string {
     }
   }
 
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `lint 工具链：${ctx.hasLinter ? `已配置（${ctx.linterConfig}）` : '未检出'}`,
+      `EditorConfig：${ctx.hasEditorConfig ? '已配置' : '未检出'}`,
+      ...(ctx.agentsMd ? [`AGENTS.md 存在，规约段落摘录前 5 段`] : []),
+    ],
+    [
+      ...(!ctx.hasLinter ? ['lint 规则清单未检出（配置文件缺失）'] : []),
+      ...(!ctx.editorConfig ? ['无 .editorconfig，编辑器格式基线未约定'] : []),
+      ...(!ctx.agentsMd ? ['无 AGENTS.md，AI 协作规约未检出'] : []),
+    ],
+  );
+
   return builder.build();
 }
 
@@ -155,7 +201,7 @@ export function buildConventions(ctx: ConventionsContext): string {
  * 限制常量（源码 MAX/LIMIT/TIMEOUT）+ 高复杂度函数表（complexity > 3）。
  */
 export function buildConstraints(ctx: ConstraintsContext): string {
-  const builder = new WikiBuilder().addTitle('Constraints');
+  const builder = new WikiBuilder().addTitle('约束与限制');
 
   builder.addParagraph('项目边界与代价：性能预算、复杂度上限、已知限制。');
 
@@ -189,172 +235,20 @@ export function buildConstraints(ctx: ConstraintsContext): string {
     builder.addParagraph('未检测到显著限制常量或高复杂度函数。');
   }
 
-  return builder.build();
-}
-
-/**
- * decisions.md：设计决策与演进（git 提交 + 文档证据锚定）。
- * 纯规则生成：只渲染真实证据（提交对表/文档摘录/变更热点），
- * 每条带 commit 哈希+日期 或 文档路径锚点，规避「推导伪装成决策」。
- */
-export function buildDecisions(ctx: DecisionsContext): string {
-  const builder = new WikiBuilder()
-    .addTitle('Design Decisions & Evolution')
-    .addParagraph('基于 git 提交历史与仓库设计文档确定性提取，每条决策带证据锚点（commit 哈希+日期 / 文档路径），可回溯验证。');
-
-  const commitCell = (c: { hash: string; date: string; subject: string } | null) =>
-    c ? `\`${c.hash.slice(0, 8)}\`（${c.date}）${c.subject}` : '-';
-
-  if (ctx.gitTimeline.length > 0) {
-    builder.addSection('演进时间线（按模块）', '首次提交主题是模块「诞生动机」的最直接证据。');
-    builder.addTable(
-      ['模块', '提交数', '首次提交', '最近提交', '高频主题'],
-      ctx.gitTimeline.map(t => [
-        t.module,
-        String(t.commitCount),
-        commitCell(t.first),
-        commitCell(t.last),
-        t.themes.length > 0 ? t.themes.join('、') : '-',
-      ]),
-    );
-  }
-
-  if (ctx.docDecisions.length > 0) {
-    builder.addSection('文档记录的决策', '仓库 README / docs 的设计文档小节摘录（锚点 = 文档路径#标题）。');
-    builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.docDecisions));
-  }
-
-  if (ctx.depCommits && ctx.depCommits.length > 0) {
-    builder.addSection('依赖引入决策（提交佐证）', '');
-    builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.depCommits));
-  }
-
-  if (ctx.hotFileChurn.length > 0) {
-    builder.addSection('高频变更热点（维护风险）', '提交次数最多的文件，变更越频繁维护风险越高。');
-    builder.addTable(
-      ['文件', '提交数', '最近提交'],
-      ctx.hotFileChurn.map(c => [c.file, String(c.commitCount), commitCell(c.last)]),
-    );
-  }
-
-  return builder.build();
-}
-
-/**
- * cli.md：CLI 命令参考。
- * 命令表（含 file:line）+ 每命令参数表（commander .option 解析）+ 退出码表。
- */
-export function buildCli(ctx: CliContext): string {
-  const builder = new WikiBuilder().addTitle('CLI');
-
-  if (ctx.commands.length === 0) {
-    builder.addParagraph('No CLI commands detected.');
-    return builder.build();
-  }
-
-  // 命令总表
-  builder.addSection('命令', '');
-  builder.addTable(
-    ['命令', '说明', '源文件:行号'],
-    ctx.commands.map(c => [
-      `\`${c.name}\``,
-      c.description || '-',
-      c.startLine > 0 ? `${c.filePath}:${c.startLine}` : c.filePath,
-    ]),
-  );
-
-  // 每个命令的参数
-  for (const cmd of ctx.commands) {
-    if (cmd.options.length > 0) {
-      builder.addSection(`\`${cmd.name}\` 参数`, '');
-      builder.addTable(
-        ['参数', '说明'],
-        cmd.options.map(o => [`\`${o.flag}\``, o.description]),
-      );
-    }
-  }
-
-  // 退出码
-  if (ctx.exitCodes.length > 0) {
-    builder.addSection('退出码', '');
-    builder.addTable(
-      ['码', '上下文', '源文件'],
-      ctx.exitCodes.map(e => [String(e.code), `\`${e.context}\``, e.filePath]),
-    );
-  }
-
-  return builder.build();
-}
-
-/**
- * tech-stack.md：技术栈（R3 拒绝编造用途）。
- * 三张表：核心依赖（含首个 import 点）、开发依赖、声明未用依赖。
- */
-export function buildTechStack(ctx: TechStackContext): string {
-  const builder = new WikiBuilder()
-    .addTitle('Tech Stack')
-    .addParagraph('技术栈与依赖说明。每个依赖均标注源码首个 import 点（R3 拒绝编造用途）。');
-
-  if (ctx.coreDeps.length > 0) {
-    builder.addSection('核心依赖', '');
-    builder.addTable(
-      ['依赖', '版本', '首个 import 点'],
-      ctx.coreDeps.map(d => [
-        `\`${d.name}\``,
-        d.version,
-        d.importFiles[0] ? `\`${d.importFiles[0]}\`` : '-',
-      ]),
-    );
-  }
-
-  if (ctx.devDeps.length > 0) {
-    builder.addSection('开发依赖', '仅开发环境使用');
-    builder.addTable(
-      ['依赖', '版本', '使用方式', '首个 import 点'],
-      ctx.devDeps.map(d => [
-        `\`${d.name}\``,
-        d.version,
-        d.usageKind,
-        d.importFiles[0] ? `\`${d.importFiles[0]}\`` : '-',
-      ]),
-    );
-  }
-
-  if (ctx.testDeps.length > 0) {
-    builder.addSection('测试专用依赖', '仅测试链路使用，不属于生产运行时技术栈');
-    builder.addTable(
-      ['依赖', '版本', '首个测试 import 点'],
-      ctx.testDeps.map(d => [
-        `\`${d.name}\``,
-        d.version,
-        d.importFiles[0] ? `\`${d.importFiles[0]}\`` : '-',
-      ]),
-    );
-  }
-
-  if (ctx.unusedDeps.length > 0) {
-    builder.addSection('声明未用依赖', '⚠️ package.json 声明但源码中 0 import，请确认是否需要');
-    builder.addTable(
-      ['依赖', '版本'],
-      ctx.unusedDeps.map(d => [`\`${d.name}\``, d.version]),
-    );
-  }
-
-  // 依赖引入动机（git 提交佐证，R7 锚点保留）
-  if (hasIntent(ctx.intent)) {
-    builder.addSection('引入动机（提交佐证）', '');
-    builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.intent));
-  }
-
-  builder.addSection('运行时与构建', '');
-  builder.addTable(
-    ['项', '值'],
+  renderFactsAndUnknowns(
+    builder,
     [
-      ['模块系统', ctx.runtime],
-      ['构建工具', ctx.buildTool],
-      ['包管理器', ctx.packageManager],
+      `限制常量 ${ctx.constants.length} 个（源码 MAX/MIN/LIMIT/TIMEOUT 类命名提取，均带 file:line 锚点）`,
+      `高复杂度函数 ${ctx.hotFunctions.length} 个（complexity > 3，最高 ${ctx.hotFunctions[0]?.complexity ?? 0}）`,
+      ...(hasIntent(ctx.intent) ? [`限制由来注释证据 ${ctx.intent!.length} 条`] : []),
+    ],
+    [
+      ...(ctx.constants.length === 0 ? ['未检出 MAX/MIN/LIMIT/TIMEOUT 类限制常量'] : []),
+      ...(ctx.hotFunctions.length === 0 ? ['未检出 complexity > 3 的函数'] : []),
+      ...(!hasIntent(ctx.intent) ? ['限制常量无相邻注释证据（由来未检出）'] : []),
     ],
   );
 
   return builder.build();
 }
+

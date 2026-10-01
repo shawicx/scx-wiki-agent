@@ -1,7 +1,6 @@
 import { WikiBuilder } from '../wiki-builder.js';
-import { UNCONFIRMED_CELL } from '../wiki-markers.js';
 import type { TopicContext, ChapterPageContext } from '../types.js';
-import { hasIntent, intentTable } from './shared.js';
+import { hasIntent, intentTable, summarizeDocstring, renderFactsAndUnknowns } from './shared.js';
 
 /**
  * 主题页：仓库专属跨模块协作面（图谱推导）。
@@ -23,7 +22,7 @@ export function buildTopic(ctx: TopicContext): string {
         `\`${s.name}\``,
         s.type,
         s.signature ? `\`${s.signature}\`` : '-',
-        s.docstring ?? UNCONFIRMED_CELL,
+        summarizeDocstring(s.docstring),
         s.startLine && s.startLine > 0 ? `${s.file}:${s.startLine}` : s.file,
       ]),
     );
@@ -40,7 +39,7 @@ export function buildTopic(ctx: TopicContext): string {
   if (ctx.boundaries.length > 0) {
     builder.addSection('跨模块边界', '');
     builder.addTable(
-      ['From', 'To', '调用次数'],
+      ['调用方', '被调用方', '调用次数'],
       ctx.boundaries.map(b => [b.from, b.to, String(b.callCount)]),
     );
   }
@@ -49,6 +48,21 @@ export function buildTopic(ctx: TopicContext): string {
     builder.addSection('设计动机（意图证据）', '');
     builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.intent));
   }
+
+  const documented = ctx.symbols.filter(s => s.docstring && s.docstring.trim().length > 0).length;
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `覆盖文件 ${ctx.files.length} 个、关键符号 ${ctx.symbols.length} 个（跨 ${new Set(ctx.symbols.map(s => s.file)).size} 个文件）`,
+      `协作调用边 ${ctx.edges.length} 条、跨模块边界 ${ctx.boundaries.length} 条`,
+      ...(hasIntent(ctx.intent) ? [`设计动机证据 ${ctx.intent!.length} 条（均带锚点）`] : []),
+    ],
+    [
+      ...(ctx.symbols.length - documented > 0
+        ? [`${ctx.symbols.length - documented} 个关键符号无 docstring，说明列以签名与锚点为准`] : []),
+      ...(!hasIntent(ctx.intent) ? ['未检出该主题的设计动机证据'] : []),
+    ],
+  );
 
   return builder.build();
 }
@@ -70,7 +84,7 @@ export function buildChapterPage(ctx: ChapterPageContext): string {
         `\`${s.name}\``,
         s.type,
         s.signature ? `\`${s.signature}\`` : '-',
-        s.docstring ?? UNCONFIRMED_CELL,
+        summarizeDocstring(s.docstring),
         s.startLine && s.startLine > 0 ? `${s.file}:${s.startLine}` : s.file,
       ]),
     );
@@ -87,7 +101,7 @@ export function buildChapterPage(ctx: ChapterPageContext): string {
   if (ctx.boundaries.length > 0) {
     builder.addSection('跨模块边界', '');
     builder.addTable(
-      ['From', 'To', '调用次数'],
+      ['调用方', '被调用方', '调用次数'],
       ctx.boundaries.map(b => [b.from, b.to, String(b.callCount)]),
     );
   }
@@ -96,6 +110,20 @@ export function buildChapterPage(ctx: ChapterPageContext): string {
     builder.addSection('设计动机（意图证据）', '');
     builder.addTable(['证据', '类型', '目标', '锚点'], intentTable(ctx.intent));
   }
+
+  const documented = ctx.symbols.filter(s => s.docstring && s.docstring.trim().length > 0).length;
+  renderFactsAndUnknowns(
+    builder,
+    [
+      `覆盖文件 ${ctx.files.length} 个、关键符号 ${ctx.symbols.length} 个、协作调用边 ${ctx.edges.length} 条`,
+      ...(hasIntent(ctx.intent) ? [`设计动机证据 ${ctx.intent!.length} 条（均带锚点）`] : []),
+    ],
+    [
+      ...(ctx.symbols.length - documented > 0
+        ? [`${ctx.symbols.length - documented} 个关键符号无 docstring，说明列以签名与锚点为准`] : []),
+      ...(!hasIntent(ctx.intent) ? ['未检出该页面的设计动机证据'] : []),
+    ],
+  );
 
   return builder.build();
 }

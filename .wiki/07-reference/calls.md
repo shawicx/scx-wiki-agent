@@ -1,4 +1,4 @@
-# Calls
+# 调用关系
 
 <details>
 <summary>Relevant source files</summary>
@@ -10,32 +10,31 @@
 - src/cli/index.ts
 - src/core/scanner.ts
 - src/knowledge/claim-verifier.ts
-- src/knowledge/intent-evidence.ts
-- src/knowledge/page-registry.ts
-- src/knowledge/wiki-fallback-builder.ts
-- src/knowledge/wiki-page-generator.ts
+- src/knowledge/fallback/shared.ts
+- src/knowledge/generator/shared.ts
+- src/knowledge/wiki-markers.ts
 - src/mcp/codebase-memory-client.ts
 - src/services/scan-service.ts
-- src/services/wiki-service.ts
+- src/services/wiki/service.ts
 - src/shared/config.ts
 </details>
 
 调用关系边表（按入口/热点分组）。每条边可被 trace_path / CALLS 查询复现。
 
-## Fan-in（被调用次数）
+## 扇入（被调用次数）
 
 | 符号 | 文件 | 扇入 |
 | --- | --- | --- |
-| isTestPath | src/shared/utils.ts | 29 |
-| generate | src/knowledge/wiki-page-generator.ts | 14 |
-| languageDomainOf | src/shared/utils.ts | 12 |
-| intentTable | src/knowledge/wiki-fallback-builder.ts | 9 |
-| matchPackageForFile | src/shared/utils.ts | 9 |
-| isChapterPage | src/knowledge/page-registry.ts | 9 |
-| hasIntent | src/knowledge/wiki-fallback-builder.ts | 8 |
-| isTopicPage | src/knowledge/page-registry.ts | 8 |
-| intentToPrompt | src/knowledge/wiki-page-generator.ts | 7 |
-| dedupeByAnchor | src/knowledge/intent-evidence.ts | 6 |
+| isTestPath |  | 26 |
+| renderFactsAndUnknowns |  | 20 |
+| generate | src/knowledge/generator/shared.ts | 14 |
+| languageDomainOf |  | 12 |
+| isProductionGraphFile |  | 9 |
+| intentTable | src/knowledge/fallback/shared.ts | 9 |
+| isChapterPage |  | 9 |
+| isTopicPage |  | 9 |
+| matchPackageForFile |  | 9 |
+| hasIntent | src/knowledge/fallback/shared.ts | 8 |
 
 ## registerBuildCommand
 
@@ -45,9 +44,9 @@
 | --- | --- | --- |
 | registerBuildCommand | loadGlobalConfig | src/shared/config.ts:111 |
 | registerBuildCommand | globalConfigPath | src/shared/config.ts:34 |
-| registerBuildCommand | FileScanner | src/core/scanner.ts:37 |
+| registerBuildCommand | FileScanner | src/core/scanner.ts:43 |
 | registerBuildCommand | CodebaseMemoryClient | src/mcp/codebase-memory-client.ts:119 |
-| registerBuildCommand | WikiService | src/services/wiki-service.ts:65 |
+| registerBuildCommand | WikiService | src/services/wiki/service.ts:62 |
 | loadGlobalConfig | globalConfigPath | src/shared/config.ts:34 |
 | loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:63 |
 | parseGlobalConfig | expandEnvRefs | src/shared/config.ts:48 |
@@ -88,12 +87,12 @@
 | createProgram | registerScanCommand | src/cli/commands/scan.ts:4 |
 | createProgram | registerBuildCommand | src/cli/commands/build.ts:11 |
 | registerScanCommand | ScanService | src/services/scan-service.ts:3 |
+| registerInitCommand | globalConfigPath | src/shared/config.ts:34 |
 | registerBuildCommand | loadGlobalConfig | src/shared/config.ts:111 |
 | registerBuildCommand | globalConfigPath | src/shared/config.ts:34 |
-| registerBuildCommand | FileScanner | src/core/scanner.ts:37 |
+| registerBuildCommand | FileScanner | src/core/scanner.ts:43 |
 | registerBuildCommand | CodebaseMemoryClient | src/mcp/codebase-memory-client.ts:119 |
-| registerBuildCommand | WikiService | src/services/wiki-service.ts:65 |
-| registerInitCommand | globalConfigPath | src/shared/config.ts:34 |
+| registerBuildCommand | WikiService | src/services/wiki/service.ts:62 |
 | loadGlobalConfig | globalConfigPath | src/shared/config.ts:34 |
 | loadGlobalConfig | parseGlobalConfig | src/shared/config.ts:63 |
 
@@ -103,7 +102,7 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:76 |
+| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:95 |
 
 ## verifyAndAnnotateClaims
 
@@ -111,19 +110,25 @@
 
 | 调用方 | 被调用方 | 源文件:行号 |
 | --- | --- | --- |
-| verifyAndAnnotateClaims | extractClaims | src/knowledge/claim-verifier.ts:53 |
-| verifyAndAnnotateClaims | fileStems | src/knowledge/claim-verifier.ts:150 |
-| verifyAndAnnotateClaims | locallyVerified | src/knowledge/claim-verifier.ts:93 |
-| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:76 |
+| verifyAndAnnotateClaims | extractClaims | src/knowledge/claim-verifier.ts:72 |
+| verifyAndAnnotateClaims | fileStems | src/knowledge/claim-verifier.ts:201 |
+| verifyAndAnnotateClaims | locallyVerified | src/knowledge/claim-verifier.ts:126 |
+| verifyAndAnnotateClaims | pendingMarker | src/knowledge/wiki-markers.ts:33 |
+| pendingMarker | encodeIdentity | src/knowledge/wiki-markers.ts:27 |
+| extractClaims | normalizeClaim | src/knowledge/claim-verifier.ts:95 |
+| locallyVerified | chainCandidates | src/knowledge/claim-verifier.ts:106 |
+| locallyVerified | matchesQualified | src/knowledge/claim-verifier.ts:112 |
 
-## collectContextKeys
+## 本页确定知道的事实
 
-入口文件：src/knowledge/claim-verifier.ts
-
-| 调用方 | 被调用方 | 源文件:行号 |
-| --- | --- | --- |
-| collectContextKeys | collectInto | src/knowledge/claim-verifier.ts:173 |
+- 调用边分组 7 组（入口 7 / 热点锚定 0）
+- 调用边共 34 条（每组内已去重）
+- 扇入表条目 10 个
 ## Related
 
 - 同目录：[classes.md](classes.md) · [glossary.md](glossary.md)
+- 互补职责：[glossary.md](../07-reference/glossary.md)
+- 共享 8 个源文件：[tech-stack.md](../01-overview/tech-stack.md)
+- 共享 8 个源文件：[api.md](../03-interface/api.md)
+- 共享 7 个源文件：[architecture.md](../02-architecture/architecture.md)
 - 总入口：[README](../README.md)

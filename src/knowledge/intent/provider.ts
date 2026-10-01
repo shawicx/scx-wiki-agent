@@ -26,7 +26,8 @@ import {
   PAGE_INTENT_CAP,
   REPO_LOG_LIMIT,
 } from './shared.js';
-import { commitAnchor, defaultGitRunner, extractThemes, parseGitLog } from './git.js';
+import type { IntentCandidateStats } from './shared.js';
+import { commitAnchor, countFileChurn, defaultGitRunner, extractThemes, parseGitLog } from './git.js';
 import { loadIntentGitCache, saveIntentGitCache } from './git-cache.js';
 import { groupFilesByModule, mineModuleGit } from './modules.js';
 import { collectCommentEvidence } from './comments.js';
@@ -54,6 +55,8 @@ export class IntentEvidenceProvider {
   private moduleIntents = new Map<string, IntentEvidence[]>();
   private timeline: ModuleGitInfo[] = [];
   private churn: FileChurnInfo[] = [];
+  private churnCountsCache: Map<string, number> | null = null;
+  private candidateStatsValue: IntentCandidateStats | null = null;
 
   constructor(private scanResult: ScanResult, opts?: IntentProviderOptions) {
     this.runGit = opts?.runGit ?? defaultGitRunner(scanResult.rootDir);
@@ -172,9 +175,30 @@ export class IntentEvidenceProvider {
     }));
   }
 
+  /** 全仓 churn 计数（--name-only 批量一次，构建内缓存；fail-open 空 Map）。
+   *  供意图候选排序：比逐文件 log 便宜，且能排序全部文件而非截断后的 30 个。 */
+  fileChurnCounts(): Map<string, number> {
+    if (this.gitAvailable && this.churnCountsCache === null) {
+      const counts = countFileChurn(this.runGit);
+      if (counts === null) this.gitAvailable = false;
+      this.churnCountsCache = counts ?? new Map();
+    }
+    return this.churnCountsCache ?? new Map();
+  }
+
+  /** 候选统计登记/读取（context 层排序后写入；构建报告观测「小核心文件被排除」类回归） */
+  noteCandidateStats(stats: IntentCandidateStats): void {
+    this.candidateStatsValue = stats;
+  }
+
+  candidateStats(): IntentCandidateStats | null {
+    return this.candidateStatsValue;
+  }
+
   /**
    * 预聚合模块级证据（一次性）：注释 + git 主题 + 测试行为。
-   * candidateFiles 由调用方按重要性排序（热点文件优先），内部截 GIT_FILE_CAP。
+   * candidateFiles 由调用方按重要性多信号评分排序（fan-in/入口/boundary/测试配对/
+   * docs 提及/churn，见 intent/ranking.ts），内部截 GIT_FILE_CAP 控住子进程成本。
    */
   prepareModules(pkgNames: string[], candidateFiles: string[]): void {
     if (this.modulesReady) return;
@@ -198,20 +222,10 @@ export class IntentEvidenceProvider {
       // 首提交 = 模块诞生动机的最直接证据
       const tl = this.timeline.find(t => t.module === module);
       if (tl?.first) {
-        items.push({
-          kind: 'git-commit',
-          target: { module },
-          text: `首次提交：${tl.first.subject}`,
-          anchor: commitAnchor(tl.first),
-        });
+        items.push({ kind: 'git-commit', target: { module }, text: `首次提交：${tl.first.subject}`, anchor: commitAnchor(tl.first) });
       }
       if (tl && tl.themes.length > 0) {
-        items.push({
-          kind: 'git-theme',
-          target: { module },
-          text: `高频提交主题：${tl.themes.join('、')}`,
-          anchor: tl.last ? commitAnchor(tl.last) : module,
-        });
+        items.push({ kind: 'git-theme', target: { module }, text: `高频提交主题：${tl.themes.join('、')}`, anchor: tl.last ? commitAnchor(tl.last) : module });
       }
       // 测试用例名属于 testing 证据（锚点在测试文件），不混入生产模块主叙事；
       // 非 testing 页的质量闸门会把测试文件锚点判为作用域外证据。
@@ -242,12 +256,7 @@ export class IntentEvidenceProvider {
     for (const rel of files.slice(0, 10)) {
       const info = this.gitForFile(rel);
       if (!info?.first) continue;
-      items.push({
-        kind: 'git-commit',
-        target: { file: rel },
-        text: `${rel} 首次提交：${info.first.subject}`,
-        anchor: commitAnchor(info.first),
-      });
+      items.push({ kind: 'git-commit', target: { file: rel }, text: `${rel} 首次提交：${info.first.subject}`, anchor: commitAnchor(info.first) });
     }
     return dedupeByAnchor(items).slice(0, PAGE_INTENT_CAP);
   }
@@ -262,21 +271,11 @@ export class IntentEvidenceProvider {
     const subjects = this.repoGitSubjects();
     const themes = extractThemes(subjects.map(c => c.subject), 4);
     if (themes.length > 0) {
-      items.push({
-        kind: 'git-theme',
-        target: {},
-        text: `仓库高频提交主题：${themes.join('、')}`,
-        anchor: subjects.length > 0 ? commitAnchor(subjects[0]) : 'git-log',
-      });
+      items.push({ kind: 'git-theme', target: {}, text: `仓库高频提交主题：${themes.join('、')}`, anchor: subjects.length > 0 ? commitAnchor(subjects[0]) : 'git-log' });
     }
     const oldest = [...subjects].sort((a, b) => (a.date < b.date ? -1 : 1))[0];
     if (oldest) {
-      items.push({
-        kind: 'git-commit',
-        target: {},
-        text: `仓库首次提交：${oldest.subject}`,
-        anchor: commitAnchor(oldest),
-      });
+      items.push({ kind: 'git-commit', target: {}, text: `仓库首次提交：${oldest.subject}`, anchor: commitAnchor(oldest) });
     }
     return dedupeByAnchor(items).slice(0, PAGE_INTENT_CAP);
   }

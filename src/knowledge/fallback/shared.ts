@@ -6,6 +6,34 @@ export function sanitizeMermaid(name: string): string {
   return name.replace(/[^a-zA-Z0-9_]/g, '_');
 }
 
+/**
+ * docstring 摘要渲染：剥 JSDoc 星号、字面 \n 还原为换行、取第一段，
+ * 列表行转 <br>、普通换行转空格、截断防破表。无内容返回 '—'（不输出空话）。
+ */
+export function summarizeDocstring(raw: string | null | undefined, maxLen = 120): string {
+  if (!raw) return '—';
+  const text = raw
+    .replace(/\\r/g, '')
+    .replace(/\\n/g, '\n')
+    .replace(/^\s*\/\*\*/, '')
+    .replace(/\*\/\s*$/, '')
+    .split('\n')
+    .map(l => l.replace(/^\s*\*!? ?/, '').trimEnd())
+    .join('\n')
+    .trim();
+  if (text.length === 0) return '—';
+  // 第一段 = 首个空行之前的内容；JSDoc 首行常见空行，先剥掉首部空行
+  const body = text.replace(/^\n+/, '');
+  const firstParagraph = body.split(/\n\s*\n/)[0] ?? body;
+  const lines = firstParagraph.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  if (lines.length === 0) return '—';
+  const rendered = lines
+    .map(l => (/^(?:[-*+]|\d+\.)\s+/.test(l) ? `- ${l.replace(/^(?:[-*+]|\d+\.)\s+/, '')}` : l))
+    .map(l => l.replace(/\|/g, '\\|'))
+    .join(lines.some(l => l.startsWith('- ')) ? '<br>' : ' ');
+  return rendered.length > maxLen ? `${rendered.slice(0, maxLen)}…` : rendered;
+}
+
 export const INTENT_KIND_LABELS: Record<string, string> = {
   'file-header': '文件头自述',
   'symbol-comment': '符号注释',
@@ -138,4 +166,22 @@ export function limitationNotes(ctx: DataFlowContext): string[] {
     notes.push('本页结论均来自图谱签名、调用点实参与源码 I/O 扫描等确定性证据，无推断内容。');
   }
   return notes;
+}
+
+/**
+ * 「本页确定知道的事实 / 未知项」双区块：fallback 页尾的确定性综合。
+ * facts/unknowns 只允许数字统计与已锚定事实，禁止推断性表述；
+ * unknowns 措辞用「未检出/无证据」，避免污染确认收集器的待确认队列。
+ */
+export function renderFactsAndUnknowns(
+  builder: { addSection: (title: string, content: string) => unknown },
+  facts: string[],
+  unknowns: string[],
+): void {
+  if (facts.length > 0) {
+    builder.addSection('本页确定知道的事实', facts.map(f => `- ${f}`).join('\n'));
+  }
+  if (unknowns.length > 0) {
+    builder.addSection('未知项', unknowns.map(u => `- ${u}`).join('\n'));
+  }
 }

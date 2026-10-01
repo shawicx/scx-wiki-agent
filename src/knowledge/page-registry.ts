@@ -52,6 +52,15 @@ export const PAGE_REGISTRY: PageDescriptor[] = [
   { name: 'calls', tier: 'structure', dir: '07-reference', answer: '调用关系边表（按入口分组，带 file:line）' },
   { name: 'classes', tier: 'structure', dir: '07-reference', answer: '类清单与成员方法（继承树待 MCP 支持）' },
   { name: 'glossary', tier: 'structure', dir: '07-reference', answer: '类型/枚举字典（含成员值）' },
+  // ---- Tier 2 动态 surface 页（按项目类型激活；三路径实现见 context/generator/fallback tier2 模块）----
+  { name: 'public-api', tier: 'surface', dir: '03-interface', answer: '库的公共 API：exports 字段、入口 re-export 链与导出符号' },
+  { name: 'routes', tier: 'surface', dir: '03-interface', answer: 'HTTP 路由表（方法/路径/handler 锚点）' },
+  { name: 'db-schema', tier: 'surface', dir: '03-interface', answer: '数据模型与 schema（Prisma/TypeORM/Drizzle/SQL）' },
+  { name: 'components', tier: 'surface', dir: '03-interface', answer: '前端组件清单与被引用度' },
+  { name: 'state', tier: 'surface', dir: '03-interface', answer: '状态管理：store 清单与消费关系' },
+  { name: 'routing', tier: 'surface', dir: '03-interface', answer: '前端路由表（path → 组件）' },
+  { name: 'workspaces', tier: 'surface', dir: '02-architecture', answer: 'monorepo 工作区包清单与依赖图' },
+  { name: 'package-boundaries', tier: 'surface', dir: '02-architecture', answer: '包间依赖边界与未声明依赖违规' },
 ];
 
 /** 全部页面名（供 WikiService 和 CLI 校验用） */
@@ -66,9 +75,6 @@ export const ALL_PAGE_NAMES: string[] = PAGE_REGISTRY.map(p => p.name);
  * - frontend：组件 + 状态 + 路由
  * - library：公共 API
  * - monorepo：workspace 边界
- *
- * 注：非 cli 类型（routes/db-schema/components/...）的 context/fallback build*
- * 尚未实现，激活后 buildByName 返回 null，WikiService 会跳过写盘（不产出空文件）。
  */
 const TIER2_BY_TYPE: Record<string, string[]> = {
   cli: ['cli'],

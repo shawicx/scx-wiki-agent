@@ -16,9 +16,9 @@ describe('页面治理与主题/章节页', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('should skip unimplemented Tier 2 pages instead of writing empty files', async () => {
-    // backend 项目类型会激活 routes + db-schema（surface 层），
-    // 但二者的 context 尚未实现：应跳过写盘而非产出空文件
+  it('should skip zero-evidence Tier 2 pages instead of writing empty files', async () => {
+    // backend 项目类型会激活 routes + db-schema（surface 层）；
+    // 三路径已实现，但该 fixture 无路由/schema 证据：context 返回 null 应跳过写盘
     const client = createMockClient();
     const service = new WikiService(client as any, makeBackendScanResult());
     const wikiDir = join(tmpDir, 'wiki');

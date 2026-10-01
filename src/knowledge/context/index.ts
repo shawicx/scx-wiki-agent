@@ -46,12 +46,25 @@ import { buildTopicContext, buildChapterPageContext } from './topics.js';
 import { buildReadmeContext } from './readme.js';
 import { buildCliContext } from './cli.js';
 import { buildTechStackContext } from './tech-stack.js';
+import { buildPublicApiContext } from './public-api.js';
+import { buildRoutesContext } from './routes.js';
+import { buildComponentsContext, buildStateContext, buildRoutingContext } from './frontend.js';
+import { buildWorkspacesContext, buildPackageBoundariesContext } from './workspaces.js';
+import { buildDbSchemaContext } from './db-schema.js';
 import {
   type ContextDeps,
   createDeps,
   enrichIfThinEvidence,
   getDepNames,
 } from './shared.js';
+
+export { buildPublicApiContext } from './public-api.js';
+export { buildRoutesContext } from './routes.js';
+export {
+  buildComponentsContext, buildStateContext, buildRoutingContext,
+} from './frontend.js';
+export { buildWorkspacesContext, buildPackageBoundariesContext } from './workspaces.js';
+export { buildDbSchemaContext } from './db-schema.js';
 
 /**
  * 从 codebase-memory-mcp 知识图谱构建各 wiki 页面的上下文数据。
@@ -111,6 +124,14 @@ export class WikiContextBuilder {
       case 'decisions': return buildDecisionsContext(this.deps);
       case 'cli': return buildCliContext(this.deps);
       case 'tech-stack': return buildTechStackContext(this.deps);
+      case 'public-api': return buildPublicApiContext(this.deps);
+      case 'routes': return buildRoutesContext(this.deps);
+      case 'components': return buildComponentsContext(this.deps);
+      case 'state': return buildStateContext(this.deps);
+      case 'routing': return buildRoutingContext(this.deps);
+      case 'workspaces': return buildWorkspacesContext(this.deps);
+      case 'package-boundaries': return buildPackageBoundariesContext(this.deps);
+      case 'db-schema': return buildDbSchemaContext(this.deps);
       default: return null;
     }
   }

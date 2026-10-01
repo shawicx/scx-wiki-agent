@@ -5,7 +5,7 @@ import { IGNORED_DIRS, SUPPORTED_EXTENSIONS, CODE_EXTENSIONS } from '../shared/c
 import { getFileLanguage, relativePath, importedPackageName, isTestPath } from '../shared/utils.js';
 import type { Language, SourceScope } from './types.js';
 
-export type ProjectType = 'backend' | 'frontend' | 'cli' | 'desktop' | 'agent' | 'monorepo' | 'unknown';
+export type ProjectType = 'backend' | 'frontend' | 'cli' | 'desktop' | 'agent' | 'monorepo' | 'library' | 'unknown';
 
 export interface ScannedFile {
   absolutePath: string;
@@ -238,7 +238,27 @@ export class FileScanner {
       }
     }
 
+    // 库项目兜底/显式判定：无框架指标命中时，package.json 的发布形态
+    // （exports 字段显式声明，或 main+types 且无 bin）→ library。
+    // 此前 library 无任何探测路径，TIER2_BY_TYPE['library'] 是死配置。
+    if (bestScore === 0 && this.looksLikeLibrary()) {
+      return 'library';
+    }
+
     return bestType;
+  }
+
+  /** package.json 发布形态判定：exports 字段（显式）或 main+types 无 bin（隐式） */
+  private looksLikeLibrary(): boolean {
+    try {
+      const pkg: { exports?: unknown; main?: unknown; types?: unknown; bin?: unknown } =
+        JSON.parse(readFileSync(join(this.rootDir, 'package.json'), 'utf-8'));
+      if (pkg.bin) return false;
+      if (pkg.exports !== undefined) return true;
+      return typeof pkg.main === 'string' && typeof pkg.types === 'string';
+    } catch {
+      return false;
+    }
   }
 
   /** pnpm-workspace.yaml 是否声明了 packages（无该字段的审批型配置不算 workspace） */

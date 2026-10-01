@@ -1,5 +1,7 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import type {
+  PublicApiContext, RoutesContext, ComponentsContext, StateContext,
+  RoutingContext, WorkspacesContext, PackageBoundariesContext, DbSchemaContext,
   OverviewContext,
   ArchitectureContext,
   DataFlowContext,
@@ -48,6 +50,10 @@ import {
   generateConventions,
   generateCliPage,
 } from './surface.js';
+import {
+  generatePublicApi, generateRoutes, generateComponents, generateStatePage,
+  generateRouting, generateWorkspaces, generatePackageBoundaries, generateDbSchema,
+} from './tier2.js';
 
 export type { GeneratorSettings, PageGenNotice } from './shared.js';
 
@@ -109,6 +115,14 @@ export class WikiPageGenerator {
       case 'tech-stack': return this.generateTechStack(ctx, onChunk);
       case 'conventions': return this.generateConventions(ctx, onChunk);
       case 'cli': return this.generateCliPage(ctx, onChunk);
+      case 'public-api': return this.generatePublicApi(ctx, onChunk);
+      case 'routes': return this.generateRoutes(ctx, onChunk);
+      case 'components': return this.generateComponents(ctx, onChunk);
+      case 'state': return this.generateStatePage(ctx, onChunk);
+      case 'routing': return this.generateRouting(ctx, onChunk);
+      case 'workspaces': return this.generateWorkspaces(ctx, onChunk);
+      case 'package-boundaries': return this.generatePackageBoundaries(ctx, onChunk);
+      case 'db-schema': return this.generateDbSchema(ctx, onChunk);
       default: return '';
     }
   }
@@ -143,6 +157,38 @@ export class WikiPageGenerator {
 
   async generateGlossary(ctx: GlossaryContext, onChunk: (text: string) => void): Promise<string> {
     return generateGlossary(this.deps, ctx, onChunk);
+  }
+
+  async generatePublicApi(ctx: PublicApiContext, onChunk: (text: string) => void): Promise<string> {
+    return generatePublicApi(this.deps, ctx, onChunk);
+  }
+
+  async generateRoutes(ctx: RoutesContext, onChunk: (text: string) => void): Promise<string> {
+    return generateRoutes(this.deps, ctx, onChunk);
+  }
+
+  async generateComponents(ctx: ComponentsContext, onChunk: (text: string) => void): Promise<string> {
+    return generateComponents(this.deps, ctx, onChunk);
+  }
+
+  async generateStatePage(ctx: StateContext, onChunk: (text: string) => void): Promise<string> {
+    return generateStatePage(this.deps, ctx, onChunk);
+  }
+
+  async generateRouting(ctx: RoutingContext, onChunk: (text: string) => void): Promise<string> {
+    return generateRouting(this.deps, ctx, onChunk);
+  }
+
+  async generateWorkspaces(ctx: WorkspacesContext, onChunk: (text: string) => void): Promise<string> {
+    return generateWorkspaces(this.deps, ctx, onChunk);
+  }
+
+  async generatePackageBoundaries(ctx: PackageBoundariesContext, onChunk: (text: string) => void): Promise<string> {
+    return generatePackageBoundaries(this.deps, ctx, onChunk);
+  }
+
+  async generateDbSchema(ctx: DbSchemaContext, onChunk: (text: string) => void): Promise<string> {
+    return generateDbSchema(this.deps, ctx, onChunk);
   }
 
   async generateTopic(ctx: TopicContext, onChunk: (text: string) => void): Promise<string> {

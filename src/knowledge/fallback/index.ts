@@ -1,5 +1,7 @@
 import { isTopicPage, isChapterPage } from '../page-registry.js';
 import type {
+  PublicApiContext, RoutesContext, ComponentsContext, StateContext,
+  RoutingContext, WorkspacesContext, PackageBoundariesContext, DbSchemaContext,
   OverviewContext,
   ArchitectureContext,
   DataFlowContext,
@@ -43,6 +45,10 @@ import {
 } from './meta.js';
 import { buildDecisions, buildCli, buildTechStack } from './meta-ops.js';
 import { buildTopic, buildChapterPage } from './topic.js';
+import {
+  buildPublicApi, buildRoutes, buildComponents, buildState,
+  buildRouting, buildWorkspaces, buildPackageBoundaries, buildDbSchema,
+} from './tier2.js';
 
 export class WikiFallbackBuilder {
   /** 按页面名派发规则生成（供 PageRegistry 调用） */
@@ -68,6 +74,14 @@ export class WikiFallbackBuilder {
       case 'decisions': return this.buildDecisions(ctx);
       case 'cli': return this.buildCli(ctx);
       case 'tech-stack': return this.buildTechStack(ctx);
+      case 'public-api': return this.buildPublicApi(ctx);
+      case 'routes': return this.buildRoutes(ctx);
+      case 'components': return this.buildComponents(ctx);
+      case 'state': return this.buildState(ctx);
+      case 'routing': return this.buildRouting(ctx);
+      case 'workspaces': return this.buildWorkspaces(ctx);
+      case 'package-boundaries': return this.buildPackageBoundaries(ctx);
+      case 'db-schema': return this.buildDbSchema(ctx);
       default: return '';
     }
   }
@@ -142,6 +156,38 @@ export class WikiFallbackBuilder {
 
   buildTechStack(ctx: TechStackContext): string {
     return buildTechStack(ctx);
+  }
+
+  buildPublicApi(ctx: PublicApiContext): string {
+    return buildPublicApi(ctx);
+  }
+
+  buildRoutes(ctx: RoutesContext): string {
+    return buildRoutes(ctx);
+  }
+
+  buildComponents(ctx: ComponentsContext): string {
+    return buildComponents(ctx);
+  }
+
+  buildState(ctx: StateContext): string {
+    return buildState(ctx);
+  }
+
+  buildRouting(ctx: RoutingContext): string {
+    return buildRouting(ctx);
+  }
+
+  buildWorkspaces(ctx: WorkspacesContext): string {
+    return buildWorkspaces(ctx);
+  }
+
+  buildPackageBoundaries(ctx: PackageBoundariesContext): string {
+    return buildPackageBoundaries(ctx);
+  }
+
+  buildDbSchema(ctx: DbSchemaContext): string {
+    return buildDbSchema(ctx);
   }
 
   buildTopic(ctx: TopicContext): string {

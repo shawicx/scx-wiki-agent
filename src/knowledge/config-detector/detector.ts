@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join, relative, basename, dirname } from 'path';
-import { importedPackageName } from '../../shared/utils.js';
+import { importedPackageName, languageDomainOf } from '../../shared/utils.js';
+import { isNativeDomain, NATIVE_CONST_DEF_RE } from '../../shared/language-patterns.js';
 import type { ConstantEvidence, EnvVarEvidence } from '../../core/types.js';
 import { detectEnvironment as detectEnvironmentImpl } from './package-manager.js';
 import { extractEnvPurposes } from './env-purpose.js';
@@ -227,7 +228,8 @@ export class ConfigDetector {
   /** 从指定源码提取 process.env.XXX 引用（跳过注释行） */
   private extractEnvVars(files: string[]): EnvVarEvidence[] {
     const byName = new Map<string, Set<string>>();
-    const envRegex = /process\.env\.([A-Z_][A-Z0-9_]*)/g;
+    // 多语言 env 引用：process.env.X / os.environ['X'] / os.getenv('X') / os.Getenv("X") / System.getenv("X")
+    const envRegex = /process\.env\.([A-Z_][A-Z0-9_]*)|os\.environ\[?['"]([A-Z_][A-Z0-9_]*)['"]|os\.getenv\(\s*['"]([A-Z_][A-Z0-9_]*)['"]|os\.Getenv\(\s*"([A-Z_][A-Z0-9_]*)"|System\.getenv\(\s*"([A-Z_][A-Z0-9_]*)"/g;
 
     for (const file of files) {
       try {
@@ -238,7 +240,8 @@ export class ConfigDetector {
           let match: RegExpExecArray | null;
           envRegex.lastIndex = 0;
           while ((match = envRegex.exec(line)) !== null) {
-            const name = match[1];
+            const name = match.slice(1).find(g => g !== undefined);
+            if (!name) continue;
             const paths = byName.get(name) ?? new Set<string>();
             paths.add(rel);
             byName.set(name, paths);
@@ -262,8 +265,19 @@ export class ConfigDetector {
       try {
         const source = readFileSync(file, 'utf-8');
         const lines = source.split('\n');
+        const domain = languageDomainOf(relative(this.rootDir, file).replace(/\\/g, '/'));
         for (let i = 0; i < lines.length; i++) {
           if (isCommentLine(lines[i])) continue;
+          if (domain !== null && isNativeDomain(domain)) {
+            const m = lines[i].match(NATIVE_CONST_DEF_RE[domain]);
+            if (m) {
+              constants.push({
+                name: m[1], value: m[2].trim(),
+                filePath: relative(this.rootDir, file).replace(/\\/g, '/'), line: i + 1,
+              });
+            }
+            continue;
+          }
           constRegex.lastIndex = 0;
           let match: RegExpExecArray | null;
           while ((match = constRegex.exec(lines[i])) !== null) {

@@ -33,12 +33,52 @@ export interface ScanResult {
 const KNOWN_SOURCE_DIRS = ['src', 'src-tauri', 'app', 'lib', 'packages', 'cmd', 'internal'];
 
 const PROJECT_TYPE_INDICATORS: Record<string, string[]> = {
-  backend: ['express', '@nestjs/core', 'fastify', '@fastify'],
+  backend: ['express', '@nestjs/core', 'fastify', '@fastify',
+            // 非_node 生态（import 即证据，无需 package.json 声明）
+            'flask', 'fastapi-py', 'django', 'gin', 'echo-go', 'fiber-go', 'spring-boot'],
   frontend: ['react', 'react-dom', 'vue', 'next', 'nuxt', '@sveltejs'],
   agent: ['langgraph', '@langchain/core', 'mastra'],
-  cli: ['commander', 'yargs'],
+  cli: ['commander', 'yargs', 'cobra'],
   desktop: ['@tauri-apps/api'],
 };
+
+/** 原生 import → 技术栈规范名（无 package.json 的 Python/Go/JVM 仓库：import 即证据） */
+const NATIVE_IMPORT_MAP: Record<string, string> = {
+  flask: 'flask', fastapi: 'fastapi-py', django: 'django', uvicorn: 'fastapi-py',
+  sqlalchemy: 'sqlalchemy', celery: 'celery', requests: 'requests',
+  'gin-gonic/gin': 'gin', 'labstack/echo': 'echo-go', 'gofiber/fiber': 'fiber-go',
+  'spf13/cobra': 'cobra',
+};
+
+/** Python/Go 源文件 import 提取 → 规范技术栈名（去重排序；上限控成本） */
+function detectNativeImports(files: ScannedFile[]): string[] {
+  const found = new Set<string>();
+  const pyImport = /^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.,\s]+))/;
+  const goImport = /"((?:github\.com|gitlab\.com|golang\.org)\/[^"]+)"/;
+  for (const f of files.slice(0, 800)) {
+    if (f.extension !== '.py' && f.extension !== '.go') continue;
+    let src: string;
+    try {
+      src = readFileSync(f.absolutePath, 'utf-8');
+    } catch { continue; }
+    for (const line of src.split('\n')) {
+      const py = line.match(pyImport);
+      if (py) {
+        const root = (py[1] ?? py[2] ?? '').split('.')[0].split(',')[0].trim();
+        if (NATIVE_IMPORT_MAP[root]) found.add(NATIVE_IMPORT_MAP[root]);
+      }
+      const go = line.match(goImport);
+      if (go) {
+        const parts = go[1].split('/');
+        for (let take = 2; take <= parts.length; take++) {
+          const key = parts.slice(-take).join('/');
+          if (NATIVE_IMPORT_MAP[key]) { found.add(NATIVE_IMPORT_MAP[key]); break; }
+        }
+      }
+    }
+  }
+  return [...found].sort();
+}
 
 export class FileScanner {
   private rootDir: string;
@@ -75,15 +115,21 @@ export class FileScanner {
     const productionFiles = files.filter(f => f.scope === 'production');
     const testFiles = files.filter(f => f.scope === 'test');
     const { techStack, testTechStack } = this.detectTechStack(productionFiles, testFiles);
-    const projectType = this.detectProjectType(techStack);
+    // 非_node 仓库（无 package.json）：import 即技术栈证据，注入同一指标体系
+    const nativeStack = detectNativeImports(productionFiles);
+    const nativeTestStack = detectNativeImports(testFiles);
+    const mergedStack = [...new Set([...techStack, ...nativeStack])];
+    const mergedTest = nativeTestStack.filter(t => !nativeStack.includes(t))
+      .concat(testTechStack);
+    const projectType = this.detectProjectType(mergedStack);
     const hasTypeScript = productionFiles.some((f) => f.extension === '.ts' || f.extension === '.tsx');
     const sourceDirs = this.detectSourceDirs(productionFiles);
 
     return {
       rootDir: this.rootDir,
       files,
-      techStack,
-      testTechStack,
+      techStack: mergedStack,
+      testTechStack: mergedTest,
       projectType,
       hasTypeScript,
       sourceDirs,

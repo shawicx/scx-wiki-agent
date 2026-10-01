@@ -22,19 +22,23 @@ export function extractEnvPurposes(
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (isCommentLine(line)) continue;
-        const envRegex = /process\.env\.([A-Z_][A-Z0-9_]*)/g;
+        const envRegex = /process\.env\.([A-Z_][A-Z0-9_]*)|os\.environ\[?['"]([A-Z_][A-Z0-9_]*)['"]|os\.getenv\(\s*['"]([A-Z_][A-Z0-9_]*)['"]|os\.Getenv\(\s*"([A-Z_][A-Z0-9_]*)"|System\.getenv\(\s*"([A-Z_][A-Z0-9_]*)"/g;
         let match: RegExpExecArray | null;
         envRegex.lastIndex = 0;
         while ((match = envRegex.exec(line)) !== null) {
-          const entry = byName.get(match[1]);
+          const name = match.slice(1).find(g => g !== undefined);
+          if (!name) continue;
+          const entry = byName.get(name);
           if (!entry || entry.purpose) continue;
           // 同行尾注释：const X = process.env.Y; // 用途说明
           const trailing = line.match(/(?:\/\/|#)\s*(.{2,100})\s*$/);
           const commentText = (trailing?.[1]
             // 上方紧邻注释行（//、*、# 形态，取最近一行）
             ?? nearestCommentAbove(lines, i))?.replace(/^\s*[*#]*\s*/, '').trim();
-          // 缺省值字面量：process.env.Y ?? 'z' / || "z"
-          const fallback = line.match(/process\.env\.[A-Z_][A-Z0-9_]*\s*(?:\?\?|\|\|)\s*(['"`][^'"`]*['"`]|true|false|\d+)/);
+          // 缺省值字面量：process.env.X ?? 'z' / os.getenv('X', 'z') / os.Getenv("X", "z")
+          const fallback = line.match(/process\.env\.[A-Z_][A-Z0-9_]*\s*(?:\?\?|\|\|)\s*(['"`][^'"`]*['"`]|true|false|\d+)/)
+            ?? line.match(/os\.getenv\(\s*['"][A-Z_][A-Z0-9_]*['"]\s*,\s*([^)]+)\)/)
+            ?? line.match(/os\.Getenv\(\s*"[A-Z_][A-Z0-9_]*"\s*,\s*([^)]+)\)/);
           if (commentText && commentText.length >= 2) {
             entry.purpose = commentText.slice(0, 100);
           } else if (fallback) {

@@ -1,6 +1,6 @@
 # scx-wiki-agent
 
-基于 codebase-memory-mcp 知识图谱的项目 Wiki 生成 CLI。读取图谱中的符号、调用关系与复杂度数据，为任意代码项目生成结构化中文 Markdown 文档；以图谱的精确结构数据为唯一事实来源，LLM 只负责叙述，反幻觉铁律 + 写盘前质量闸门双重兜底。
+基于 codebase-memory-mcp 知识图谱的项目 Wiki 生成 CLI。读取图谱中的符号、调用关系与复杂度数据，为支持矩阵内的代码项目生成结构化中文 Markdown 文档；以图谱的精确结构数据为唯一事实来源，LLM 只负责叙述，反幻觉铁律 + 写盘前质量闸门双重兜底。
 
 ## 功能特性
 
@@ -13,6 +13,19 @@
 - **待确认项交互裁决（两阶段构建）** — `--confirm` 后全部页面先在内存生成，单次会话逐项裁决待确认项（断言/表格项/降级说明/叙述四形态，@clack/prompts），确认结果应用后统一过闸写盘；确认的断言持久化到 `.scx-wiki-agent/confirmations.json`，后续构建自动免标；非终端环境自动跳过，CI 安全
 - **页首证据锚定块** — 每页确定性注入 `<details>` 源文件清单（只列扫描清单内真实文件），LLM 无法伪造
 - **增量模式** — `build --mode update` 跳过内容未变化的页面
+
+## 支持矩阵
+
+| 语言 | 支持程度 | 说明 |
+| --- | --- | --- |
+| TypeScript / JavaScript / Vue | ✅ 完整 | 图谱 + 注释/git/docs 意图证据 + I/O 扫描全通道（实战验证） |
+| Rust（含 Tauri） | ✅ 完整 | 跨语言 CALLS 过滤 + Tauri IPC 面 |
+| Python | 🧪 实验性 | 扫描/注释（含 docstring）/常量/env/I-O/包管理器（pyproject/requirements）已覆盖；图谱通道依赖 codebase-memory-mcp 的 Python 索引质量 |
+| Go | 🧪 实验性 | 同上（go.mod / gin / cobra 等指标已覆盖） |
+| Java / Kotlin | 🧪 实验性 | 同上（Maven / Gradle / Spring Boot 指标已覆盖） |
+| 其他语言 | ❌ 未支持 | 文件不会进入扫描清单（构建产物接近空壳） |
+
+实验性语言的图谱通道（符号/调用边）取决于 codebase-memory-mcp 的索引覆盖；构建报告会输出「图谱语言覆盖」供核对。
 
 ## 前置依赖
 

@@ -12,6 +12,7 @@
 
 import { readFileSync } from 'node:fs';
 import type { ScanResult } from '../core/scanner.js';
+import { nativeDefinedNameOn, isNativeDomain } from '../shared/language-patterns.js';
 import type { SymbolType } from '../core/types.js';
 import type { SupplementalSymbol } from './types.js';
 import { isTestPath, languageDomainOf } from '../shared/utils.js';
@@ -58,6 +59,8 @@ function readSource(file: { absolutePath: string }, cache: SourceCache): string 
 
 /** 单行按语言域提取定义名（返回 null 表示不是定义行） */
 function definedNameOn(line: string, domain: string): { name: string; type: SymbolType } | null {
+  const native = nativeDefinedNameOn(line, domain);
+  if (isNativeDomain(domain) || native) return native;
   const patterns = domain === 'rust' ? RUST_DEF_PATTERNS : TS_DEF_PATTERNS;
   const trimmed = line.trim();
   for (const { re, type } of patterns) {

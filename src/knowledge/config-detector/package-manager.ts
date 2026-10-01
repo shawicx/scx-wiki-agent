@@ -48,6 +48,12 @@ export function detectEnvironment(
       }
     } catch { /* ignore malformed package.json */ }
   }
+  // 非_node 仓库（无 package.json）：Python / Go / JVM 的运行时与包管理器
+  // （单一来源原则：本函数仍是唯一判定点，tech-stack 等页面共享）
+  if (!pkg) {
+    const native = detectNativeRuntime(rootDir);
+    if (native !== null) return { ...native, scripts: {}, envVars };
+  }
   if (pkg) {
     packageName = pkg.name ?? '';
     version = pkg.version ?? '';
@@ -82,4 +88,36 @@ export function detectEnvironment(
   }
 
   return { packageName, version, runtime, nodeVersion, packageManager, scripts, envVars };
+}
+
+/** Python/Go/JVM 运行态探测（文件存在性 + 少量文本嗅探；无命中返回 null 走 node 默认） */
+function detectNativeRuntime(rootDir: string): Omit<EnvironmentInfo, 'envVars' | 'scripts'> | null {
+  const read = (p: string): string | null => {
+    try { return readFileSync(join(rootDir, p), 'utf-8'); } catch { return null; }
+  };
+  const pyproject = read('pyproject.toml');
+  if (pyproject !== null) {
+    const pm = /\[tool\.poetry\]/.test(pyproject) ? 'poetry'
+      : /\[tool\.uv\]/.test(pyproject) || /^requires.*\buv\b/m.test(pyproject) ? 'uv'
+      : 'pip';
+    const name = pyproject.match(/^name\s*=\s*"([^"]+)"/m)?.[1] ?? '';
+    const ver = pyproject.match(/^version\s*=\s*"([^"]+)"/m)?.[1] ?? '';
+    return { packageName: name, version: ver, runtime: 'Python', nodeVersion: '', packageManager: pm };
+  }
+  if (existsSync(join(rootDir, 'requirements.txt'))) {
+    return { packageName: '', version: '', runtime: 'Python', nodeVersion: '', packageManager: 'pip' };
+  }
+  const goMod = read('go.mod');
+  if (goMod !== null) {
+    const name = goMod.match(/^module\s+(\S+)/m)?.[1] ?? '';
+    const ver = goMod.match(/^go\s+(\S+)/m)?.[1] ?? '';
+    return { packageName: name, version: ver, runtime: 'Go', nodeVersion: '', packageManager: 'go modules' };
+  }
+  if (existsSync(join(rootDir, 'pom.xml'))) {
+    return { packageName: '', version: '', runtime: 'JVM', nodeVersion: '', packageManager: 'maven' };
+  }
+  if (existsSync(join(rootDir, 'build.gradle')) || existsSync(join(rootDir, 'build.gradle.kts'))) {
+    return { packageName: '', version: '', runtime: 'JVM', nodeVersion: '', packageManager: 'gradle' };
+  }
+  return null;
 }

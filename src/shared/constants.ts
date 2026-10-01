@@ -27,6 +27,9 @@ export const SUPPORTED_EXTENSIONS = [
   '.mjs', '.cjs',
   '.vue',
   '.rs',
+  '.py',
+  '.go',
+  '.java', '.kt', '.kts',
   '.css',
   '.md',
   '.json',
@@ -36,4 +39,4 @@ export const SUPPORTED_EXTENSIONS = [
 ];
 
 /** import 语句可解析的扩展名（Vue SFC 的 <script> 与 TS 同语法） */
-export const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.css'];
+export const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.css', '.py', '.go', '.java', '.kt', '.kts'];

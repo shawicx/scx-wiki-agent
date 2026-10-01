@@ -4,7 +4,7 @@ import type { IntentEvidence } from './shared.js';
 import {
   cleanCommentText,
   commentContent,
-  CONST_DEF_RE,
+  constDefMatch,
   sanitizeText,
   SYMBOL_COMMENTS_PER_FILE,
   topLevelDef,
@@ -17,13 +17,24 @@ export function collectCommentEvidence(rel: string, src: string, domain: string)
   const lines = src.split('\n');
   const evidence: IntentEvidence[] = [];
 
-  // 文件头：首段连续注释（跳过 shebang 与版权行，剩余 ≥12 字符才算自述）
+  // 文件头：首段连续注释（跳过 shebang 与版权行，剩余 ≥12 字符才算自述）。
+  // Python 模块级 docstring 与 # 注释（Python/Go）同为本通道来源。
   let header: string[] = [];
+  let inDocstring = false;
   for (const line of lines) {
     const t = line.trim();
     if (t === '') { if (header.length > 0) break; continue; }
     if (t.startsWith('#!')) continue;
-    if (t.startsWith('//') || t.startsWith('/*') || t.startsWith('*')) {
+    const q = t.startsWith('"""') ? '"""' : t.startsWith("'''") ? "'''" : null;
+    if (inDocstring || q !== null) {
+      // docstring 行：剥引号取正文；单行自闭合（"xxx"）即结束
+      const body = t.replace(/^['"]{0,3}/, '').replace(/['"]{0,3}$/, '');
+      if (body.trim()) header.push(body);
+      if (q !== null && t.indexOf(q, 3) >= 0) break;
+      inDocstring = true;
+      continue;
+    }
+    if (t.startsWith('//') || t.startsWith('/*') || t.startsWith('*') || t.startsWith('#')) {
       const c = commentContent(line);
       if (c !== null && !/^(copyright|licensed|spdx|@license)/i.test(c.trim())) header.push(c);
       if (t.includes('*/') && t.startsWith('/*')) break;
@@ -87,10 +98,10 @@ export function collectCommentEvidence(rel: string, src: string, domain: string)
 
   // 常量注释：限制常量定义行的同行尾注释或上一行注释
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(CONST_DEF_RE);
+    const m = constDefMatch(lines[i], domain);
     if (!m) continue;
-    const name = m[1];
-    const inline = lines[i].match(/\/\/\s*(.+)$/);
+    const name = m.name;
+    const inline = lines[i].match(/(?:\/\/|#)\s*(.+)$/);
     const prevC = i > 0 ? commentContent(lines[i - 1]) : null;
     const raw = inline ? inline[1] : prevC;
     if (!raw) continue;

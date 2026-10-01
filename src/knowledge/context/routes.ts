@@ -93,6 +93,41 @@ function scanNest(rel: string, source: string, out: RouteRow[]): void {
   }
 }
 
+/** Python decorator 注册：FastAPI/Flask 风格 @app.get('/x') / @router.post('/x') */
+function scanPythonDecorators(rel: string, source: string, out: RouteRow[]): void {
+  const lines = source.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const d = lines[i].match(/@(?:[\w.]*)(?:app|router|api|blueprint|bp)[\w.]*\.(get|post|put|patch|delete|head|options)\(\s*['"\`]([^'"\`]+)['"\`]/i);
+    if (!d) continue;
+    const fn = lines.slice(i + 1, i + 4).join('\n').match(/def\s+([A-Za-z_]\w*)/);
+    if (out.length < 200) {
+      out.push({
+        method: d[1].toUpperCase(), path: d[2],
+        handler: fn ? fn[1] : '（handler 未检出）',
+        file: rel, line: i + 1, framework: 'fastapi',
+        middleware: [],
+      });
+    }
+  }
+}
+
+/** Go HTTP 注册：gin/echo 风格 r.GET("/path", handler) / router.POST(...) */
+function scanGoHttp(rel: string, source: string, out: RouteRow[]): void {
+  const lines = source.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    for (const m of lines[i].matchAll(/\b\w+\.(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|Any)\s*\(\s*"([^"]+)"\s*,?\s*([A-Za-z_]\w*)?/g)) {
+      if (out.length >= 200) return;
+      out.push({
+        method: m[1] === 'Any' ? 'ALL' : m[1].toUpperCase(),
+        path: m[2],
+        handler: m[3] ?? '（内联 handler）',
+        file: rel, line: i + 1, framework: 'go-http',
+        middleware: [],
+      });
+    }
+  }
+}
+
 function scanHono(rel: string, source: string, out: RouteRow[]): void {
   // app.on('GET', '/x', handler) 形态
   const lines = source.split('\n');
@@ -111,7 +146,7 @@ function scanHono(rel: string, source: string, out: RouteRow[]): void {
 export function buildRoutesContext(deps: ContextDeps): RoutesContext | null {
   const routes: RouteRow[] = [];
   const files = deps.scanResult.productionFiles
-    .filter(f => /\.(?:ts|js|mjs|cjs|tsx)$/.test(f.relativePath))
+    .filter(f => /\.(?:ts|js|mjs|cjs|tsx|py|go)$/.test(f.relativePath))
     .filter(f => !/\.test\.[cm]?[jt]sx?$|\.spec\.[cm]?[jt]sx?$/.test(f.relativePath));
 
   for (const f of files) {
@@ -119,6 +154,12 @@ export function buildRoutesContext(deps: ContextDeps): RoutesContext | null {
     if (src === null) continue;
     const rel = f.relativePath;
     if (/@Controller\s*\(/.test(src)) scanNest(rel, src, routes);
+    if (/\.(?:py)$/.test(rel) && /@(?:app|router|api|blueprint|bp)[\w.]*\.(?:get|post|put|patch|delete)\(/i.test(src)) {
+      scanPythonDecorators(rel, src, routes);
+    }
+    if (/\.go$/.test(rel) && /\b\w+\.(?:GET|POST|PUT|PATCH|DELETE)\s*\(/.test(src)) {
+      scanGoHttp(rel, src, routes);
+    }
     if (/\bexpress\b|from\s+['"]express['"]/.test(src)) scanExpressLike(rel, src, routes);
     if (/fastify/.test(src) && !/from\s+['"]express['"]/.test(src)) scanExpressLike(rel, src, routes);
     if (/from\s+['"]hono/.test(src)) scanHono(rel, src, routes);

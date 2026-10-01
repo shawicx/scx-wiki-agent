@@ -1,8 +1,8 @@
 /**
  * I/O 与外部边界扫描（自 data-flow-shape.ts 拆出；纯搬移，零逻辑变化）。
  *
- * 承载：TS+JS+Vue 与 Rust 两套单行 I/O 规则（fs / process / config / env / stdout），
- * 严格限定在符号函数体内调用（由 index.ts 的编排控制）。
+ * 承载：TS+JS+Vue / Rust / Python / Go / JVM 的单行 I/O 规则
+ * （fs / process / config / env / stdout），严格限定在符号函数体内调用（由 index.ts 编排）。
  */
 
 import type { DataIoEvent } from '../types.js';
@@ -35,6 +35,49 @@ const TS_IO_RULES: IoRule[] = [
   { re: /\bprocess\.env\.([A-Za-z_][\w]*)/, kind: 'env', direction: 'input', envName: true },
   { re: /\bloadGlobalConfig\s*\(/, kind: 'config', direction: 'input' },
 ];
+
+const PY_IO_RULES: IoRule[] = [
+  { re: /\bjson\.load\s*\(\s*[\w.]*open\s*\(/, kind: 'config', direction: 'input', mediumArg: 0 },
+  { re: /(?<!\w)open\s*\(/, kind: 'fs-read', direction: 'input', mediumArg: 0 },
+  { re: /\bos\.path\.(?:exists|isfile|isdir|getsize)\s*\(/, kind: 'fs-read', direction: 'input', mediumArg: 0 },
+  { re: /\bos\.(?:listdir|scandir|walk)\s*\(/, kind: 'directory-read', direction: 'input', mediumArg: 0 },
+  { re: /\bos\.(?:makedirs|mkdir)\s*\(/, kind: 'directory-write', direction: 'output', mediumArg: 0 },
+  { re: /\bos\.(?:remove|rmtree)\s*\(/, kind: 'remove', direction: 'output', mediumArg: 0 },
+  { re: /\b(?:shutil\.copy|shutil\.move|pathlib\.[\w.]*write_text)\s*\(/, kind: 'fs-write', direction: 'output', mediumArg: 0 },
+  { re: /\bsubprocess\.(?:run|call|check_output|Popen)\s*\(/, kind: 'process', direction: 'bidirectional', mediumArg: 0 },
+  { re: /\b(?:print|logging\.[\w.]*|logger\.[\w.]*)\s*\(/, kind: 'stdout', direction: 'output' },
+  { re: /\bos\.environ(?:\.get)?\[?\(?\s*['"]([A-Za-z_][\w]*)/, kind: 'env', direction: 'input', envName: true },
+  { re: /\bos\.getenv\s*\(\s*['"]([A-Za-z_][\w]*)/, kind: 'env', direction: 'input', envName: true },
+];
+
+const GO_IO_RULES: IoRule[] = [
+  { re: /\bos\.(?:ReadFile|Open|Stat)\s*\(/, kind: 'fs-read', direction: 'input', mediumArg: 0 },
+  { re: /\bos\.(?:ReadDir|WalkDir)\s*\(/, kind: 'directory-read', direction: 'input', mediumArg: 0 },
+  { re: /\bos\.(?:WriteFile|Create|Rename)\s*\(/, kind: 'fs-write', direction: 'output', mediumArg: 0 },
+  { re: /\bos\.(?:MkdirAll|Mkdir)\s*\(/, kind: 'directory-write', direction: 'output', mediumArg: 0 },
+  { re: /\bos\.(?:Remove|RemoveAll)\s*\(/, kind: 'remove', direction: 'output', mediumArg: 0 },
+  { re: /\bexec\.Command(?:Context)?\s*\(/, kind: 'process', direction: 'bidirectional', mediumArg: 0 },
+  { re: /\bfmt\.(?:Print|Println|Printf|Fprint)\s*\(/, kind: 'stdout', direction: 'output' },
+  { re: /\bos\.Getenv\s*\(\s*"([A-Za-z_][\w]*)/, kind: 'env', direction: 'input', envName: true },
+];
+
+const JVM_IO_RULES: IoRule[] = [
+  { re: /\bFiles\.(?:readString|readAllLines|newBufferedReader)\s*\(/, kind: 'fs-read', direction: 'input', mediumArg: 0 },
+  { re: /\b(?:File|FileReader|FileInputStream)\s*\(/, kind: 'fs-read', direction: 'input', mediumArg: 0 },
+  { re: /\bFiles\.(?:write|newBufferedWriter|copy)\s*\(/, kind: 'fs-write', direction: 'output', mediumArg: 0 },
+  { re: /\bFiles\.(?:createDirectories|createDirectory)\s*\(/, kind: 'directory-write', direction: 'output', mediumArg: 0 },
+  { re: /\bFiles\.(?:delete|deleteIfExists)\s*\(/, kind: 'remove', direction: 'output', mediumArg: 0 },
+  { re: /\b(?:ProcessBuilder|Runtime\.getRuntime\(\)\.exec)\s*[.(]/, kind: 'process', direction: 'bidirectional', mediumArg: 0 },
+  { re: /\bSystem\.(?:out|err)\.(?:print|println|printf)\s*\(/, kind: 'stdout', direction: 'output' },
+  { re: /\bprintln\s*\(/, kind: 'stdout', direction: 'output' },
+  { re: /\bSystem\.(?:getenv|getProperty)\s*\(\s*"([A-Za-z_][\w]*)/, kind: 'env', direction: 'input', envName: true },
+];
+
+const NATIVE_IO_RULES: Record<string, IoRule[]> = {
+  python: PY_IO_RULES,
+  go: GO_IO_RULES,
+  jvm: JVM_IO_RULES,
+};
 
 const RUST_IO_RULES: IoRule[] = [
   { re: /\b(?:fs|std::fs)::read_to_string\s*\(/, kind: 'fs-read', direction: 'input', mediumArg: 0 },
@@ -75,7 +118,7 @@ function readCallArgs(line: string, afterParen: number): { args: string[]; end: 
 
 /** 单行内检测 I/O 事件（可能多个；config 命中时抑制同一位置的 fs-read） */
 export function detectIoEvents(line: string, domain: string): IoHit[] {
-  const rules = domain === 'rust' ? RUST_IO_RULES : TS_IO_RULES;
+  const rules = NATIVE_IO_RULES[domain] ?? (domain === 'rust' ? RUST_IO_RULES : TS_IO_RULES);
   const hits: IoHit[] = [];
   const consumed = new Set<number>();
   for (const rule of rules) {

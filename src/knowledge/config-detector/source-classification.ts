@@ -2,7 +2,7 @@ import { existsSync, readdirSync, statSync } from 'fs';
 import { join, extname, relative } from 'path';
 import { isTestPath } from '../../shared/utils.js';
 
-const CODE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'];
+const CODE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.kt', '.kts'];
 const KNOWN_SOURCE_DIRS = ['src', 'src-tauri', 'app', 'lib', 'packages', 'cmd', 'internal'];
 const AUTO_SOURCE_DIRS = [...KNOWN_SOURCE_DIRS, 'tests', 'test', '__tests__', 'spec'];
 

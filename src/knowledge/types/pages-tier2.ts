@@ -25,7 +25,7 @@ export interface RoutesContext {
     handler: string;
     file: string;
     line: number;
-    framework: 'express' | 'nest' | 'fastify' | 'hono';
+    framework: 'express' | 'nest' | 'fastify' | 'hono' | 'fastapi' | 'go-http';
     middleware: string[];
   }>;
   intent?: IntentEvidence[];

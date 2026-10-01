@@ -10,6 +10,11 @@ const EXT_LANGUAGE_MAP: Record<string, Language> = {
   '.cjs': 'javascript',
   '.vue': 'vue',
   '.rs': 'rust',
+  '.py': 'python',
+  '.go': 'go',
+  '.java': 'java',
+  '.kt': 'kotlin',
+  '.kts': 'kotlin',
   '.css': 'css',
   '.md': 'markdown',
   '.json': 'json',
@@ -27,7 +32,7 @@ export function relativePath(root: string, absPath: string): string {
 }
 
 /** 测试路径特征：tests/ 目录、__tests__、*.test.* / *.spec.* 文件 */
-const TEST_PATH_RE = /(?:^|\/)(?:tests?|__tests__)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$/;
+const TEST_PATH_RE = /(?:^|\/)(?:tests?|__tests__)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[\w.]+\.py$|(?:^|\/)conftest\.py$|(?:^|\/)\w+_test\.go$|(?:^|\/)src\/test\//;
 
 /** 是否测试路径（fixtures/单测文件不作为项目功能证据） */
 export function isTestPath(p: string): boolean {
@@ -38,6 +43,9 @@ export function isTestPath(p: string): boolean {
 const LANGUAGE_DOMAIN_EXT: Record<string, string> = {
   '.ts': 'ts', '.tsx': 'ts', '.js': 'ts', '.jsx': 'ts', '.mjs': 'ts', '.cjs': 'ts', '.vue': 'ts',
   '.rs': 'rust',
+  '.py': 'python',
+  '.go': 'go',
+  '.java': 'jvm', '.kt': 'jvm', '.kts': 'jvm',
 };
 
 /** 文件的语言域；非代码文件（json/toml/md 等）返回 null */

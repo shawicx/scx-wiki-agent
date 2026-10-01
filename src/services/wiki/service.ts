@@ -313,8 +313,18 @@ export class WikiService {
       },
       { issues: crossReport.issues, actions: crossReport.actions },
       intentProvider.candidateStats(),
+      this.safeGraphLanguages(),
     );
     return writeResult.filenames;
+  }
+
+  /** 图谱语言覆盖（fail-open：查询失败返回 undefined 不占报告行） */
+  private safeGraphLanguages(): Array<{ language: string; file_count: number }> | undefined {
+    try {
+      return this.client.getArchitecture().languages;
+    } catch {
+      return undefined;
+    }
   }
 
   private async planOutline(

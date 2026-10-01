@@ -6,6 +6,7 @@
  */
 
 import { skipString, inferLiteralShape, truncate, DATA_FLOW_MAX_EXPRESSION } from './shapes.js';
+import { nativeDefinitionPatterns } from '../../shared/language-patterns.js';
 
 /** 无 end_line 且括号匹配失败时的函数体近似窗口（行） */
 export const DATA_FLOW_BODY_FALLBACK_LINES = 80;
@@ -29,6 +30,8 @@ function definitionPatterns(name: string, domain: string): RegExp[] {
       new RegExp(`^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:struct|enum|trait)\\s+${n}\\b`),
     ];
   }
+  const native = nativeDefinitionPatterns(name, domain);
+  if (native.length > 0) return native;
   return [
     new RegExp(`^\\s*(?:export\\s+)?(?:default\\s+)?(?:abstract\\s+)?(?:async\\s+)?function\\s+${n}\\b`),
     new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${n}\\s*[:=]`),

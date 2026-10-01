@@ -1,4 +1,4 @@
-export type Language = 'typescript' | 'javascript' | 'tsx' | 'jsx' | 'vue' | 'rust' | 'css' | 'markdown' | 'json' | 'yaml' | 'unknown';
+export type Language = 'typescript' | 'javascript' | 'tsx' | 'jsx' | 'vue' | 'rust' | 'python' | 'go' | 'java' | 'kotlin' | 'css' | 'markdown' | 'json' | 'yaml' | 'unknown';
 
 /** 文件证据作用域：production 供主叙事使用，test 供测试页与测试证据使用 */
 export type SourceScope = 'production' | 'test';

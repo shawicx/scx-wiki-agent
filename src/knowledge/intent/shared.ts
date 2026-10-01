@@ -1,3 +1,5 @@
+import { isNativeDomain, nativeTopLevelDef, NATIVE_CONST_DEF_RE } from '../../shared/language-patterns.js';
+
 /**
  * 意图证据共享层：类型、预算常量、文本清洗 helper。
  * 所有通道 fail-open：无 git / 无注释 / 无 docs → 对应证据为空，绝不阻断构建。
@@ -122,6 +124,8 @@ export function sanitizeText(raw: string): string {
 
 export function commentContent(line: string): string | null {
   const t = line.trim();
+  if (t.startsWith('#!')) return null; // shebang 不是注释
+  if (t.startsWith('#')) return t.slice(1);
   if (t.startsWith('//')) return t.slice(2);
   if (t.startsWith('/*')) return t.replace(/^\/\*\*?/, '').replace(/\*\/$/, '');
   if (t.startsWith('*')) return t.replace(/^\* ?/, '').replace(/\*\/$/, '');
@@ -135,9 +139,20 @@ export const RUST_TOPLEVEL_DEF_RE = /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(fn|
 
 export function topLevelDef(line: string, domain: string | null): { name: string } | null {
   if (!domain) return null;
+  if (isNativeDomain(domain)) return nativeTopLevelDef(line, domain);
   const re = domain === 'rust' ? RUST_TOPLEVEL_DEF_RE : TS_TOPLEVEL_DEF_RE;
   const m = line.match(re);
   return m ? { name: m[2] } : null;
+}
+
+/** 限制常量定义行匹配（域分发：TS/Rust 用 CONST_DEF_RE，原生语言用 NATIVE_CONST_DEF_RE） */
+export function constDefMatch(line: string, domain: string | null): { name: string; value: string } | null {
+  if (domain && isNativeDomain(domain)) {
+    const m = line.match(NATIVE_CONST_DEF_RE[domain]);
+    return m ? { name: m[1], value: m[2].trim() } : null;
+  }
+  const m = line.match(CONST_DEF_RE);
+  return m ? { name: m[1], value: '' } : null;
 }
 
 export function dedupeByAnchor(items: IntentEvidence[]): IntentEvidence[] {

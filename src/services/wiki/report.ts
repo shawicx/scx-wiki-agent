@@ -39,6 +39,7 @@ export function printBuildReport(
   confirmedFingerprints?: { valid: number; staleRaws: string[] },
   crossPage?: { issues: CrossPageIssue[]; actions: CrossPageAction[] },
   intentCandidates?: IntentCandidateStats | null,
+  graphLanguages?: Array<{ language: string; file_count: number }>,
 ): void {
   const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -209,6 +210,11 @@ export function printBuildReport(
     }
     const detail = Object.entries(totals).sort().map(([k, n]) => `${k} ${n}`).join(' / ');
     lines.push(`  意图证据：${intentCoverage.length} 页携带（${detail}）`);
+  }
+
+  // 图谱语言覆盖（多语言仓库核对 MCP 索引范围：实验性语言的图谱通道是否可用）
+  if (graphLanguages && graphLanguages.length > 0) {
+    lines.push(`  图谱语言覆盖：${graphLanguages.map(l => `${l.language} ${l.file_count}`).join(' / ')}`);
   }
 
   // 意图候选排序观测（防「按体积截断挤掉小核心文件」回归：入口/被测占比可见）

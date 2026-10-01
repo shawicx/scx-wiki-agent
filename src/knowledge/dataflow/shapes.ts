@@ -313,5 +313,9 @@ export function splitKey(key: string): { name: string; file: string } {
 }
 
 export function domainOf(file: string): string {
-  return /\.rs$/i.test(file) ? 'rust' : 'ts';
+  if (/\.rs$/i.test(file)) return 'rust';
+  if (/\.py$/i.test(file)) return 'python';
+  if (/\.go$/i.test(file)) return 'go';
+  if (/\.(?:java|kt|kts)$/i.test(file)) return 'jvm';
+  return 'ts';
 }

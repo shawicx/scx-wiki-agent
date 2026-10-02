@@ -1,6 +1,7 @@
 import type { RelationType } from '../../core/types.js';
 import { isTestPath } from '../../shared/utils.js';
 import { isTauriProject, scanIpcSurface } from '../tauri-ipc.js';
+import { mergeGraphSignature } from '../signature.js';
 import type { ModulesContext, ApiContext, ModuleSummary } from '../types.js';
 import {
   getArchitectureSnapshot,
@@ -118,12 +119,13 @@ export function buildApiContext(deps: ContextDeps): ApiContext {
       };
     });
 
-  // 查导出函数（有 signature/docstring 的），对核心函数取源码片段
+  // 查导出函数（有 signature/docstring 的），对核心函数取源码片段；
+  // signature 与 return_type 是图谱的两个字段，统一合并后再渲染（W4）
   const q = deps.client.queryGraph(
     `MATCH (n) WHERE n.is_exported = true AND n.is_test = false
          AND n.label IN ['Function', 'Method']
        RETURN n.name AS name, n.qualified_name AS qn, n.file_path AS file,
-              n.signature AS sig, n.docstring AS doc, n.complexity AS cx
+              n.signature AS sig, n.docstring AS doc, n.complexity AS cx, n.return_type AS rt
        ORDER BY n.complexity DESC LIMIT 15`,
   );
 
@@ -131,12 +133,13 @@ export function buildApiContext(deps: ContextDeps): ApiContext {
     .filter(row => isProductionGraphFile(deps, (row[2] as string) ?? ''))
     .map(row => {
       const qn = row[1] as string | null;
+      const file = (row[2] as string) ?? '';
       const snippet = qn ? safeGetSnippet(deps, qn) : null;
       return {
         name: row[0] as string,
-        filePath: row[2] as string,
+        filePath: file,
         startLine: snippet?.start_line ?? 0,
-        signature: (row[3] as string | null) ?? snippet?.signature ?? null,
+        signature: mergeGraphSignature(row[3] as string | null ?? snippet?.signature ?? null, row[6] as string | null, file),
         docstring: (row[4] as string | null) ?? snippet?.docstring ?? null,
       };
     });

@@ -4,8 +4,9 @@
  * 各页证据为空 → 返回 null（页面跳过，不产出空壳页）。
  */
 
-import { basename } from 'path';
+import { basename, join } from 'path';
 import type { ComponentsContext, StateContext, RoutingContext } from '../types.js';
+import { extractVueSfcFacts } from '../channels/vue-sfc.js';
 import type { ContextDeps } from './shared.js';
 import { readSourceCached } from './shared.js';
 
@@ -45,11 +46,24 @@ function hasTestPaired(deps: ContextDeps, base: string): boolean {
     && basename(f.relativePath).replace(/\.(?:test|spec)\.[cm]?[jt]sx?$/, '') === base);
 }
 
-/** defineProps/defineEmits 的声明计数（数组字面量或类型块内行首标识符） */
+/** defineProps/defineEmits 的声明计数（仅统计顶层声明，payload 字段不计入） */
 function declCount(source: string, api: 'defineProps' | 'defineEmits'): number {
-  // 类型参数形态：defineProps<{ name: string; age: number }> → 计 key 数
+  // 类型参数形态：defineProps<{ name: string; age: number }> → 计顶层 key 数
   const typed = source.match(new RegExp(`${api}\\s*<\\s*\\{([\\s\\S]*?)\\}\\s*>`));
-  if (typed) return (typed[1].match(/\w+\s*\??:/g) ?? []).length;
+  if (typed) {
+    const block = typed[1];
+    // 调用签名形态（emits 常用）：(e: 'resize', payload: { a: string }) => void
+    // → 只数括号内的事件名字符串，payload 类型字段不计入
+    if (/^\s*\(/.test(block)) {
+      const names = new Set<string>();
+      const evRe = /['"`]([^'"`\n]+)['"`]/g;
+      let m: RegExpExecArray | null;
+      while ((m = evRe.exec(block)) !== null) names.add(m[1]);
+      return names.size;
+    }
+    // 对象形态：只数顶层（括号深度 0）的 key，嵌套 payload 类型字段不计入
+    return countTopLevelKeys(block);
+  }
   const m = source.match(new RegExp(`${api}(?:<[^>]*>)?\\s*\\(`));
   if (!m) return 0;
   const arg = source.slice(m.index! + m[0].length, m.index! + m[0].length + 2000);
@@ -57,11 +71,35 @@ function declCount(source: string, api: 'defineProps' | 'defineEmits'): number {
   if (arr) return arr[1].split(',').map(s => s.trim().replace(/['"`]/g, '')).filter(Boolean).length;
   const typeBlock = arg.match(/^\s*\{/);
   if (typeBlock) {
-    // 对象/接口字段：行首为 key 的行计数（近似，标注于页面说明）
+    // 对象/接口字段：只数顶层 key（近似，标注于页面说明）
     const body = arg.slice(0, arg.indexOf('}') > 0 ? arg.indexOf('}') : 1500);
-    return body.split('\n').filter(l => /^\s*[A-Za-z_$][\w$]*\s*[?:]/.test(l)).length;
+    return countTopLevelKeys(body);
   }
   return 0;
+}
+
+/** 数块内「顶层」的 `key:` 声明数：进入嵌套 {}/[]/() 括号后的字段不计入 */
+function countTopLevelKeys(block: string): number {
+  let depth = 0;
+  let count = 0;
+  let atKeyStart = true;
+  for (let i = 0; i < block.length; i++) {
+    const ch = block[i];
+    if (ch === '{' || ch === '[' || ch === '(') { depth++; atKeyStart = depth === 0; continue; }
+    if (ch === '}' || ch === ']' || ch === ')') { depth--; continue; }
+    if (depth !== 0) continue;
+    if (ch === '\n') { atKeyStart = true; continue; }
+    if (atKeyStart && /[A-Za-z_$]/.test(ch)) {
+      // 行首标识符后跟 `:`（可带 `?`）才算 key
+      const rest = block.slice(i);
+      const km = rest.match(/^[A-Za-z_$][\w$]*\s*\??\s*:/);
+      if (km) { count++; i += km[0].length - 1; }
+      atKeyStart = false;
+    } else if (/\S/.test(ch)) {
+      atKeyStart = false;
+    }
+  }
+  return count;
 }
 
 export function buildComponentsContext(deps: ContextDeps): ComponentsContext | null {
@@ -74,10 +112,15 @@ export function buildComponentsContext(deps: ContextDeps): ComponentsContext | n
     const name = base.replace(/\.(?:vue|tsx|jsx|ts|js)$/, '');
     if (base.endsWith('.vue')) {
       if (/(?:<template|<script)/.test(src) === false) continue;
+      // Vue 走 SFC 权威通道（W1）：@vue/compiler-sfc 结构化提取，事件名级清单；
+      // 通道内建正则回落，此处不再需要 declCount 近似
+      const facts = extractVueSfcFacts(rel, join(deps.scanResult.rootDir, rel));
+      // 内部声明并入 symbol universe（图谱对 .vue 零符号，防真实符号被标待确认）
+      if (facts) for (const i of facts.internals) deps.fallbackSymbolNames.add(i.name);
       components.push({
         name, file: rel, framework: 'vue',
-        propsCount: declCount(src, 'defineProps'),
-        emitsCount: declCount(src, 'defineEmits'),
+        propsCount: facts?.props.length ?? declCount(src, 'defineProps'),
+        emitsCount: facts?.emits.length ?? declCount(src, 'defineEmits'),
         usedByCount: 0, testPaired: hasTestPaired(deps, name),
       });
     } else if (/\.(?:tsx|jsx)$/.test(base) && /^[A-Z]/.test(name)) {

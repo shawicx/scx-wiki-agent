@@ -4,17 +4,28 @@
  * 图谱的 CALLS 边不覆盖 IPC 边界（前端字符串命令 ↔ Rust 宏命令），api 页在
  * Tauri 项目只能拿到字母切片。本模块以正则对表两侧：
  * 前端 `invoke('cmd')` / `listen('evt')` / `emit('evt')`，
- * Rust `#[tauri::command] fn` / `emit('evt')`，camelCase 与 snake_case 双向归并
- * （Tauri v2 惯例：JS 侧 camelCase 自动映射 Rust 侧 snake_case）。
+ * Rust `#[tauri::command] fn` / `emit('evt')` / `emit_to` / `emit_all`，
+ * camelCase 与 snake_case 双向归并（Tauri v2 惯例：JS 侧 camelCase 自动映射
+ * Rust 侧 snake_case）。
  *
- * 已知局限（诚实缺失，不补造）：`invoke(变量)` 动态命令名、深嵌套泛型失配。
+ * 扫描采用**全文正则 + 行号反查**（而非逐行）：多行调用形态
+ * `app.emit(\n  "monitor-fatal", …)` 的字符串字面量在换行之后，逐行正则
+ * 永远匹配不到；invoke 的嵌套泛型 `invoke<Array<{…}>>('cmd')` 由
+ * 平衡尖括号预剥离（空白占位保持行号）兼容。
+ *
+ * 负面断言二次验证：命令「未被前端调用」/ 事件「发射点为空」在落定前，
+ * 先对源码做裸字符串检索（含 camelCase↔snake_case 双形、跳过注释行）；
+ * 检索命中即说明是扫描口径问题（深嵌套形态/动态名残余），标记 missSuspect，
+ * 页面须呈现「扫描口径局限」而非断言不存在。已知残余局限（诚实缺失，
+ * 不补造）：`invoke(变量)` 完全动态命令名。
  */
 
-import { readFileSync, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ScanResult } from '../core/scanner.js';
 import { isTestPath, languageDomainOf } from '../shared/utils.js';
 import type { SourceCache } from './source-fallback.js';
+import { buildSourceCorpus, verifyAbsence, type AbsenceVerdict } from './negative-claim.js';
 import type { IpcCommand, IpcEvent, IpcRef, IpcSurface } from './types.js';
 
 /** Tauri 项目判定：src-tauri/tauri.conf.json 存在 */
@@ -27,12 +38,47 @@ function ipcKey(name: string): string {
   return name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
 }
 
-const INVOKE_RE = /\binvoke(?:\s*<[^>(]*>)?\s*\(\s*['"`]([^'"`]+)['"`]/g;
-const LISTEN_RE = /\blisten(?:\s*<[^>(]*>)?\s*\(\s*['"`]([^'"`]+)['"`]/g;
-const EMIT_RE = /\bemit\s*\(\s*['"`]([^'"`]+)['"`]/g;
-const EMIT_TO_RE = /\.emit_to\s*\(\s*[^,]+,\s*['"`]([^'"`]+)['"`]/g;
+const INVOKE_RE = /\binvoke\s*\(\s*['"`]([^'"`\n]+)['"`]/g;
+const LISTEN_RE = /\blisten\s*\(\s*['"`]([^'"`\n]+)['"`]/g;
+const EMIT_RE = /\bemit\s*\(\s*['"`]([^'"`\n]+)['"`]/g;
+const EMIT_TO_RE = /\.emit_to\s*\(\s*[^,()]+,\s*['"`]([^'"`\n]+)['"`]/g;
+const EMIT_ALL_RE = /\.emit_all\s*\(\s*[^,()]+,\s*['"`]([^'"`\n]+)['"`]/g;
 const RUST_CMD_ATTR_RE = /^#\[\s*tauri::command/;
 const RUST_FN_RE = /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)/;
+
+/**
+ * 平衡（≤2 层）尖括号泛型实参段空白化：`invoke<Array<{…}>>('cmd')` /
+ * `listen<Payload>('evt')` 的泛型段替换为等长空白（保留换行），使行号反查仍然精确。
+ */
+function blankCallGenerics(src: string): string {
+  return src.replace(
+    /\b(invoke|listen|emit)((?:\s*<(?:[^<>]*|<[^<>]*>)*>)+)\s*\(/g,
+    (match, fn: string) =>
+      fn + '(' + [...match.slice(fn.length + 1)].map(ch => (ch === '\n' ? '\n' : ' ')).join(''),
+  );
+}
+
+/** 全文命中 → 回调（name, line）；行号取**事件名/命令名字面量**所在行（非调用起始行） */
+function scanFullText(src: string, re: RegExp, cb: (name: string, line: number) => void): void {
+  re.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    const nameOffset = m[0].indexOf(m[1]);
+    const nameIndex = m.index + (nameOffset >= 0 ? nameOffset : 0);
+    let line = 1;
+    for (let i = 0; i < nameIndex; i++) if (src.charCodeAt(i) === 10) line++;
+    cb(m[1], line);
+  }
+}
+
+/**
+ * 负面断言二次验证（W5 框架的 IPC 应用）：只在主扫描某侧为空时调用——
+ * verifyAbsence 命中即 suspect（主扫描的假阴性嫌疑，missSuspect 透出引用点，
+ * 页面标注扫描口径局限），未命中才允许断言不存在。
+ */
+function verify(verdict: AbsenceVerdict): IpcRef[] | null {
+  return verdict.verdict === 'suspect' ? verdict.refs : null;
+}
 
 /** 全仓扫描 IPC 面：命令对表 + 事件对表（双侧名都展示，仅一侧存在为孤儿） */
 export function scanIpcSurface(scanResult: ScanResult, cache: SourceCache): IpcSurface {
@@ -57,35 +103,13 @@ export function scanIpcSurface(scanResult: ScanResult, cache: SourceCache): IpcS
     }
     return evt;
   };
-  const refOf = (rel: string, line: number): IpcRef => ({ file: rel, line });
 
-  const readLines = (absolutePath: string, rel: string): string[] | null => {
-    if (cache.has(absolutePath)) {
-      const src = cache.get(absolutePath);
-      return src === null || src === undefined ? null : src.split('\n');
-    }
-    let lines: string[] | null;
-    try {
-      lines = readFileSync(absolutePath, 'utf-8').split('\n');
-    } catch {
-      lines = null;
-    }
-    cache.set(absolutePath, lines === null ? null : lines.join('\n'));
-    return lines;
-  };
+  const texts = buildSourceCorpus(scanResult, cache);
 
-  for (const file of scanResult.productionFiles) {
-    const domain = languageDomainOf(file.relativePath);
-    if (domain === null || isTestPath(file.relativePath)) continue;
-    const isRust = domain === 'rust';
-    const inSrcTauri = file.relativePath.startsWith('src-tauri/');
-    if (isRust !== inSrcTauri) continue; // rust 只认 src-tauri 内，前端只认 src-tauri 外
-
-    const lines = readLines(file.absolutePath, file.relativePath);
-    if (lines === null) continue;
-
+  for (const { rel, src, isRust } of texts) {
     if (isRust) {
       // #[tauri::command] 状态机：跳过后续 attribute/# 行与 /// 文档行（≤30 行），在 fn 行收名
+      const lines = src.split('\n');
       let pendingAttr = -1;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -97,7 +121,7 @@ export function scanIpcSurface(scanResult: ScanResult, cache: SourceCache): IpcS
           if (m) {
             const cmd = commandOf(m[1]);
             cmd.name = m[1]; // Rust 名优先展示（含下划线的契约原文）
-            cmd.rustDef = refOf(file.relativePath, i + 1);
+            cmd.rustDef = { file: rel, line: i + 1 };
           }
           pendingAttr = -1;
           continue;
@@ -106,25 +130,48 @@ export function scanIpcSurface(scanResult: ScanResult, cache: SourceCache): IpcS
           pendingAttr = i;
           continue;
         }
-        collectMatches(line, EMIT_RE, name => eventOf(name).emits.push({ ...refOf(file.relativePath, i + 1), side: 'rust' }));
-        collectMatches(line, EMIT_TO_RE, name => eventOf(name).emits.push({ ...refOf(file.relativePath, i + 1), side: 'rust' }));
       }
+      // 全文扫描（含跨行形态）：emit / emit_to / emit_all
+      scanFullText(src, EMIT_RE, (name, line) => eventOf(name).emits.push({ file: rel, line, side: 'rust' }));
+      scanFullText(src, EMIT_TO_RE, (name, line) => eventOf(name).emits.push({ file: rel, line, side: 'rust' }));
+      scanFullText(src, EMIT_ALL_RE, (name, line) => eventOf(name).emits.push({ file: rel, line, side: 'rust' }));
     } else {
       // 事件 API 噪声防护：Vue 组件的 emit('update:modelValue') 不是 Tauri 事件——
       // 仅当文件 import 了 @tauri-apps/api/event 时才采集该文件的 listen/emit
-      const src = lines.join('\n');
-      const hasTauriEventApi = /@tauri-apps\/api\/event/.test(src);
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        collectMatches(line, INVOKE_RE, name => commandOf(name).frontendCalls.push(refOf(file.relativePath, i + 1)));
-        if (!hasTauriEventApi) continue;
-        collectMatches(line, LISTEN_RE, name => {
-          if (!name.includes(':')) eventOf(name).listeners.push(refOf(file.relativePath, i + 1));
+      const invokeSrc = blankCallGenerics(src);
+      scanFullText(invokeSrc, INVOKE_RE, (name, line) =>
+        commandOf(name).frontendCalls.push({ file: rel, line }));
+      if (/@tauri-apps\/api\/event/.test(src)) {
+        scanFullText(invokeSrc, LISTEN_RE, (name, line) => {
+          if (!name.includes(':')) eventOf(name).listeners.push({ file: rel, line });
         });
-        collectMatches(line, EMIT_RE, name => {
-          if (!name.includes(':')) eventOf(name).emits.push({ ...refOf(file.relativePath, i + 1), side: 'frontend' });
+        scanFullText(invokeSrc, EMIT_RE, (name, line) => {
+          if (!name.includes(':')) eventOf(name).emits.push({ file: rel, line, side: 'frontend' });
         });
       }
+    }
+  }
+
+  // 负面断言二次验证：仅对「空侧」做裸检索，命中即标记扫描口径局限
+  for (const cmd of commands.values()) {
+    if (cmd.frontendCalls.length === 0) {
+      const refs = verify(verifyAbsence(texts, cmd.name, 'frontend'));
+      if (refs) cmd.frontendMissSuspect = refs;
+    }
+    if (cmd.rustDef === null) {
+      const refs = verify(verifyAbsence(texts, cmd.name, 'rust'));
+      if (refs) cmd.rustMissSuspect = refs;
+    }
+  }
+  for (const evt of events.values()) {
+    if (evt.emits.length === 0) {
+      // 发射嫌疑排除监听点本身（listen('x') 命中的是监听证据，不是发射证据）
+      const refs = verify(verifyAbsence(texts, evt.name, 'any', evt.listeners));
+      if (refs) evt.emitMissSuspect = refs;
+    }
+    if (evt.listeners.length === 0) {
+      const refs = verify(verifyAbsence(texts, evt.name, 'frontend'));
+      if (refs) evt.listenMissSuspect = refs;
     }
   }
 
@@ -132,13 +179,4 @@ export function scanIpcSurface(scanResult: ScanResult, cache: SourceCache): IpcS
     commands: [...commands.values()],
     events: [...events.values()].filter(e => e.listeners.length > 0 || e.emits.length > 0),
   };
-}
-
-/** 重置全局正则 lastIndex 后逐命中回调（全局正则在行级复用） */
-function collectMatches(line: string, re: RegExp, cb: (name: string) => void): void {
-  re.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(line)) !== null) {
-    cb(m[1]);
-  }
 }

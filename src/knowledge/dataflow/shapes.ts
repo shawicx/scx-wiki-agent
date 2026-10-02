@@ -181,7 +181,8 @@ export function parseSignatureText(text: string): ParsedSignature | null {
     .filter((p): p is ParsedParam => p !== null);
   let returnType: string | undefined;
   const rest = text.slice(close + 1);
-  const rm = rest.match(/^\s*:\s*([^{=]+)/);
+  // TS `: T` 与 Rust `-> T`（图谱常缺 Rust 返回类型，由源码签名回落补齐）
+  const rm = rest.match(/^\s*(?::|->)\s*([^{=]+)/);
   if (rm) returnType = rm[1].trim().replace(/\s+/g, ' ');
   return { params, returnType };
 }

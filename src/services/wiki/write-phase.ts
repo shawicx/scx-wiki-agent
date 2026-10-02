@@ -5,6 +5,7 @@ import { dirname, join } from 'path';
 import { buildEvidenceBlock, injectEvidenceBlock } from '../../knowledge/wiki-evidence.js';
 import { stripPendingMarkers } from '../../knowledge/wiki-markers.js';
 import { validatePageContent } from '../../knowledge/wiki-quality-validator.js';
+import { collectAbsenceSuspectNames } from '../../knowledge/ipc-consistency.js';
 import type { PageQualityReport } from '../../knowledge/wiki-quality-validator.js';
 import { buildRelatedSection, findPageDescriptor } from '../../knowledge/page-registry.js';
 import type { CrossLink } from '../../knowledge/page-registry.js';
@@ -52,6 +53,7 @@ export function writeProducedPages(
         readFileLine: (f, l) => verify.readSourceLine(f, l),
         readFile: f => verify.readSourceFile(f),
         symbolFiles: verify.getSymbolIndex(entry.page === 'testing' ? 'all' : 'production').files,
+        absenceSuspects: collectAbsenceSuspectNames(entry.context),
       },
     );
     qualityReports.push(report);

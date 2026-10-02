@@ -72,8 +72,59 @@ export function buildTechStackContext(ctxDeps: ContextDeps): TechStackContext {
     runtime: pkg.type === 'module' ? 'ESM' : 'CJS',
     buildTool: detectBuildTool(devDeps),
     packageManager: ctxDeps.detector.detectEnvironment().packageManager,
+    rustDeps: collectRustDeps(ctxDeps),
     ...(intent && intent.length > 0 ? { intent } : {}),
   };
+}
+
+/**
+ * Rust 依赖栈：src-tauri/Cargo.toml（回落根 Cargo.toml）的
+ * [dependencies]/[dev-dependencies]/[build-dependencies] 表。
+ * 使用判定：生产 .rs 文件中出现 `use <crate>` / `extern crate` / `<crate>::`。
+ * TOML 用行级解析（crate 行都是 `name = "version"` 单行形态，够用且零依赖）。
+ */
+function collectRustDeps(ctxDeps: ContextDeps): Array<{ name: string; version: string; used: boolean }> {
+  const candidates = ['src-tauri/Cargo.toml', 'Cargo.toml'];
+  let toml: string | null = null;
+  for (const c of candidates) {
+    try {
+      toml = readFileSync(join(ctxDeps.scanResult.rootDir, c), 'utf-8');
+      break;
+    } catch { /* try next */ }
+  }
+  if (toml === null) return [];
+
+  const rustFiles = ctxDeps.scanResult.productionFiles
+    .filter(f => f.relativePath.endsWith('.rs'))
+    .map(f => f.absolutePath);
+  const srcCache = new Map<string, string>();
+  const readSrc = (abs: string): string => {
+    let s = srcCache.get(abs);
+    if (s === undefined) {
+      try { s = readFileSync(abs, 'utf-8'); } catch { s = ''; }
+      srcCache.set(abs, s);
+    }
+    return s;
+  };
+  const isUsed = (crate: string): boolean => {
+    const esc = crate.replace(/-/g, '_').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const useRe = new RegExp(`(?:^|\\n)\\s*(?:pub\\s+)?use\\s+(?:\\w+::)*${esc}\\b|extern\\s+crate\\s+${esc}\\b|\\b${esc}::`);
+    return rustFiles.some(abs => useRe.test(readSrc(abs)));
+  };
+
+  const out: Array<{ name: string; version: string; used: boolean }> = [];
+  let section = '';
+  for (const raw of toml.split('\n')) {
+    const line = raw.trim();
+    const sm = line.match(/^\[([^\]]+)\]$/);
+    if (sm) { section = sm[1]; continue; }
+    if (!/^(dependencies|dev-dependencies|build-dependencies)$/.test(section)) continue;
+    if (line.startsWith('#') || line.startsWith('#[')) continue;
+    const dm = line.match(/^([A-Za-z0-9_-]+)\s*=\s*"([^"]+)"/);
+    if (!dm) continue;
+    out.push({ name: dm[1], version: dm[2], used: isUsed(dm[1]) });
+  }
+  return out;
 }
 
 function detectBuildTool(devDeps: Record<string, string>): string {

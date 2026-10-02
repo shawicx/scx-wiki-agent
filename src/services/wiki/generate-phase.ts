@@ -10,6 +10,7 @@ import type { ClaimStats } from '../../knowledge/claim-verifier.js';
 import { countIntentEvidence } from '../../knowledge/intent-evidence.js';
 import { collectEvidenceFiles, rankEvidenceFiles } from '../../knowledge/wiki-evidence.js';
 import { resolveEvidenceCitations } from '../../knowledge/evidence-id.js';
+import { collectAbsenceSuspectNames } from '../../knowledge/ipc-consistency.js';
 import type { EvidenceRef } from '../../knowledge/evidence-id.js';
 import { pageRelPath, isTopicPage } from '../../knowledge/page-registry.js';
 import type { VerificationHub } from './verification.js';
@@ -68,6 +69,7 @@ export async function generateAllPages(
         readFileLine: (f, l) => verify.readSourceLine(f, l),
         readFile: f => verify.readSourceFile(f),
         symbolFiles: verify.getSymbolIndex(page === 'testing' ? 'all' : 'production').files,
+        absenceSuspects: collectAbsenceSuspectNames(pageContext),
       }).passed;
 
     const produced = await generatePage(

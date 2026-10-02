@@ -172,6 +172,17 @@ export function buildTechStack(ctx: TechStackContext): string {
     );
   }
 
+  if ((ctx.rustDeps?.length ?? 0) > 0) {
+    builder.addSection(
+      'Rust 依赖栈',
+      'Cargo.toml 声明的 crate（used = 生产 .rs 中检出 use/extern crate/路径引用）',
+    );
+    builder.addTable(
+      ['crate', '版本', '使用'],
+      ctx.rustDeps!.map(d => [`\`${d.name}\``, d.version, d.used ? '已用' : '未检出引用']),
+    );
+  }
+
   if (ctx.unusedDeps.length > 0) {
     builder.addSection('声明未用依赖', '⚠️ package.json 声明但源码中 0 import，请确认是否需要');
     builder.addTable(

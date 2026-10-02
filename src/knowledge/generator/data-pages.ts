@@ -169,10 +169,13 @@ export async function generateApi(deps: GeneratorDeps, ctx: ApiContext, onChunk:
 - 开头用1-2段概述项目的对外接口设计理念和主要交互方式
 ${hasIpc ? `
 - "Tauri IPC 命令"章节（本项目 API 的主体，必须置前）：用表格列出（命令 | 前端调用点 | Rust 定义 | 状态），
-  按功能分组并对每组说明用途与典型时序；rustDef 为空的命令标注「仅前端调用，Rust 侧未检出」，
-  仅 Rust 定义的标注「未被前端调用」——两侧不匹配是重要事实，禁止省略或补造；
+  按功能分组并对每组说明用途与典型时序；rustDef 为空且无 rustMissSuspect 的命令标注「仅前端调用，Rust 侧未检出」，
+  frontendCalls 为空且无 frontendMissSuspect 的标注「未被前端调用」——确属两侧不匹配是重要事实，禁止省略或补造；
+  missSuspect 字段非空的条目（frontendCalls/rustDef 为空但源码存在引用）是正则扫描口径局限
+  （多行调用/深嵌套泛型/动态名残余），必须标注「扫描口径局限」并附 suspect 引用点，禁止断言「未被调用/未检出」；
   最后注明扫描局限（invoke(变量) 动态命令名不在表内）
-- "IPC 事件"章节：用表格列出（事件 | 前端监听点 | 发射点（前端/Rust）），说明事件驱动的交互模式` : ''}
+- "IPC 事件"章节：用表格列出（事件 | 前端监听点 | 发射点（前端/Rust）），说明事件驱动的交互模式；
+  emits 为空但 emitMissSuspect 非空的事件同样标注「扫描口径局限」，禁止断言「无发射点」` : ''}
 - "CLI 命令"章节（如有）：用表格列出（命令名 | 说明 | 源文件位置），并在表格后逐个说明每个命令的功能、参数、使用场景（基于 description/docstring）
 - "导出函数"章节：用表格列出（函数名 | 签名 | 说明 | 源文件:行号），按功能分组。对每个重要函数，补充1-2句说明其用途（基于 docstring/signature）
 - 如果有框架相关的节点（如Controller、Router），用表格列出并说明
@@ -185,11 +188,15 @@ ${hasIpc ? `
             name: c.name,
             frontendCalls: c.frontendCalls.slice(0, 5).map(r => `${r.file}:${r.line}`),
             rustDef: c.rustDef ? `${c.rustDef.file}:${c.rustDef.line}` : null,
+            ...(c.frontendMissSuspect?.length ? { frontendMissSuspect: c.frontendMissSuspect.map(r => `${r.file}:${r.line}`) } : {}),
+            ...(c.rustMissSuspect?.length ? { rustMissSuspect: c.rustMissSuspect.map(r => `${r.file}:${r.line}`) } : {}),
           })),
           events: ctx.ipc!.events.map(e => ({
             name: e.name,
             listeners: e.listeners.slice(0, 5).map(r => `${r.file}:${r.line}`),
             emits: e.emits.slice(0, 5).map(r => `${r.side} ${r.file}:${r.line}`),
+            ...(e.emitMissSuspect?.length ? { emitMissSuspect: e.emitMissSuspect.map(r => `${r.file}:${r.line}`) } : {}),
+            ...(e.listenMissSuspect?.length ? { listenMissSuspect: e.listenMissSuspect.map(r => `${r.file}:${r.line}`) } : {}),
           })),
         },
       } : {}),

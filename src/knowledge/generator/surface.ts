@@ -238,6 +238,7 @@ export async function generateTechStack(deps: GeneratorDeps, ctx: TechStackConte
 - "核心依赖"章节：用表格列出（依赖 | 版本 | 首个 import 点），按职责分组（框架/UI/状态/工具等），对每组用1-2段说明选型理由与协作关系（基于依赖职责与 import 分布，不得编造调用细节）；如提供 intent（依赖相关提交主题 git-commit 证据），选型/引入动机必须优先引用提交主题并携带 commit 哈希+日期锚点（R7），无提交佐证的动机分析标注「推断」
 - "开发依赖"章节：用表格列出（依赖 | 版本 | 首个 import 点），说明各自的开发场景用途
 - "测试专用依赖"章节：如 testDeps 非空，用表格列出（依赖 | 版本 | 首个测试 import 点），明确它们不属于生产运行时技术栈
+- "Rust 依赖栈"章节：如 rustDeps 非空（Cargo.toml），用表格列出（crate | 版本 | 使用），used=true 的说明其在 Rust 侧的职责（基于 crate 名称与常识职责，不得编造调用细节），used=false 的如实标「未检出引用」
 - "声明未用依赖"章节：仅当 unusedDeps 非空时输出表格，且必须在其前写明：「下表由源码 import 扫描推导（覆盖 .ts/.js/.vue/.css），存在动态加载、字符串引用等扫描盲区，清理前请人工复核」——严禁断言这些依赖一定无用
 - 每条 import 点锚点必须原样保留（R1/R3）
 - 内容要充实，让读者理解技术栈全貌与升级影响面`,
@@ -246,6 +247,7 @@ export async function generateTechStack(deps: GeneratorDeps, ctx: TechStackConte
       devDeps: ctx.devDeps,
       testDeps: ctx.testDeps,
       unusedDeps: ctx.unusedDeps,
+      ...(ctx.rustDeps?.length ? { rustDeps: ctx.rustDeps } : {}),
       runtime: ctx.runtime,
       buildTool: ctx.buildTool,
       packageManager: ctx.packageManager,

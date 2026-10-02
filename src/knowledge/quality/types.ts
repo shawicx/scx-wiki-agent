@@ -14,6 +14,8 @@ export type QualityRule =
   | 'unanchored-rationale'
   | 'incomplete-page'
   | 'unanchored-dependency'
+  | 'filler-noise'
+  | 'unverified-absence'
   | 'claim-support';
 
 export interface QualityIssue {
@@ -56,4 +58,7 @@ export interface ValidateOptions {
   readFile?: (file: string) => string | null;
   /** 简名 → 定义文件集（getSymbolIndex 产物）：锚点-符号关联核验用 */
   symbolFiles?: ReadonlyMap<string, ReadonlySet<string>>;
+  /** 「口径局限嫌疑」对象名集（missSuspect 非空）：正文对这些名字下否定性
+   *  结论（未被调用/未检出/无发射点）时 unverified-absence 告警 */
+  absenceSuspects?: ReadonlySet<string>;
 }

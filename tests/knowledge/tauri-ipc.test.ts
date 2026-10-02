@@ -142,4 +142,66 @@ describe('tauri-ipc', () => {
     surface = scanIpcSurface(makeScanResult(['src/Widget.vue', 'src/bus.ts']), new Map());
     expect(surface.events.map(e => e.name)).toEqual(['pty-exit']);
   });
+
+  it('多行 app.emit 调用（Rust 惯用形态）能命中发射点，行号指向事件名所在行', () => {
+    mkdirSync(join(tmp, 'src'), { recursive: true });
+    mkdirSync(join(tmp, 'src-tauri', 'src'), { recursive: true });
+    writeFileSync(join(tmp, 'src', 'bus.ts'), "import { listen } from '@tauri-apps/api/event'\nlisten('monitor-fatal', () => {})\n");
+    writeFileSync(join(tmp, 'src-tauri', 'src', 'monitor.rs'), [
+      'let _ = app.emit(',
+      '    "monitor-fatal",',
+      '    MonitorEvent { message: "x".into() },',
+      ');',
+    ].join('\n'));
+
+    const surface = scanIpcSurface(makeScanResult(['src/bus.ts', 'src-tauri/src/monitor.rs']), new Map());
+    const evt = surface.events.find(e => e.name === 'monitor-fatal');
+    expect(evt).toBeTruthy();
+    expect(evt?.emits).toHaveLength(1);
+    expect(evt?.emits[0]).toMatchObject({ file: 'src-tauri/src/monitor.rs', line: 2, side: 'rust' });
+    expect(evt?.emitMissSuspect).toBeUndefined(); // 已命中，无需二次检索
+  });
+
+  it('嵌套泛型 invoke（invoke<Array<{…}>>）能命中命令名，行号精确', () => {
+    mkdirSync(join(tmp, 'src'), { recursive: true });
+    writeFileSync(join(tmp, 'src', 'history.ts'), [
+      "import { invoke } from '@tauri-apps/api/core'",
+      'export async function load() {',
+      "  const entries = await invoke<Array<{ source: string, runAt: number }>>('history_list', { limit: 10 })",
+      '  return entries',
+      '}',
+    ].join('\n'));
+
+    const surface = scanIpcSurface(makeScanResult(['src/history.ts']), new Map());
+    const cmd = surface.commands.find(c => c.name === 'history_list');
+    expect(cmd).toBeTruthy();
+    expect(cmd?.frontendCalls[0]).toMatchObject({ file: 'src/history.ts', line: 3 });
+    // 已命中调用，不产生口径局限嫌疑
+    expect(cmd?.frontendMissSuspect).toBeUndefined();
+  });
+
+  it('负面断言二次验证：空侧裸检索命中时标记 missSuspect，不再断言不存在', () => {
+    mkdirSync(join(tmp, 'src'), { recursive: true });
+    mkdirSync(join(tmp, 'src-tauri', 'src'), { recursive: true });
+    // 动态命令名（扫描盲区）：invoke(变量) 形态，正则抓不到字面量
+    writeFileSync(join(tmp, 'src', 'dyn.ts'), [
+      "import { invoke } from '@tauri-apps/api/core'",
+      "import { listen } from '@tauri-apps/api/event'",
+      "const cmd = 'history_list'",
+      'await invoke(cmd)',
+      "listen('monitor-sample', () => {})",
+    ].join('\n'));
+    writeFileSync(join(tmp, 'src-tauri', 'src', 'cmd.rs'), [
+      '#[tauri::command]',
+      'pub fn history_list() -> Vec<()> { vec![] }',
+    ].join('\n'));
+
+    const surface = scanIpcSurface(makeScanResult(['src/dyn.ts', 'src-tauri/src/cmd.rs']), new Map());
+    const cmd = surface.commands.find(c => c.name === 'history_list');
+    expect(cmd?.frontendCalls).toHaveLength(0); // 正则未命中
+    expect(cmd?.frontendMissSuspect?.[0]).toMatchObject({ file: 'src/dyn.ts' }); // 裸检索兜底命中
+    const evt = surface.events.find(e => e.name === 'monitor-sample');
+    expect(evt?.emits).toHaveLength(0);
+    expect(evt?.emitMissSuspect).toBeUndefined(); // 全仓确无发射，可如实断言
+  });
 });

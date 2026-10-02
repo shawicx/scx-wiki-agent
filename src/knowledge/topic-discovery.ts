@@ -23,6 +23,8 @@ export interface TopicDefinition {
   id: string;
   title: string;
   files: string[];
+  /** 手工锁定：置 true 后重探测（含 --refresh-topics）不再丢弃该主题 */
+  pinned?: boolean;
 }
 
 const TOPICS_FILE = 'topics.json';
@@ -224,4 +226,26 @@ export function loadTopics(agentDir: string): TopicDefinition[] | null {
 export function saveTopics(agentDir: string, topics: TopicDefinition[]): void {
   mkdirSync(agentDir, { recursive: true });
   writeFileSync(join(agentDir, TOPICS_FILE), JSON.stringify(topics, null, 2), 'utf-8');
+}
+
+/**
+ * 合并手工锁定的主题：重探测结果之上保留 locked 中 pinned 的条目
+ * （文件清单过滤到当前扫描清单内仍存在的，全部失效则丢弃该主题）。
+ * pinned 主题可超出 MAX_TOPICS——用户显式锁定优先于自动配额。
+ */
+export function mergePinnedTopics(
+  discovered: readonly TopicDefinition[],
+  locked: TopicDefinition[] | null,
+  knownFiles: ReadonlySet<string>,
+): TopicDefinition[] {
+  if (!locked || locked.length === 0) return [...discovered];
+  const merged = [...discovered];
+  for (const pin of locked) {
+    if (!pin.pinned) continue;
+    if (merged.some(t => t.id === pin.id)) continue;
+    const files = pin.files.filter(f => knownFiles.has(f));
+    if (files.length === 0) continue;
+    merged.push({ ...pin, files });
+  }
+  return merged;
 }

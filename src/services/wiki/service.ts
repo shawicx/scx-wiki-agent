@@ -17,7 +17,7 @@ import {
 } from '../../knowledge/confirmation.js';
 import { IntentEvidenceProvider } from '../../knowledge/intent-evidence.js';
 import { ConfigDetector } from '../../knowledge/config-detector.js';
-import { TopicDiscovery, loadTopics, saveTopics } from '../../knowledge/topic-discovery.js';
+import { TopicDiscovery, loadTopics, saveTopics, mergePinnedTopics } from '../../knowledge/topic-discovery.js';
 import type { TopicDefinition } from '../../knowledge/topic-discovery.js';
 import { loadOutline, saveOutline, validateOutline } from '../../knowledge/outline.js';
 import type { OutlineFileData, OutlineReport } from '../../knowledge/outline.js';
@@ -26,7 +26,10 @@ import {
   pageRelPath, isTopicPage, topicPageName,
   chapterPageName,
 } from '../../knowledge/page-registry.js';
-import type { WikiBuildOptions, DataFlowContext } from '../../knowledge/types.js';
+import type { WikiBuildOptions } from '../../knowledge/types.js';
+import { runPagePrechecks } from './precheck.js';
+
+export { dataFlowDropReason } from './precheck.js';
 import { VerificationHub } from './verification.js';
 import {
   cleanupLegacyFlatFiles,
@@ -37,27 +40,17 @@ import {
   cleanupStaleNumberedDirFiles,
 } from './cleanup.js';
 import { printBuildReport } from './report.js';
+import { archiveWikiDir } from './archive.js';
 import { runConfirmPhase } from './confirm-phase.js';
 import { writeProducedPages } from './write-phase.js';
 import { generateAllPages } from './generate-phase.js';
 import { resolvePages } from './resolve.js';
 import { crosspageReview } from '../../knowledge/crosspage/index.js';
 import { applyCrossPageActions } from '../../knowledge/crosspage/actions.js';
+import { stripUnplannedPageLinks } from '../../knowledge/ghost-links.js';
+import { summarizeIpcConsistency } from '../../knowledge/ipc-consistency.js';
+import { resetChannelStats, getChannelStats } from '../../knowledge/channels/stats.js';
 import type { ProducedEntry } from './types.js';
-
-/**
- * data-flow 成页预检：仅有控制流边（无签名、无调用实参、无返回类型、无 I/O 数据形态证据）
- * 时不得成页——否则页面退化成 calls.md 的复制品。返回 null 表示可成页，否则返回剔除原因。
- */
-export function dataFlowDropReason(ctx: DataFlowContext | null): string | null {
-  if (!ctx || ctx.sequences.length === 0) {
-    return '无执行序列数据（可信 CALLS 边不足），跳过空壳页生成';
-  }
-  if (ctx.stages.length === 0 || ctx.shapeCoverage.dataBearingTransitions === 0) {
-    return '仅有控制流边，缺少签名、调用参数、返回类型或 I/O 数据形态证据，跳过 data-flow 页生成';
-  }
-  return null;
-}
 
 export class WikiService {
   private readonly verify: VerificationHub;
@@ -70,6 +63,8 @@ export class WikiService {
   }
 
   async buildWiki(wikiDir: string, options?: WikiBuildOptions): Promise<string[]> {
+    // 通道统计生命周期：构建开始清零，各通道采集时累计，报告统一打印（W6）
+    resetChannelStats();
     // .wiki 为工具独占目录：full 模式在写盘前整目录重建（无陈旧残留、无外来目录，也不告警）。
     // wipe 安排在规划/预检之后：规划期异常直接中止时旧 .wiki 保持原样，不留下空目录。
     // update 模式保留存量以便内容一致时跳过重写，陈旧产物由逐路径清理负责。
@@ -79,11 +74,17 @@ export class WikiService {
     // 确保图谱已索引（替代旧的 index 阶段）
     this.client.ensureIndexed('moderate');
 
-    // 主题页定义：topics.json 锁定（缺失或 --refresh-topics 时确定性探测）
+    // 主题页定义：topics.json 锁定（缺失或 --refresh-topics 时确定性探测）；
+    // pinned 条目（手工置 pinned: true）在重探测后仍保留，高价值主题不会被换簇挤掉
     const agentDir = join(dirname(wikiDir), '.scx-wiki-agent');
     let topics = options?.refreshTopics ? null : loadTopics(agentDir);
     if (topics === null) {
-      topics = new TopicDiscovery(this.client, this.scanResult).discover();
+      const locked = loadTopics(agentDir);
+      const discovered = new TopicDiscovery(this.client, this.scanResult).discover();
+      topics = mergePinnedTopics(
+        discovered, locked,
+        new Set(this.scanResult.productionFiles.map(f => f.relativePath)),
+      );
       saveTopics(agentDir, topics);
     }
     const topicPages = topics.map(t => topicPageName(t.id));
@@ -169,46 +170,18 @@ export class WikiService {
     const skippedPages: Array<{ page: string; reason: string }> = [];
     const legacyRemoved: string[] = [];
 
-    // data-flow 预检：没有数据形态证据时整页剔除（诚实空壳页对读者无价值，
-    // 且纯控制流边会让 data-flow 退化成 calls.md 复制品）。
-    // 必须在 plannedPaths / README 索引 / 编号目录清理计算前完成，否则目录表与 Related
-    // 会出现指向未产出页的死链。预检构建的 context 存入 prebuiltContexts 复用
-    // （getArchitecture 无缓存，避免同一图谱查询跑两遍）。
-    const prebuiltContexts = new Map<string, unknown>();
-    if (pages.includes('data-flow')) {
-      const dfContext = contextBuilder.buildByName('data-flow', pages) as DataFlowContext | null;
-      const dropReason = dataFlowDropReason(dfContext);
-      if (dropReason === null && dfContext) {
-        prebuiltContexts.set('data-flow', dfContext);
-      } else {
-        pages = pages.filter(p => p !== 'data-flow');
-        const oldRel = pageRelPath('data-flow');
-        const oldPath = join(wikiDir, oldRel);
-        if (existsSync(oldPath)) {
-          rmSync(oldPath);
-          legacyRemoved.push(oldRel);
-        }
-        skippedPages.push({ page: 'data-flow', reason: dropReason ?? '缺少数据形态证据，跳过空壳页生成' });
-      }
-    }
+    // 归档标签：HEAD 短哈希（无 git 时时间戳）；repoHead 在此提前取定供下文复用
+    const repoHead = currentHead(this.scanResult.rootDir);
+    const archiveLabel = repoHead?.slice(0, 8)
+      ?? new Date().toISOString().replace(/[^0-9TZ]/g, '');
 
-    // decisions 预检：git 演进/文档决策证据全缺时整页剔除（复用 data-flow 同款模式，
-    // 避免规划表与 Related 出现死链；预检 context 复用避免重复探测）
-    if (pages.includes('decisions')) {
-      const decContext = contextBuilder.buildByName('decisions', pages);
-      if (decContext !== null && decContext !== undefined) {
-        prebuiltContexts.set('decisions', decContext);
-      } else {
-        pages = pages.filter(p => p !== 'decisions');
-        const oldRel = pageRelPath('decisions');
-        const oldPath = join(wikiDir, oldRel);
-        if (existsSync(oldPath)) {
-          rmSync(oldPath);
-          legacyRemoved.push(oldRel);
-        }
-        skippedPages.push({ page: 'decisions', reason: '无决策证据（git 历史/设计文档均不可用），跳过空壳页生成' });
-      }
-    }
+    // data-flow / decisions 预检：证据不足时整页剔除（预检 context 复用避免重复
+    // 图谱查询；被剔除的旧页面文件先归档留档，不再静默消失）
+    const precheck = runPagePrechecks(contextBuilder, wikiDir, agentDir, archiveLabel, pages);
+    pages = precheck.pages;
+    const prebuiltContexts = precheck.prebuiltContexts;
+    skippedPages.push(...precheck.skipped);
+    legacyRemoved.push(...precheck.legacyRemoved);
 
     // 接管式清理（update 模式路径；full 模式写盘前整目录重建，跳过）：
     // 旧版扁平产物 + 已退休页面路径 + 未列入计划的主题页/章节页/编号目录残留 + 空目录
@@ -233,7 +206,6 @@ export class WikiService {
     // 持久化确认（confirmations.json v2 指纹条目）：指纹仍有效的 claim 本次免标；
     // 过期条目（HEAD 变且文件哈希失配 / 歧义名 HEAD-scoped 过期）重新进入待确认
     // 队列并从 store 剪除，计数进构建报告（不静默沿用）。
-    const repoHead = currentHead(this.scanResult.rootDir);
     const hashOf = hashFileContent(this.scanResult.rootDir);
     const storedEntries = loadConfirmedEntries(agentDir);
     const { validRaws: persistedConfirmed, stale: staleConfirmed } =
@@ -242,8 +214,14 @@ export class WikiService {
     const staleSet = new Set(staleConfirmed);
     let confirmedEntries = storedEntries.filter(e => !staleSet.has(e));
 
-    // full 模式：写盘前整目录重建（此刻规划已全部成功，后续任意页失败也有逐页降级兑底）
+    // full 模式：写盘前整目录重建（此刻规划已全部成功，后续任意页失败也有逐页降级兑底）；
+    // 清空前先归档旧产物（.scx-wiki-agent/archive/<head>/）——高价值历史内容
+    // 一旦掉出判定窗口仍有档可查，归档 fail-open 绝不阻断构建
     if (mode === 'full') {
+      const archived = archiveWikiDir(wikiDir, agentDir, archiveLabel);
+      if (archived) {
+        console.log(`[wiki] 旧产物已归档：${archived}`);
+      }
       rmSync(wikiDir, { recursive: true, force: true });
       mkdirSync(wikiDir, { recursive: true });
     }
@@ -276,6 +254,21 @@ export class WikiService {
       if (crossReport.actions.length === 0) break;
       entry.content = applyCrossPageActions(entry.content, entry.context, entry.page, crossReport.actions);
     }
+
+    // ---- 幽灵链接剥离（写盘前的确定性清洗）----
+    // LLM 正文可能链接到「注册表有名但本次未规划」的页面（如 routing 页被跳过），
+    // dead-link 规则只 warn 不拦截——此处直接把死链降格为纯文本。
+    let ghostStripped = 0;
+    for (const entry of producedEntries) {
+      const [cleaned, n] = stripUnplannedPageLinks(entry.content, plannedPaths);
+      if (n > 0) {
+        entry.content = cleaned;
+        ghostStripped += n;
+      }
+    }
+
+    // IPC 对账摘要（口径局限 vs 真孤儿，供人工核对页面断言与扫描盲区一致性）
+    const ipcConsistency = summarizeIpcConsistency(contexts.values());
 
     // ---- 阶段二：待确认项人工裁决（生成后、写盘前，单次会话跨页去重） ----
     const confirmResult = await runConfirmPhase(
@@ -314,6 +307,9 @@ export class WikiService {
       { issues: crossReport.issues, actions: crossReport.actions },
       intentProvider.candidateStats(),
       this.safeGraphLanguages(),
+      ipcConsistency,
+      ghostStripped,
+      getChannelStats(),
     );
     return writeResult.filenames;
   }

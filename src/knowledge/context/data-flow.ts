@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join, isAbsolute } from 'node:path';
 import type { SymbolType } from '../../core/types.js';
-import { languageDomainOf } from '../../shared/utils.js';
+import { sanitizeEdge } from '../channels/sanitizer.js';
 import {
   collectDataFlowShapes,
   parseEdgeArgs,
@@ -155,34 +155,12 @@ function collectDataFlowShapeEvidence(deps: ContextDeps, facts: TransitionFacts[
 }
 
 /**
- * 调用边可信性判定（图谱消费端防线，拦上游误建边）：
- * 1. 语言域一致——caller/callee 文件必须同属一个语言域（ts/rust），排除跨语言
- *    幽灵边（如 Rust run() 调 TS 前端函数）与非代码节点（tauri.conf.json 作被调方）；
- * 2. 词法核验——caller 源码中必须出现 callee 名（拦 constructor→write 这类
- *    把类成员定义误判为调用的边）。文件缺失/不可读时按可信处理（宁漏勿误）。
+ * 调用边可信性判定（图谱消费端防线，拦上游误建边）。
+ * 实现已上移至通道级净化器（channels/sanitizer.ts，W3）——本函数保留为
+ * 兼容壳，语义不变：跨语言幽灵边 / 非代码节点 / 无词法佐证的边全部不可信。
  */
 export function isTrustedCallEdge(deps: ContextDeps, callerFile: string, calleeFile: string, calleeName: string): boolean {
-  const callerDomain = languageDomainOf(callerFile);
-  const calleeDomain = languageDomainOf(calleeFile);
-  if (callerDomain === null || calleeDomain === null || callerDomain !== calleeDomain) return false;
-  return edgeHasLexicalEvidence(deps, callerFile, calleeName);
-}
-
-export function edgeHasLexicalEvidence(deps: ContextDeps, callerFile: string, calleeName: string): boolean {
-  if (!callerFile || !calleeName) return true;
-  let src = deps.sourceCache.get(callerFile);
-  if (src === undefined) {
-    const abs = isAbsolute(callerFile) ? callerFile : join(deps.scanResult.rootDir, callerFile);
-    try {
-      src = readFileSync(abs, 'utf-8');
-    } catch {
-      src = null;
-    }
-    deps.sourceCache.set(callerFile, src);
-  }
-  if (src === null) return true;
-  const escaped = calleeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`\\b${escaped}\\b`).test(src);
+  return sanitizeEdge(deps, { callerFile, calleeFile, calleeName }) === 'ok';
 }
 
 /**

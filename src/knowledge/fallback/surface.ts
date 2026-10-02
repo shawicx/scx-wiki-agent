@@ -20,9 +20,18 @@ export function buildApi(ctx: ApiContext): string {
         ['命令', '前端调用点', 'Rust 定义', '状态'],
         ctx.ipc.commands.map(c => [
           `\`${c.name}\``,
-          c.frontendCalls.slice(0, 3).map(r => `${r.file}:${r.line}`).join('<br>') || '-',
-          c.rustDef ? `${c.rustDef.file}:${c.rustDef.line}` : '-',
-          c.rustDef === null ? '仅前端调用' : c.frontendCalls.length === 0 ? '未被前端调用' : '双侧',
+          c.frontendCalls.slice(0, 3).map(r => `${r.file}:${r.line}`).join('<br>')
+            || (c.frontendMissSuspect?.length
+              ? `扫描口径局限（源码存在引用：${c.frontendMissSuspect.map(r => `${r.file}:${r.line}`).join('<br>')}）`
+              : '-'),
+          c.rustDef ? `${c.rustDef.file}:${c.rustDef.line}`
+            : (c.rustMissSuspect?.length
+              ? `扫描口径局限（源码存在疑似定义：${c.rustMissSuspect.map(r => `${r.file}:${r.line}`).join('<br>')}）`
+              : '-'),
+          c.rustDef === null && c.rustMissSuspect?.length ? '对表未对齐（口径局限）'
+            : c.rustDef === null ? '仅前端调用'
+            : c.frontendCalls.length === 0 && c.frontendMissSuspect?.length ? '对表未对齐（口径局限）'
+            : c.frontendCalls.length === 0 ? '未被前端调用' : '双侧',
         ]),
       );
     }
@@ -31,8 +40,12 @@ export function buildApi(ctx: ApiContext): string {
         ['事件', '前端监听点', '发射点'],
         ctx.ipc.events.map(e => [
           `\`${e.name}\``,
-          e.listeners.slice(0, 3).map(r => `${r.file}:${r.line}`).join('<br>') || '-',
-          e.emits.slice(0, 3).map(r => `${r.side} ${r.file}:${r.line}`).join('<br>') || '-',
+          e.listeners.slice(0, 3).map(r => `${r.file}:${r.line}`).join('<br>')
+            || (e.listenMissSuspect?.length ? '扫描口径局限（源码存在引用）' : '-'),
+          e.emits.slice(0, 3).map(r => `${r.side} ${r.file}:${r.line}`).join('<br>')
+            || (e.emitMissSuspect?.length
+              ? `扫描口径局限（源码存在引用：${e.emitMissSuspect.map(r => `${r.file}:${r.line}`).join('<br>')}）`
+              : '-'),
         ]),
       );
     }

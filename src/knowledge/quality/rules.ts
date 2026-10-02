@@ -265,3 +265,55 @@ export function checkUnanchoredDependency(text: string, opts: ValidateOptions, i
     });
   }
 }
+
+/**
+ * unverified-absence（W5 事后核验）：正文对「口径局限嫌疑」对象
+ * （通道 missSuspect 非空的名字）下否定性结论（未被调用/未检出/无发射点）
+ * 时告警——嫌疑对象必须标「扫描口径局限」，禁止断言不存在。
+ */
+const NEGATIVE_ASSERTION_RE = /未被(?:前端)?调用|未检出|无发射点|无监听点/;
+const BACKTICK_NAME_RE = /`([^`\n]+)`/g;
+
+export function checkUnverifiedAbsence(text: string, opts: ValidateOptions, issues: QualityIssue[]): void {
+  const suspects = opts.absenceSuspects;
+  if (!suspects || suspects.size === 0) return;
+  const flagged = new Set<string>();
+  for (const line of text.split('\n')) {
+    if (!NEGATIVE_ASSERTION_RE.test(line)) continue;
+    if (line.includes('口径局限')) continue; // 已按口径局限标注的行合规
+    BACKTICK_NAME_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = BACKTICK_NAME_RE.exec(line)) !== null) {
+      const name = m[1].trim();
+      if (suspects.has(name) || suspects.has(name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase())) {
+        flagged.add(name);
+      }
+    }
+  }
+  if (flagged.size > 0) {
+    issues.push({
+      rule: 'unverified-absence',
+      severity: 'warn',
+      message: `对口径局限嫌疑对象下了否定性结论（须标「扫描口径局限」）：${[...flagged].slice(0, 5).join('、')}`,
+    });
+  }
+}
+
+/** 「数据未提供」类数据集口吻填充行（关于数据集而非项目的叙述） */
+const FILLER_RE = /数据未提供|数据集口吻|nodeVersion 为空/;
+
+/**
+ * 填充噪音检测：页面大量出现「数据未提供」类数据集填充行，说明该页退化成
+ * 数据工件转储而非面向读者的文档（如实声明边界用「未检出/无证据」措辞）。
+ * warn 不拦截，倒逼要么补数据通道、要么砍薄页面。
+ */
+export function checkFillerNoise(text: string, _opts: ValidateOptions, issues: QualityIssue[]): void {
+  const hits = text.split('\n').filter(l => FILLER_RE.test(l)).length;
+  if (hits > 10) {
+    issues.push({
+      rule: 'filler-noise',
+      severity: 'warn',
+      message: `「数据未提供」类填充行 ${hits} 行（>10）：页面疑似数据工件转储，建议补证据通道或收敛页面范围`,
+    });
+  }
+}

@@ -160,6 +160,8 @@ export interface TechStackContext {
   runtime: string;
   buildTool: string;
   packageManager: string;
+  /** Rust 依赖栈（src-tauri/Cargo.toml [dependencies]/[dev-dependencies]；非 Rust 项目为空/缺省） */
+  rustDeps?: Array<{ name: string; version: string; used: boolean }>;
   /** 依赖相关提交主题（选型/引入动机的 git 证据） */
   intent?: IntentEvidence[];
 }

@@ -97,6 +97,10 @@ export interface IpcCommand {
   name: string;
   frontendCalls: IpcRef[];
   rustDef: IpcRef | null;
+  /** 前端调用为空时的二次检索命中点：非空 = 扫描口径局限，不得断言「未被前端调用」 */
+  frontendMissSuspect?: IpcRef[];
+  /** Rust 定义为空时的二次检索命中点：非空 = 扫描口径局限 */
+  rustMissSuspect?: IpcRef[];
 }
 
 /** IPC 事件：前端 listen ↔ 前端/Rust emit 对表 */
@@ -104,6 +108,10 @@ export interface IpcEvent {
   name: string;
   listeners: IpcRef[];
   emits: Array<IpcRef & { side: 'frontend' | 'rust' }>;
+  /** 发射点为空时的二次检索命中点：非空 = 扫描口径局限，不得断言「无发射点」 */
+  emitMissSuspect?: IpcRef[];
+  /** 监听点为空时的二次检索命中点：非空 = 扫描口径局限 */
+  listenMissSuspect?: IpcRef[];
 }
 
 /** Tauri IPC 面（tauri-ipc.ts 正则扫描产物） */

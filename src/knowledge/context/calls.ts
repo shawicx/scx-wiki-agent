@@ -2,6 +2,8 @@ import { isTestPath } from '../../shared/utils.js';
 import { isTauriProject, scanIpcSurface } from '../tauri-ipc.js';
 import type { CallsContext, ClassesContext } from '../types.js';
 import { isTrustedCallEdge } from './data-flow.js';
+import { mergeGraphSignature } from '../signature.js';
+import { hasRustSources, scanRustMethodCalls } from '../channels/rust-methods.js';
 import {
   type ContextDeps,
   isAppEntryPoint,
@@ -50,6 +52,10 @@ export function topCallerAnchors(deps: ContextDeps): Array<{ name: string; file:
  */
 export function buildCallsContext(deps: ContextDeps): CallsContext {
   const arch = deps.client.getArchitecture();
+
+  // Rust 方法调用通道（W2）：接收者调用图谱不建边，通道补位（统计进报告；
+  // v1 不注入主表，避免破坏组内去重口径）
+  if (hasRustSources(deps)) scanRustMethodCalls(deps);
 
   const groups: CallsContext['groups'] = [];
 
@@ -191,13 +197,13 @@ export function collectCallEdges(
  * 方向是 (c:Class)-[:DEFINES_METHOD]->(m:Method)。
  */
 export function buildClassesContext(deps: ContextDeps): ClassesContext {
-  // 查所有类及其方法（DEFINES_METHOD 方向：Class → Method）
+  // 查所有类及其方法（DEFINES_METHOD 方向：Class → Method）；签名统一合并 return_type（W4）
   const q = deps.client.queryGraph(
     `MATCH (c:Class)-[:DEFINES_METHOD]->(m:Method)
        WHERE c.is_test = false
        RETURN c.name AS cls, c.qualified_name AS qn, c.file_path AS cfile, c.start_line AS cline,
               m.name AS mname, m.signature AS msig, m.visibility AS mvis,
-              m.docstring AS mdoc, m.file_path AS mfile, m.start_line AS mline
+              m.docstring AS mdoc, m.file_path AS mfile, m.start_line AS mline, m.return_type AS mrt
        ORDER BY c.name, m.start_line LIMIT 500`,
   );
 
@@ -217,7 +223,7 @@ export function buildClassesContext(deps: ContextDeps): ClassesContext {
     }
     classMap.get(clsName)!.methods.push({
       name: row[4] as string,
-      signature: (row[5] as string) ?? '',
+      signature: mergeGraphSignature(row[5] as string | null, row[10] as string | null, (row[8] as string) ?? '') ?? '',
       visibility: (row[6] as string) ?? 'public',
       docstring: (row[7] as string) ?? null,
       filePath: (row[8] as string) ?? '',

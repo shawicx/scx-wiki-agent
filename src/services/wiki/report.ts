@@ -5,6 +5,7 @@ import type { ClaimStats } from '../../knowledge/claim-verifier.js';
 import type { OutlineReport } from '../../knowledge/outline.js';
 import type { CrossPageAction, CrossPageIssue } from '../../knowledge/crosspage/types.js';
 import type { IntentCandidateStats } from '../../knowledge/intent/shared.js';
+import type { ChannelStats } from '../../knowledge/channels/stats.js';
 
 export type PageStatus = 'created' | 'updated' | 'unchanged';
 
@@ -40,6 +41,9 @@ export function printBuildReport(
   crossPage?: { issues: CrossPageIssue[]; actions: CrossPageAction[] },
   intentCandidates?: IntentCandidateStats | null,
   graphLanguages?: Array<{ language: string; file_count: number }>,
+  ipcConsistency?: { scanLimit: string[]; unmatched: string[] } | null,
+  ghostStripped?: number,
+  channelStats?: Readonly<ChannelStats> | null,
 ): void {
   const lines: string[] = ['[wiki] 构建报告：'];
 
@@ -215,6 +219,47 @@ export function printBuildReport(
   // 图谱语言覆盖（多语言仓库核对 MCP 索引范围：实验性语言的图谱通道是否可用）
   if (graphLanguages && graphLanguages.length > 0) {
     lines.push(`  图谱语言覆盖：${graphLanguages.map(l => `${l.language} ${l.file_count}`).join(' / ')}`);
+  }
+
+  // 通道覆盖（W6：每条确定性通道的命中/过滤指标，全部可回归）
+  if (channelStats) {
+    const parts: string[] = [];
+    const vs = channelStats.vueSfc;
+    if (vs) {
+      parts.push(`vue-sfc ${vs.components} 组件/${vs.files} 文件（props ${vs.props}·emits ${vs.emits}${vs.fallbackFiles > 0 ? `·回落 ${vs.fallbackFiles}` : ''}）`);
+    }
+    const rm = channelStats.rustMethods;
+    if (rm && rm.methods > 0) {
+      parts.push(`rust-methods resolved ${rm.resolved}·ambiguous ${rm.ambiguous}（方法全集 ${rm.methods}）`);
+    }
+    const ef = channelStats.edgeFilter;
+    if (ef && (ef.crossLanguage + ef.nonCode + ef.noLexicalEvidence) > 0) {
+      parts.push(`假边过滤 ${ef.crossLanguage + ef.nonCode + ef.noLexicalEvidence}（跨语言 ${ef.crossLanguage}·非代码 ${ef.nonCode}·无词法 ${ef.noLexicalEvidence}）`);
+    }
+    const nc = channelStats.negativeClaim;
+    if (nc && (nc.suspect + nc.confirmed) > 0) {
+      parts.push(`负面断言 suspect ${nc.suspect}/confirmed ${nc.confirmed}`);
+    }
+    if (parts.length > 0) lines.push(`  通道覆盖：${parts.join('｜')}`);
+  }
+
+  // 幽灵链接剥离（指向「已注册但未规划」页面的死链已降格为纯文本）
+  if (ghostStripped && ghostStripped > 0) {
+    lines.push(`  幽灵链接：剥离 ${ghostStripped} 处（目标页本次未规划，死链已降格为纯文本）`);
+  }
+
+  // IPC 对账（口径局限 vs 真孤儿：负面断言必须与二次检索口径一致）
+  if (ipcConsistency && (ipcConsistency.scanLimit.length > 0 || ipcConsistency.unmatched.length > 0)) {
+    lines.push(
+      `  IPC 对账：口径局限 ${ipcConsistency.scanLimit.length} 条（页面须标「扫描口径局限」）`
+      + `，真孤儿 ${ipcConsistency.unmatched.length} 条（可如实断言未调用/无发射点）`,
+    );
+    for (const s of ipcConsistency.scanLimit.slice(0, 10)) {
+      lines.push(`    - [口径局限] ${s}`);
+    }
+    if (ipcConsistency.scanLimit.length > 10) {
+      lines.push(`    - …另有 ${ipcConsistency.scanLimit.length - 10} 条`);
+    }
   }
 
   // 意图候选排序观测（防「按体积截断挤掉小核心文件」回归：入口/被测占比可见）

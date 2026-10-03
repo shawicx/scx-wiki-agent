@@ -88,16 +88,29 @@ function extractWithCompiler(relativePath: string, src: string, componentName: s
 
   // 编译器 setup 绑定全集（BINDING_CONST / BINDING_PROPS 等）——
   // 用作内部声明的校验与补全，名称仍以源码行级锚点为准
-  let setupBindings: string[] = [];
+  let bindings: Record<string, unknown> = {};
   try {
     const compiled = compileScript(descriptor as never, { id: relativePath, inlineTemplate: false });
-    setupBindings = Object.keys(compiled.bindings ?? {});
+    bindings = compiled.bindings ?? {};
   } catch { /* 类型异常不阻断：源码遍历仍可用 */ }
+  const setupBindings = Object.keys(bindings);
 
   const out: Pick<VueSfcFacts, 'props' | 'emits' | 'internals' | 'imports'> = {
     props: [], emits: [], internals: [], imports: [],
   };
   extractFromScript(block?.content ?? '', relativePath, lineOf, out);
+
+  // props 权威名单取编译器绑定中的 PROPS 类（'props' / 'setup-props' 等）：
+  // 正则按行提取在跨行/嵌套类型块与 interface 引用形态上会漏键（实测 7→2），
+  // 编译器做完整类型解析；锚点沿用正则已定位的 defineProps 行
+  const propBindingNames = Object.entries(bindings)
+    .filter(([, kind]) => /props/i.test(String(kind)))
+    .map(([name]) => name);
+  if (propBindingNames.length > 0) {
+    const byName = new Map(out.props.map(p => [p.name, p]));
+    const anchor = out.props[0]?.anchor ?? { file: relativePath, line: lineOf(1) };
+    out.props = propBindingNames.map(n => byName.get(n) ?? { name: n, required: true, anchor });
+  }
 
   // 编译器绑定里有、源码遍历漏掉的内部声明（罕见形态）按块首锚点补入
   const known = new Set([...out.internals.map(i => i.name), ...out.props.map(p => p.name)]);

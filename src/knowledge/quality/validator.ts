@@ -23,8 +23,8 @@
  *   拒绝写盘并降级规则路径重建。
  * - unanchored-dependency (warn)：tech-stack 页核心/开发/测试依赖表格行缺
  *   import 点锚点（R3 事后核验：依赖"用途"须有 import 点佐证，不能只报名字）。
- * - filler-noise    (warn) ：「数据未提供」类数据集填充行过多（>10 行），
- *   页面疑似数据工件转储而非面向读者的文档。
+ * - filler-noise   (error) ：「数据未提供」类数据集填充行过多（>10 行），
+ *   页面疑似数据工件转储（sanitizer 已降级后仍超限 → 降级规则路径）。
  *
  * error 拒绝写盘；warn 记入构建报告。纯函数，不做 I/O。
  */

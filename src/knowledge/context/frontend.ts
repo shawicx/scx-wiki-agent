@@ -46,6 +46,75 @@ function hasTestPaired(deps: ContextDeps, base: string): boolean {
     && basename(f.relativePath).replace(/\.(?:test|spec)\.[cm]?[jt]sx?$/, '') === base);
 }
 
+/** 从 start 起取平衡的开闭符内容（不平衡返回 null） */
+function balancedSlice(src: string, start: number, open: string, close: string): string | null {
+  if (src[start] !== open) return null;
+  let depth = 0;
+  for (let i = start; i < src.length; i++) {
+    if (src[i] === open) depth++;
+    else if (src[i] === close) {
+      depth--;
+      if (depth === 0) return src.slice(start + 1, i);
+    }
+  }
+  return null;
+}
+
+/**
+ * pinia `state: () => ({ ... })` 返回对象的顶层键计数。
+ * 旧的「store 行后 3000 字符窗口数缩进键」会把 actions/getters/嵌套键一起计入
+ * （实测 tabs 15 vs 实际 4）——改为解析 state 工厂函数返回的对象字面量。
+ */
+function piniaStateKeyCount(src: string, fromIdx: number): number {
+  const sm = src.slice(fromIdx).match(/\bstate\s*:/);
+  if (sm && sm.index !== undefined) {
+    const region = src.slice(fromIdx + sm.index, fromIdx + sm.index + 6000);
+    // 选项式工厂体两种形态：`state: () => ({ ... })` / `state() { return { ... } }`
+    const body = region.match(/(?:=>|return)\s*\(?\s*\{/);
+    if (body && body.index !== undefined) {
+      const obj = balancedSlice(region, body.index + body[0].length - 1, '{', '}');
+      if (obj !== null) return countTopLevelKeys(obj);
+    }
+    return 0;
+  }
+  // setup 式（`defineStore(id, () => { ... })`，无 state: 选项）：
+  // 状态面 = const 声明的 ref/reactive/computed（theme 实测 isDark+epoch=2）
+  const setup = src.slice(fromIdx).match(/defineStore\s*\(\s*['"`][^'"`]+['"`]\s*,\s*(?:async\s*)?\(\s*\)\s*=>\s*\{/);
+  if (!setup || setup.index === undefined) return 0;
+  const bodyStart = fromIdx + setup.index + setup[0].length - 1;
+  const body = balancedSlice(src, bodyStart, '{', '}');
+  if (body === null) return 0;
+  return (body.match(/^\s*(?:const|let)\s+[A-Za-z_$][\w$]*\s*=\s*(?:ref|reactive|computed|shallowRef|customRef)\s*[<(]/gm) ?? []).length;
+}
+
+/**
+ * store 消费文件计数：按 kind 分派的调用形匹配——
+ * pinia 的 id（如 `monitor`）是普通词，裸词全文匹配会把 UI 文本/注释全算上
+ * （实测 theme 11 vs 实际 3）；真正的消费形是 `use<Id>Store(` 调用，
+ * 且声明文件自身不计（`function useThemeStore(` 也匹配调用形）。
+ */
+function storeConsumerCount(
+  sources: Array<{ rel: string; src: string }>,
+  store: { name: string; kind: string; file: string },
+): number {
+  let re: RegExp;
+  if (store.kind === 'pinia') {
+    const hook = `use${store.name[0].toUpperCase()}${store.name.slice(1).replace(/[^A-Za-z0-9]/g, '')}Store`;
+    re = new RegExp(`\\b${hook}\\s*\\(`, 'g');
+  } else if (store.kind === 'composable' || store.kind === 'zustand') {
+    re = new RegExp(`\\b${store.name}\\s*\\(`, 'g');
+  } else {
+    return lexicalUseCount(sources, store.name);
+  }
+  let count = 0;
+  for (const { rel, src } of sources) {
+    if (rel === store.file) continue;
+    re.lastIndex = 0;
+    if (re.test(src)) count++;
+  }
+  return count;
+}
+
 /** defineProps/defineEmits 的声明计数（仅统计顶层声明，payload 字段不计入） */
 function declCount(source: string, api: 'defineProps' | 'defineEmits'): number {
   // 类型参数形态：defineProps<{ name: string; age: number }> → 计顶层 key 数
@@ -170,8 +239,11 @@ export function buildStateContext(deps: ContextDeps): StateContext | null {
         if (composable) hit = { name: composable[1], kind: 'composable' };
       }
       if (hit) {
-        const stateRegion = src.slice(Math.max(0, src.indexOf(line)), src.indexOf(line) + 3000);
-        const stateKeys = (stateRegion.match(/^\s{2,}[A-Za-z_$][\w$]*\s*[:,]/gm) ?? []).length;
+        // pinia：精确解析 state 工厂对象顶层键；其余 kind 沿用区域启发式
+        const stateKeys = hit.kind === 'pinia'
+          ? piniaStateKeyCount(src, src.indexOf(line))
+          : (src.slice(src.indexOf(line), src.indexOf(line) + 3000)
+              .match(/^\s{2,}[A-Za-z_$][\w$]*\s*[:,]/gm) ?? []).length;
         stores.push({
           name: hit.name, kind: hit.kind, file: rel, line: i + 1,
           stateKeys, consumerCount: 0,
@@ -181,7 +253,7 @@ export function buildStateContext(deps: ContextDeps): StateContext | null {
   }
 
   if (stores.length === 0) return null;
-  for (const s of stores) s.consumerCount = lexicalUseCount(sources, s.name);
+  for (const s of stores) s.consumerCount = storeConsumerCount(sources, s);
   return { stores };
 }
 

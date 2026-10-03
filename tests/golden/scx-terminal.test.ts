@@ -45,9 +45,9 @@ describe.skipIf(!repoReady)('golden：scx-terminal', () => {
     const cases: Array<[string, string[], string[]]> = [
       ['split/SplitContainer.vue',
         ['leafActivated', 'leafTitle', 'paneClosed', 'leafSplit', 'leafBell', 'treeUpdated'],
-        ['node']],
-      ['settings/TabGroupFormDialog.vue', ['update:open', 'submit'], []],
-      ['sftp/SftpBrowserPane.vue', ['transfer', 'pathChange', 'rowDragstart'], ['side', 'path']],
+        ['node', 'activeLeafId', 'tabActive', 'profile']],
+      ['settings/TabGroupFormDialog.vue', ['update:open', 'submit'], ['open', 'editing', 'title']],
+      ['sftp/SftpBrowserPane.vue', ['transfer', 'pathChange', 'rowDragstart'], ['side', 'homePath', 'lister', 'ops', 'disabled', 'dropActive', 'dropDirPath']],
     ];
     for (const [rel, emits, props] of cases) {
       const facts = extractVueSfcFacts(`src/components/${rel}`, join(REPO, 'src/components', rel));

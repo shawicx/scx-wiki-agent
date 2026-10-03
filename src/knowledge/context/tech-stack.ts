@@ -81,9 +81,10 @@ export function buildTechStackContext(ctxDeps: ContextDeps): TechStackContext {
  * Rust 依赖栈：src-tauri/Cargo.toml（回落根 Cargo.toml）的
  * [dependencies]/[dev-dependencies]/[build-dependencies] 表。
  * 使用判定：生产 .rs 文件中出现 `use <crate>` / `extern crate` / `<crate>::`。
- * TOML 用行级解析（crate 行都是 `name = "version"` 单行形态，够用且零依赖）。
+ * TOML 行级解析覆盖两种形态：`name = "version"` 与 `name = { version = "...", ... }`
+ * （v3 实测：漏内联表形态时恰丢最核心的 tauri/serde/tokio 等 crate）。
  */
-function collectRustDeps(ctxDeps: ContextDeps): Array<{ name: string; version: string; used: boolean }> {
+export function collectRustDeps(ctxDeps: ContextDeps): Array<{ name: string; version: string; used: boolean }> {
   const candidates = ['src-tauri/Cargo.toml', 'Cargo.toml'];
   let toml: string | null = null;
   for (const c of candidates) {
@@ -120,7 +121,12 @@ function collectRustDeps(ctxDeps: ContextDeps): Array<{ name: string; version: s
     if (sm) { section = sm[1]; continue; }
     if (!/^(dependencies|dev-dependencies|build-dependencies)$/.test(section)) continue;
     if (line.startsWith('#') || line.startsWith('#[')) continue;
-    const dm = line.match(/^([A-Za-z0-9_-]+)\s*=\s*"([^"]+)"/);
+    // 两种形态都要覆盖（v3 实测：只匹配简单形态时内联表 crate 全漏，
+    // 恰是带 features 的核心依赖 tauri/serde/tokio/rusqlite/reqwest 等）：
+    //   serde_json = "1"
+    //   tauri = { version = "2", features = ["devtools"] }
+    const dm = line.match(/^([A-Za-z0-9_-]+)\s*=\s*"([^"]+)"/)
+      ?? line.match(/^([A-Za-z0-9_-]+)\s*=\s*\{\s*version\s*=\s*"([^"]+)"/);
     if (!dm) continue;
     out.push({ name: dm[1], version: dm[2], used: isUsed(dm[1]) });
   }

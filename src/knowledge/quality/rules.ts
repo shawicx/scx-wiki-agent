@@ -305,15 +305,16 @@ const FILLER_RE = /数据未提供|数据集口吻|nodeVersion 为空/;
 /**
  * 填充噪音检测：页面大量出现「数据未提供」类数据集填充行，说明该页退化成
  * 数据工件转储而非面向读者的文档（如实声明边界用「未检出/无证据」措辞）。
- * warn 不拦截，倒逼要么补数据通道、要么砍薄页面。
+ * error 级拦截：sanitizer 已把「数据未提供（…）」降级为「—」，仍大量出现
+ * （>10 行，含 nodeVersion 为空等变体）说明该页 LLM 输出整体不可信，降级规则路径。
  */
 export function checkFillerNoise(text: string, _opts: ValidateOptions, issues: QualityIssue[]): void {
   const hits = text.split('\n').filter(l => FILLER_RE.test(l)).length;
   if (hits > 10) {
     issues.push({
       rule: 'filler-noise',
-      severity: 'warn',
-      message: `「数据未提供」类填充行 ${hits} 行（>10）：页面疑似数据工件转储，建议补证据通道或收敛页面范围`,
+      severity: 'error',
+      message: `「数据未提供」类填充行 ${hits} 行（>10）：页面疑似数据工件转储，已降级规则路径`,
     });
   }
 }

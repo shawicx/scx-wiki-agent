@@ -26,7 +26,6 @@ export async function generateAllPages(
   pageGenerator: WikiPageGenerator,
   noLlm: boolean,
   onChunk: (filename: string, text: string) => void,
-  plannedPaths: Set<string>,
   knownFiles: Set<string>,
   productionKnownFiles: Set<string>,
   persistedConfirmed: Set<string>,
@@ -40,16 +39,33 @@ export async function generateAllPages(
   citationStats: Array<{ page: string; cited: number; invalid: number }>,
   intentCoverage: Array<{ page: string; counts: Record<string, number> }>,
 ): Promise<ProducedEntry[]> {
-  const producedEntries: ProducedEntry[] = [];
+  // 预遍历：先建全部 context，null 的页在生成前剔除——
+  // plannedPaths / readme 索引 / 跨页链接都必须基于「实际会产出」的页面集，
+  // 否则生成期才跳过的页面（如无 vue-router 的 routing）会以死链漏进索引与正文
+  const contexts = new Map<string, unknown>();
   for (const page of pages) {
+    contexts.set(page, prebuiltContexts.get(page) ?? contextBuilder.buildByName(page, pages));
+  }
+  const effectivePages = pages.filter(p => {
+    const ctx = contexts.get(p);
+    if (ctx === null || ctx === undefined) {
+      skippedPages.push({ page: p, reason: '页面 context 未实现，跳过写盘' });
+      return false;
+    }
+    return true;
+  });
+  // readme 索引以实际产出集重建（readme context 是纯本地数据，重建零成本）
+  if (effectivePages.includes('readme')) {
+    contexts.set('readme', contextBuilder.buildByName('readme', effectivePages));
+  }
+  const plannedPaths = new Set(effectivePages.map(p => pageRelPath(p)));
+
+  const producedEntries: ProducedEntry[] = [];
+  for (const page of effectivePages) {
     const relPath = pageRelPath(page);
     setCurrentPage(page);
 
-    const pageContext = prebuiltContexts.get(page) ?? contextBuilder.buildByName(page, pages);
-    if (pageContext === null || pageContext === undefined) {
-      skippedPages.push({ page, reason: '页面 context 未实现，跳过写盘' });
-      continue;
-    }
+    const pageContext = contexts.get(page)!;
 
     // 意图证据覆盖统计（构建报告「为什么」含量度量）
     const intentCounts = countIntentEvidence(pageContext);

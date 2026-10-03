@@ -144,3 +144,22 @@ verifyAbsence(name: string, side: ('frontend'|'rust'|'any'), knownAnchors: Ancho
   （mod.rs:127/147/156/171 ↔ stores/monitor.ts:37/43/48）、history_list ↔ history.ts:33
 - CI 中跑通道级断言（不跑全量 build，单测直连通道函数）
 - 每次通道改动：golden 全绿 + 报告数字不回退（W6 提供回归基线）
+
+## 7. 第三轮实测反馈修复（2026-10，v3 wiki 人工抽查 8 项）
+
+用户抽查 scx-terminal 实际产物发现的确定性缺陷，根因与修法：
+
+| # | 症状 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | routing.md 幽灵链接 4 处 | plannedPaths 按请求页集计算，routing 在生成期才跳过 | generate-phase 预遍历剔除 null-context 页，plannedPaths/readme 索引/跨页链接全部改用实际产出集 |
+| 2 | glossary 签名缺返回类型 | glossary 查询漏 return_type、未接 mergeGraphSignature | 补字段 + 合并（W4 口径统一到位） |
+| 3 | ⌘T 根因页/数据流页丢失 | topic 未进 topics.json 锁定；data-flow 被 precheck 剔除 | 归档拷回 + pinned 条目锁定（内容再生不可确定性保证） |
+| 4 | 「数据未提供」28 行 / nodeVersion 填充 | 空字段进 prompt + LLM 违反禁令 | context 空字段不序列化；sanitizer 确定性降级为 —；filler-noise 升 error |
+| 5 | props 系统性偏低（13 错 10） | extractTypedKeys 按行正则遇跨行/嵌套类型漏键 | props 权威名单改用 compileScript bindings 的 PROPS 类（正则仅 fallback） |
+| 6 | state 字段数虚高 / 消费数裸词匹配 | 3000 字符窗口数缩进键；store id 裸词全文匹配 | pinia 解析 state 工厂对象顶层键（选项式 + setup 式）；消费计数按 use\<Id\>Store( 调用形且排除声明文件 |
+| 7 | Rust 依赖表缺 7 个核心 crate | Cargo.toml 行解析只匹配 `name = "version"` 简单形态 | 补 `name = { version = "…" }` 内联表形态 |
+| 8 | api.md 表格行断裂 | LLM 输出偶发拆行 | sanitizer 新增 repairBrokenTableRows（残行 + 延续段确定性合并） |
+
+实测口径修正：SplitContainer 实为 4 props（旧 golden 只记 node 是错的）、
+TabGroupFormDialog 3 props、SftpBrowserPane 7 props——golden 已按编译器口径重录。
+tabs/monitor stateKeys 15/11 → 4/4；theme 消费 11 → 2（真实调用形文件数）。

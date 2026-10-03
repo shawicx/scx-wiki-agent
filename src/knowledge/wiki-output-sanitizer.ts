@@ -24,11 +24,51 @@ const PREAMBLE_PATTERNS = [
 export function sanitizeWikiOutput(raw: string, pageName?: string): string {
   let text = stripPreamble(raw);
   text = stripCodeFences(text);
+  text = repairBrokenTableRows(text);
+  text = stripFillerCells(text);
   // R2: sequenceDiagram 仅允许出现在 calls 页（其他页应使用边表）
   if (pageName && pageName !== 'calls' && /sequenceDiagram/.test(text)) {
     console.warn(`[wiki-sanitizer] R2 违规：${pageName}.md 检测到 sequenceDiagram，应改用边表（时序图仅 calls 页允许）。`);
   }
   return text.trim();
+}
+
+/**
+ * 「数据未提供（…）」类数据集口吻填充确定性降级为「—」：
+ * system prompt 已禁止该措辞但 LLM 偶发不遵守（实测 modules.md 28 行）。
+ * 如实声明边界应使用「未检出/无证据」措辞，不属于本替换范围。
+ */
+export function stripFillerCells(text: string): string {
+  return text.replace(/数据未提供（[^）\n]*）/g, '—');
+}
+
+/**
+ * 修复断裂的表格行：LLM 偶发把一行拆成两段——
+ * `| \`cmd\` |` 单独成行（残行），其余单元格落在下一个非空行且不以 `|` 开头。
+ * 确定性合并两段（实测 api.md sftp_open 行）。只处理「残行 + 紧随的延续段」形态，
+ * 普通段落/代码块不受影响。
+ */
+export function repairBrokenTableRows(text: string): string {
+  const lines = text.split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // 残行特征：以 | 开头、| 结尾、只有一个内容单元格（| x | 形态）
+    const isStub = /^\|\s*[^\n|]+\s*\|$/.test(line.trim());
+    if (isStub) {
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() === '') j++;
+      const next = lines[j];
+      // 延续段：非空、不是新表格行/标题/列表/围栏，且含 `|`（其余单元格在同一段里）
+      if (next && !/^\||^#{1,6}\s|^[-*]\s|^```/.test(next.trim()) && next.includes('|')) {
+        out.push(`${line} ${next.trim()}`);
+        i = j;
+        continue;
+      }
+    }
+    out.push(line);
+  }
+  return out.join('\n');
 }
 
 /**

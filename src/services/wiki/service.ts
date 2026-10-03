@@ -196,9 +196,6 @@ export class WikiService {
       );
     }
 
-    // 质量闸门输入：本次计划写入的页面路径 + 仓库真实文件清单
-    const plannedPaths = new Set(pages.map(p => pageRelPath(p)));
-
     const claimStats: Array<{ page: string } & ClaimStats> = [];
     const citationStats: Array<{ page: string; cited: number; invalid: number }> = [];
     const intentCoverage: Array<{ page: string; counts: Record<string, number> }> = [];
@@ -233,12 +230,16 @@ export class WikiService {
     const producedEntries = await generateAllPages(
       this.verify, this.scanResult.rootDir,
       pages, prebuiltContexts, contextBuilder, fallbackBuilder, pageGenerator,
-      noLlm, onChunk, plannedPaths, knownFiles, productionKnownFiles,
+      noLlm, onChunk, knownFiles, productionKnownFiles,
       persistedConfirmed, continuations, sectionedPages, thinkingOnly, llmDropped,
       skippedPages,
       (p: string) => { currentPage = p; },
       claimStats, citationStats, intentCoverage,
     );
+
+    // 实际产出的页面路径集（null-context 页已在阶段一剔除）——
+    // 幽灵链接剥离、dead-link 闸门、写盘清点都用产出集而非请求集
+    const plannedPaths = new Set(producedEntries.map(e => e.relPath));
 
     // ---- 跨页审校（阶段一产物上的全局 pass：重复检测/确定性降级/Related 亲和度） ----
     // 时序：降级动作必须在阶段二（confirmation）之前——待确认项收集依赖改写后的正文。
@@ -248,7 +249,7 @@ export class WikiService {
     const { report: crossReport, crossLinks } = crosspageReview({
       pages: producedEntries.map(e => ({ page: e.page, content: e.content, evidenceFiles: e.evidenceFiles })),
       contexts,
-      plannedPages: pages,
+      plannedPages: producedEntries.map(e => e.page),
     });
     for (const entry of producedEntries) {
       if (crossReport.actions.length === 0) break;

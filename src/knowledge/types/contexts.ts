@@ -171,7 +171,8 @@ export interface EnvironmentContext {
   packageName: string;
   version: string;
   runtime: string;
-  nodeVersion: string;
+  /** 缺省（.nvmrc / engines 均未检出）时整个字段不出现在 context——空字符串进 prompt 会诱发 LLM 写「数据未提供」填充 */
+  nodeVersion?: string;
   packageManager: string;
   scripts: Record<string, string>;
   envVars: EnvVarEvidence[];

@@ -13,7 +13,8 @@ export interface OnboardingContext {
   sourceDirs: string[];
   hasTypeScript: boolean;
   packageManager: string;
-  nodeVersion: string;
+  /** 缺省时整个字段不出现（避免空值诱发「数据未提供」填充行） */
+  nodeVersion?: string;
   cliCommands: Array<{
     name: string;
     description: string;

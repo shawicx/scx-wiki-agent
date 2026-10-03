@@ -10,6 +10,7 @@ import type {
   DecisionsContext,
 } from '../types.js';
 import { commandDescription, parseCommanderOptions } from './cli.js';
+import { mergeGraphSignature } from '../signature.js';
 import {
   type ContextDeps,
   ENTRY_FILE_NAMES,
@@ -27,8 +28,8 @@ export function buildGlossaryContext(deps: ContextDeps): GlossaryContext {
     `MATCH (n) WHERE n.docstring IS NOT NULL AND n.is_test = false
          AND n.label IN ['Class', 'Method', 'Function', 'Interface']
        RETURN n.name AS name, n.label AS type, n.docstring AS doc,
-              n.signature AS sig, n.complexity AS cx, n.file_path AS file,
-              n.start_line AS line
+              n.signature AS sig, n.return_type AS rt, n.complexity AS cx,
+              n.file_path AS file, n.start_line AS line
        ORDER BY
          CASE n.label WHEN 'Class' THEN 0 WHEN 'Method' THEN 1 WHEN 'Function' THEN 2 ELSE 3 END,
          n.complexity DESC
@@ -37,15 +38,16 @@ export function buildGlossaryContext(deps: ContextDeps): GlossaryContext {
 
   const seen = new Set<string>();
   const symbols = q.rows
-    .filter(row => isProductionGraphFile(deps, (row[5] as string) ?? ''))
+    .filter(row => isProductionGraphFile(deps, (row[6] as string) ?? ''))
     .map(row => ({
       name: row[0] as string,
       type: labelToSymbolType(row[1] as string),
-      filePath: row[5] as string,
-      startLine: row[6] as number | undefined,
+      filePath: row[6] as string,
+      startLine: row[7] as number | undefined,
       docstring: (row[2] as string | null) ?? null,
-      signature: (row[3] as string | null) ?? null,
-      complexity: row[4] as number | undefined,
+      // 签名口径统一（W4）：signature 与 return_type 两字段合并，Rust `-> T` / TS `: T`
+      signature: mergeGraphSignature(row[3] as string | null, row[4] as string | null, (row[6] as string) ?? ''),
+      complexity: row[5] as number | undefined,
     }))
     .filter(s => {
       if (isMcpPlaceholder(s.name)) return false;
@@ -66,7 +68,8 @@ export function buildOnboardingContext(deps: ContextDeps): OnboardingContext {
   // 复用 ConfigDetector 提取的 scripts 和 packageManager
   const env = deps.detector.detectEnvironment();
   const packageManager = env.packageManager;
-  const nodeVersion = env.nodeVersion;
+  // 空值整个字段不进 context：`nodeVersion: ""` 会诱发 LLM 写「数据未提供」填充行
+  const nodeVersion = env.nodeVersion || undefined;
 
   const arch = deps.client.getArchitecture();
   // CLI 命令名启发式（register*/*Command）只对 cli/agent 类型项目成立：
@@ -105,7 +108,7 @@ export function buildOnboardingContext(deps: ContextDeps): OnboardingContext {
     sourceDirs: deps.scanResult.sourceDirs,
     hasTypeScript: deps.scanResult.hasTypeScript,
     packageManager,
-    nodeVersion,
+    ...(nodeVersion ? { nodeVersion } : {}),
     cliCommands,
     scripts: env.scripts,
     envVars: env.envVars,
@@ -143,7 +146,7 @@ export function buildTroubleshootingContext(deps: ContextDeps): TroubleshootingC
     modules: arch.packages.map(p => ({ name: p.name })),
     scripts: env.scripts,
     packageManager: env.packageManager,
-    nodeVersion: env.nodeVersion,
+    ...(env.nodeVersion ? { nodeVersion: env.nodeVersion } : {}),
     envVars: env.envVars,
     constants,
     entryFiles,

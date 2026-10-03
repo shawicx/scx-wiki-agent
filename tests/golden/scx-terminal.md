@@ -17,9 +17,9 @@
 
 | 组件 | emits（事件名级） | props |
 |---|---|---|
-| split/SplitContainer.vue | 6：leafActivated, leafTitle, paneClosed, leafSplit, leafBell, treeUpdated | node |
+| split/SplitContainer.vue | 6：leafActivated, leafTitle, paneClosed, leafSplit, leafBell, treeUpdated | 4：node, activeLeafId, tabActive, profile（编译器 bindings 口径；旧正则口径只抓到 node） |
 | settings/TabGroupFormDialog.vue | 2：update:open, submit | - |
-| sftp/SftpBrowserPane.vue | 3：transfer, pathChange, rowDragstart | side, path |
+| sftp/SftpBrowserPane.vue | 3：transfer, pathChange, rowDragstart | 7：side, homePath, lister, ops, disabled, dropActive, dropDirPath（编译器 bindings 口径；旧正则跨行类型漏 5 个） |
 
 ## 约束
 

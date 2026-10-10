@@ -29,12 +29,14 @@ export function registerBuildCommand(program: Command) {
 
       // 全局配置合并：CLI 参数 > ~/.scx/wiki-agent/config.yaml > 内置默认
       const config = loadGlobalConfig();
-      const model = options.model ?? config?.provider.model ?? 'gpt-4o-mini';
-      const baseURL = options.baseUrl ?? config?.provider.baseURL;
-      const apiKey = options.apiKey ?? config?.provider.apiKey;
+      const model = options.model || config?.provider.model || 'gpt-4o-mini';
+      const baseURL = options.baseUrl || config?.provider.baseURL;
+      const apiKey = options.apiKey || config?.provider.apiKey;
       const noLlm = options.llm === false || config?.build.noLlm === true;
-      if (config) {
+      if (config?.provider.name) {
         console.log(`[wiki] 已加载全局配置 ${globalConfigPath()}（provider: ${config.provider.name}）`);
+      } else if (config) {
+        console.log(`[wiki] 已加载全局配置 ${globalConfigPath()}（未配置 provider）`);
       }
 
       const pages = options.pages === 'all'
@@ -62,8 +64,13 @@ export function registerBuildCommand(program: Command) {
         },
       };
 
+      const ignoredDirs = config?.build.ignoredDirs;
+      if (ignoredDirs?.length) {
+        console.log(`[wiki] 配置忽略文件夹：${ignoredDirs.join(', ')}`);
+      }
+
       try {
-        const scanner = new FileScanner(root);
+        const scanner = new FileScanner(root, ignoredDirs);
         const scanResult = scanner.scan();
 
         const client = new CodebaseMemoryClient(root, options.mcpBinary);

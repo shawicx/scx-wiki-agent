@@ -27,6 +27,8 @@ export interface GlobalConfig {
     noLlm?: boolean;
     /** 生成后对待确认项启动交互裁决（仅终端环境生效，CI/管道自动跳过） */
     confirm?: boolean;
+    /** 额外忽略的文件夹（仓库相对路径或名称；gitignore 语义，不含内置忽略表） */
+    ignoredDirs?: string[];
   };
 }
 
@@ -76,7 +78,10 @@ export function parseGlobalConfig(content: string): GlobalConfig | null {
 
   const name = typeof p.name === 'string' ? p.name.trim() : '';
   const model = typeof p.model === 'string' ? p.model.trim() : '';
-  if (!name || !model) return null;
+  const hasProvider = !!(name && model);
+  const hasBuild = root.build !== undefined;
+  // provider 与 build 均未配置 → null；仅配 build（如 ignored_dirs）也可用，provider 视为未配置
+  if (!hasProvider && !hasBuild) return null;
 
   let apiKey: string | undefined;
   if (typeof p.api_key === 'string' && p.api_key.trim()) {
@@ -100,10 +105,23 @@ export function parseGlobalConfig(content: string): GlobalConfig | null {
   const noLlm = b.no_llm === true;
   const confirm = b.confirm === true;
 
+  // 忽略文件夹：字符串数组；条目 trim、去尾部斜杠、去重；非法类型整项忽略
+  const ignoredDirs = Array.isArray(b.ignored_dirs)
+    ? [...new Set(b.ignored_dirs
+        .filter((d): d is string => typeof d === 'string')
+        .map((d) => d.trim().replace(/^\.\/+/, '').replace(/\/+$/, ''))
+        .filter((d) => d.length > 0 && d !== '.'))]
+    : undefined;
+  const hasIgnores = ignoredDirs !== undefined && ignoredDirs.length > 0;
+
   for (const w of warnings) console.warn(`[wiki] 全局配置：${w}`);
   return {
     provider: { name, model, apiKey, baseURL, timeoutSec },
-    build: { mode, maxOutputTokens, noLlm, ...(confirm ? { confirm } : {}) },
+    build: {
+      mode, maxOutputTokens, noLlm,
+      ...(confirm ? { confirm } : {}),
+      ...(hasIgnores ? { ignoredDirs } : {}),
+    },
   };
 }
 
@@ -145,4 +163,9 @@ build:
   no_llm: false
   # 生成后对待确认项启动交互裁决（需终端环境；确认的断言持久化免标）
   confirm: false
+  # 额外忽略的文件夹（按 gitignore 语义匹配：纯名称匹配任意层级，含 / 时锚定仓库根）
+  # 内置忽略（node_modules/dist/.git/.wiki 等）无需配置；此处追加生成内容要跳过的目录
+  # ignored_dirs:
+  #   - generated
+  #   - vendor/third-party
 `;

@@ -84,10 +84,14 @@ export class FileScanner {
   private rootDir: string;
   private ig: ReturnType<typeof ignore>;
 
-  constructor(rootDir: string) {
+  constructor(rootDir: string, extraIgnoredDirs?: string[]) {
     this.rootDir = rootDir;
     this.ig = ignore();
     this.loadGitignore();
+    // 配置追加的忽略目录：走 gitignore 语义（纯名称匹配任意层级；含 / 锚定根）
+    if (extraIgnoredDirs?.length) {
+      this.ig.add(extraIgnoredDirs.map((d) => `${d}/`));
+    }
   }
 
   private loadGitignore(): void {

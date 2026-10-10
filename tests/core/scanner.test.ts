@@ -173,3 +173,32 @@ describe('FileScanner', () => {
     }
   });
 });
+
+describe('FileScanner extraIgnoredDirs', () => {
+  let tmp: string;
+
+  it('配置忽略的文件夹按 gitignore 语义排除（纯名称任意层级，含 / 锚定根）', () => {
+    tmp = mkdtempSync(join(tmpdir(), 'scanner-ignore-'));
+    try {
+      mkdirSync(join(tmp, 'src', 'generated'), { recursive: true });
+      mkdirSync(join(tmp, 'vendor', 'third-party'), { recursive: true });
+      mkdirSync(join(tmp, 'other', 'generated'), { recursive: true });
+      writeFileSync(join(tmp, 'package.json'), '{}');
+      writeFileSync(join(tmp, 'src', 'index.ts'), 'export const a = 1;');
+      writeFileSync(join(tmp, 'src', 'generated', 'g.ts'), 'export const g = 1;');
+      writeFileSync(join(tmp, 'vendor', 'third-party', 't.ts'), 'export const t = 1;');
+      writeFileSync(join(tmp, 'other', 'generated', 'g2.ts'), 'export const g2 = 1;');
+
+      const result = new FileScanner(tmp, ['generated', 'vendor/third-party']).scan();
+      const paths = result.files.map((f) => f.relativePath);
+
+      expect(paths).toContain('src/index.ts');
+      // 纯名称：任意层级的 generated 目录都被忽略
+      expect(paths.some((p) => p.includes('generated'))).toBe(false);
+      // 含 /：锚定仓库根，只忽略 vendor/third-party
+      expect(paths.some((p) => p.startsWith('vendor/third-party'))).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

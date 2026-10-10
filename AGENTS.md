@@ -10,7 +10,7 @@ The `build` command requires the external `codebase-memory-mcp` binary to be ins
 
 ## Global Config
 
-`~/.scx/wiki-agent/config.yaml` (YAML; created with a commented template by `init`). Priority: CLI flags > config file > built-in defaults. Sections: `provider` (name/model/api_key/base_url/timeout — api_key supports `${ENV_VAR}` refs; base_url defaults mapped by provider name for openai/deepseek/glm/anthropic/ollama) and `build` (mode/max_output_tokens/no_llm). Parse/load lives in `src/shared/config.ts` (pure parser + IO shell, fail-open: missing/broken config never blocks a build). `provider.timeout` becomes a per-request `AbortSignal.timeout`; `build.max_output_tokens` replaces the per-page hardcoded 8000 budget.
+`~/.scx/wiki-agent/config.yaml` (YAML; created with a commented template by `init`). Priority: CLI flags > config file > built-in defaults. Sections: `provider` (name/model/api_key/base_url/timeout — api_key supports `${ENV_VAR}` refs; base_url defaults mapped by provider name for openai/deepseek/glm/anthropic/ollama) and `build` (mode/max_output_tokens/no_llm/ignored_dirs). Only this global file is read — there is NO project-local config file. A build-only config (no provider) still parses; provider is then treated as unconfigured. `build.ignored_dirs` (string list, gitignore semantics: bare name matches any depth, paths with `/` anchor at repo root) adds extra ignored folders to FileScanner in both `scan` and `build`, on top of the built-in IGNORED_DIRS. Parse/load lives in `src/shared/config.ts` (pure parser + IO shell, fail-open: missing/broken config never blocks a build). `provider.timeout` becomes a per-request `AbortSignal.timeout`; `build.max_output_tokens` replaces the per-page hardcoded 8000 budget.
 
 ## Commands
 

@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import { ScanService } from '../../services/scan-service.js';
+import { loadGlobalConfig } from '../../shared/config.js';
 
 export function registerScanCommand(program: Command) {
   program
@@ -9,7 +10,7 @@ export function registerScanCommand(program: Command) {
     .option('-v, --verbose', 'Show detailed output')
     .action(async (options) => {
       const root = options.projectRoot ?? process.cwd();
-      const service = new ScanService(root);
+      const service = new ScanService(root, loadGlobalConfig()?.build.ignoredDirs);
       const result = service.scan();
 
       console.log(`\nProject: ${result.rootDir}`);

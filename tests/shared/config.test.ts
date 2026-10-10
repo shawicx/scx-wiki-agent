@@ -68,6 +68,22 @@ provider:
     warn.mockRestore();
   });
 
+  it('仅配置 build（无 provider）也可解析，provider 视为未配置', () => {
+    const cfg = parseGlobalConfig('build:\n  ignored_dirs:\n    - generated');
+    expect(cfg?.build.ignoredDirs).toEqual(['generated']);
+    expect(cfg?.provider.model).toBe('');
+    // provider 与 build 均缺 → null
+    expect(parseGlobalConfig('other: 1')).toBeNull();
+  });
+
+  it('build.ignored_dirs 解析：trim/去斜杠/去重；非数组或全非法项时缺省', () => {
+    const cfg = parseGlobalConfig('provider:\n  name: ollama\n  model: qwen\nbuild:\n  ignored_dirs: [" generated ", "vendor/", "./coverage", "generated"]');
+    expect(cfg?.build.ignoredDirs).toEqual(['generated', 'vendor', 'coverage']);
+    expect(parseGlobalConfig('provider:\n  name: ollama\n  model: qwen\nbuild:\n  ignored_dirs: "generated"')?.build.ignoredDirs).toBeUndefined();
+    expect(parseGlobalConfig('provider:\n  name: ollama\n  model: qwen\nbuild:\n  ignored_dirs: [42, "  ", "/"]')?.build.ignoredDirs).toBeUndefined();
+    expect(parseGlobalConfig('provider:\n  name: ollama\n  model: qwen\nbuild:\n  no_llm: true')?.build.ignoredDirs).toBeUndefined();
+  });
+
   it('非法 build 字段值被忽略（类型/枚举校验）', () => {
     const cfg = parseGlobalConfig(`
 provider:

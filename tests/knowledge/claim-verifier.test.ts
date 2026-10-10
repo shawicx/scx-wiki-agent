@@ -210,3 +210,40 @@ describe('collectContextKeys', () => {
     expect(content).not.toContain('`packageManager`（待确认）');
   });
 });
+
+describe('S1/S2：确认白名单不放大、同名判定顺序无关', () => {
+  it('S1：确认 `a.getData` 不连带免标 `b.getData`（raw 级精确匹配）', () => {
+    const ctx = makeCtx({
+      confirmed: new Set(['a.getData']),
+      grep: () => 0, // b.getData 无任何词法命中
+    });
+    const md = '先说 `a.getData`，再说 `b.getData`。';
+    const { content } = verifyAndAnnotateClaims(md, ctx);
+    expect(content).not.toContain('`a.getData`（待确认）');
+    expect(content).toContain('`b.getData`（待确认）');
+  });
+
+  it('S2：同名假链先行不毒化后续真链（真链点链命中 universe 仍免标）', () => {
+    const ctx = makeCtx({
+      symbols: new Set(['real.getData']),
+      grep: () => 0,
+    });
+    // phantom.getData 先出现且探测无命中 → name 缓存 false；
+    // real.getData 后出现，其 chain 自身命中 universe → 不应被标（旧实现被缓存毒化）
+    const md = '先提 `phantom.getData`，后提 `real.getData`。';
+    const { content } = verifyAndAnnotateClaims(md, ctx);
+    expect(content).toContain('`phantom.getData`（待确认）');
+    expect(content).not.toContain('`real.getData`（待确认）');
+  });
+
+  it('S2 反向：真链在前、假链在后，假链仍被标注（顺序无关）', () => {
+    const ctx = makeCtx({
+      symbols: new Set(['realSymbol.compute']),
+      grep: () => 0,
+    });
+    const md = '先 `realSymbol.compute`，后 `phantom.compute`。';
+    const { content } = verifyAndAnnotateClaims(md, ctx);
+    expect(content).not.toContain('`realSymbol.compute`（待确认）');
+    expect(content).toContain('`phantom.compute`（待确认）');
+  });
+});

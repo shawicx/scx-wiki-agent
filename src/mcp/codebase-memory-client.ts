@@ -116,6 +116,57 @@ function adaptTrace(raw: Record<string, any>): TraceResult {
 
 type TraceNodeLike = { name: string; qualified_name: string; hop: number };
 
+/** 日志记录形态：顶层键全部属于常见结构化日志字段（level/msg/time/ts/caller…） */
+const LOG_RECORD_KEYS = new Set(['level', 'msg', 'message', 'time', 'ts', 'caller', 'module', 'func', 'line']);
+
+function isLogRecord(parsed: unknown): boolean {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const keys = Object.keys(parsed as Record<string, unknown>);
+  return keys.length > 0 && keys.every(k => LOG_RECORD_KEYS.has(k));
+}
+
+/**
+ * 扫描文本中所有完整的顶层 JSON 对象/数组候选子串（字符串感知的括号配对）。
+ * 覆盖：单行 JSON、多行 pretty-printed JSON；忽略裸日志文本与行内杂讯。
+ */
+function topLevelJsonCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === '{' || ch === '[') {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === '}' || ch === ']') {
+      if (depth > 0) {
+        depth--;
+        if (depth === 0 && start >= 0) {
+          candidates.push(text.slice(start, i + 1));
+          start = -1;
+        }
+      }
+    }
+  }
+  return candidates;
+}
+
 export class CodebaseMemoryClient {
   private readonly binaryPath: string;
   private readonly projectName: string;
@@ -267,21 +318,26 @@ export class CodebaseMemoryClient {
 
   /**
    * 解析子进程 stdout。
-   * MCP 的 info 日志（`level=info msg=...`）可能泄漏到 stdout，
-   * 因此从末尾向前找最后一个完整的 JSON 对象。
+   * MCP 的 info 日志（logfmt 或 JSON 行）可能泄漏到 stdout，因此从末尾向前
+   * 找最后一个**完整的**顶层 JSON 对象/数组：按括号配对扫描（字符串感知，
+   * 支持多行 pretty-printed JSON），而非按行探测——按行探测在两类真实场景下
+   * 失效：尾部跟随 `{"level":"info",...}` 日志行会被误当结果（下游静默产出空
+   * 数据）；多行 pretty JSON 永远无法整行 parse。
    */
   private parseJsonOutput(raw: string): unknown {
-    const lines = raw.split('\n');
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i].trim();
-      if (line.startsWith('{') || line.startsWith('[')) {
-        try {
-          return JSON.parse(line);
-        } catch {
-          continue;
-        }
+    const candidates = topLevelJsonCandidates(raw);
+    let lastParsed: unknown;
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(candidates[i]);
+      } catch {
+        continue;
       }
+      if (lastParsed === undefined) lastParsed = parsed;
+      if (!isLogRecord(parsed)) return parsed; // 跳过尾随的 JSON 日志行，取真正的结果负载
     }
+    if (lastParsed !== undefined) return lastParsed; // 全部候选都是日志形态：退回最后一个
     throw new Error(`MCP 返回无法解析 JSON: ${raw.slice(0, 200)}`);
   }
 

@@ -195,7 +195,8 @@ export async function generateWithContinuation(
     finish = more.finish;
     const segment = sanitizeWikiOutput(more.text);
     if (segment.length === 0) break;
-    text = cut.kept.trimEnd() + '\n\n' + segment;
+    // 按切点类型选拼接符：表格行切点单换行续接（空行会终止表格使续写段成裸行块）
+    text = cut.kept.trimEnd() + cut.joinWith + segment;
     rounds++;
   }
 

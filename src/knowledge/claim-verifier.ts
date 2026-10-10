@@ -130,7 +130,6 @@ export function verifyAndAnnotateClaims(
 
   const verdictByName = new Map<string, boolean>();
   const probedNames = new Set<string>();
-  const whitelistedNames = new Set<string>();
   const mentionOnlyNames = new Set<string>();
   const ambiguousNames = new Set<string>();
   let probes = 0;
@@ -142,17 +141,24 @@ export function verifyAndAnnotateClaims(
       const files = ctx.symbolFiles.get(name);
       if (files && files.size > 1) ambiguousNames.add(name);
     }
+    // 人工确认按 claim 原文（raw）精确豁免：绝不以末段名放大——
+    // 确认 `a.getData` 不得连带免标 `b.getData` 等其他同名声明
     if (ctx.confirmed?.has(raw)) {
-      whitelistedNames.add(name);
-      verdictByName.set(name, true);
       continue;
     }
-    let verdict = verdictByName.get(name);
-    if (verdict === undefined) {
-      if (locallyVerified(chain)) {
-        verdict = true;
+    // 顺序无关核验：本地命中（universe/qualified 后缀，纯内存零成本）永远先行，
+    // name 级缓存只用于跨同名声明去重探测（子进程有成本）——
+    // 同名假链先行不得毒化后续真链，真链命中也不得反带假链免标
+    let verdict: boolean;
+    if (locallyVerified(chain)) {
+      verdict = true;
+    } else {
+      const cached = verdictByName.get(name);
+      if (cached !== undefined) {
+        verdict = cached;
       } else if (probes >= WIKI_MAX_GREP_PROBES) {
         verdict = true; // 上限外不核验不标注（计 skipped）
+        verdictByName.set(name, verdict); // 计入缓存供 skipped 统计遍历
       } else {
         probes++;
         probedNames.add(name);
@@ -163,15 +169,14 @@ export function verifyAndAnnotateClaims(
         } catch {
           verdict = true; // 探测失败按有实据处理，宁漏勿误
         }
+        verdictByName.set(name, verdict);
       }
-      verdictByName.set(name, verdict);
     }
     if (!verdict) badRaws.add(raw);
   }
 
   let skipped = 0;
   for (const name of verdictByName.keys()) {
-    if (whitelistedNames.has(name)) continue;
     if (!locallyVerified(name) && !probedNames.has(name)) skipped++;
   }
 

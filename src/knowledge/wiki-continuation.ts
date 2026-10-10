@@ -18,6 +18,11 @@ export const MIN_CONTINUATION_KEEP = 200;
 export interface SafeCut {
   /** 截齐后的安全前缀 */
   kept: string;
+  /**
+   * 续写段与前缀的拼接符：表格行切点用单换行（空行会终止 Markdown 表格，
+   * 使续写段成为无表头的裸行块），段落/空行切点用空行分隔。
+   */
+  joinWith: '\n' | '\n\n';
 }
 
 /**
@@ -31,8 +36,10 @@ export function findSafeCut(text: string): SafeCut | null {
   const lines = text.split('\n');
 
   let cutLine = -1;
+  let joinWith: '\n' | '\n\n' = '\n\n';
   if (!hasUnclosedFence(lines)) {
     cutLine = lastCompleteTableRow(lines);
+    if (cutLine >= 0) joinWith = '\n'; // 前缀以完整表格行结尾：空行会拆断表格
   }
   if (cutLine < 0) {
     cutLine = lastBlankLineOutsideFence(lines);
@@ -41,7 +48,7 @@ export function findSafeCut(text: string): SafeCut | null {
 
   const kept = lines.slice(0, cutLine + 1).join('\n');
   if (kept.trim().length < MIN_CONTINUATION_KEEP) return null;
-  return { kept };
+  return { kept, joinWith };
 }
 
 /** 围栏（```）计数为奇数：存在未闭合代码块（截断残页的结构信号，供质量闸门复用） */

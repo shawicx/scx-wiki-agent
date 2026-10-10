@@ -232,3 +232,29 @@ describe('WikiPageGenerator 断流续写', () => {
     expect(notices).toEqual([{ kind: 'thinking-only', recovered: false }]);
   });
 });
+
+describe('S3：续写拼接符按切点类型选择（表格不被空行拆断）', () => {
+  const tableText = `# 数据流\n\n${LONG}\n\n| 阶段 | 关键函数 |\n|---|---|\n| 扫描 | scan() |\n| 构建 | buil`;
+
+  it('表格行切点 → joinWith 为单换行（空行会终止 Markdown 表格）', () => {
+    const cut = findSafeCut(tableText);
+    expect(cut).not.toBeNull();
+    expect(cut!.joinWith).toBe('\n');
+  });
+
+  it('段落/空行切点 → joinWith 为空行分隔', () => {
+    const cut = findSafeCut(`# 页面\n\n${LONG}\n\n## 第二节\n\n半截句子`);
+    expect(cut).not.toBeNull();
+    expect(cut!.joinWith).toBe('\n\n');
+  });
+
+  it('表格切点 + 单换行拼接后仍是连续表格（无空行拆断）', () => {
+    const cut = findSafeCut(tableText)!;
+    const joined = cut.kept.trimEnd() + cut.joinWith + '| 构建 | build() |';
+    const lines = joined.split('\n');
+    const tableLines = lines.filter(l => l.trimStart().startsWith('|'));
+    // 表格块内不允许出现空行
+    const tableBlock = lines.slice(lines.indexOf(tableLines[0]));
+    expect(tableBlock.some(l => l.trim().length === 0)).toBe(false);
+  });
+});

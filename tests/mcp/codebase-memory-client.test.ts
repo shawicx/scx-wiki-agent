@@ -67,3 +67,32 @@ describe('CodebaseMemoryClient', () => {
     expect(args.limit).toBe(20);
   });
 });
+
+describe('S6：parseJsonOutput 括号配对提取（多行 pretty JSON / JSON 日志行）', () => {
+  const mockExec = execFileSync as ReturnType<typeof vi.fn>;
+
+  it('多行 pretty-printed JSON 正确解析（按行探测会失败）', () => {
+    const pretty = JSON.stringify({ total_nodes: 7, packages: [{ name: 'core', nodes: 3 }] }, null, 2);
+    mockExec.mockReturnValue(pretty);
+    const client = new CodebaseMemoryClient('/proj');
+    expect(client.getArchitecture().total_nodes).toBe(7);
+  });
+
+  it('尾部跟随 JSON 格式日志行不被误当结果', () => {
+    mockExec.mockReturnValue('{"total_nodes":5}\n{"level":"info","msg":"done","time":"2026-10-11T00:00:00Z"}\n');
+    const client = new CodebaseMemoryClient('/proj');
+    expect(client.getArchitecture().total_nodes).toBe(5);
+  });
+
+  it('logfmt 日志行 + 多行 JSON 混合输出：取真正的结果负载', () => {
+    mockExec.mockReturnValue('level=info msg=indexing\n' + JSON.stringify({ total_nodes: 9 }, null, 2));
+    const client = new CodebaseMemoryClient('/proj');
+    expect(client.getArchitecture().total_nodes).toBe(9);
+  });
+
+  it('字符串内的花括号不干扰配对（含 "}" 的 JSON 字符串值）', () => {
+    mockExec.mockReturnValue(JSON.stringify({ total_nodes: 1, note: 'literal } brace { inside' }));
+    const client = new CodebaseMemoryClient('/proj');
+    expect(client.getArchitecture().total_nodes).toBe(1);
+  });
+});

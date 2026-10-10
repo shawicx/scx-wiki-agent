@@ -202,7 +202,9 @@ export function checkUnanchoredRationale(text: string, issues: QualityIssue[]): 
 /**
  * 截断残页检测（结构性信号，与生成期事实无关、常开）：
  * - 未闭合代码块（围栏计数为奇数，后续内容会被吞进代码块）；
- * - 末尾表格残行（流死在表格行中间）。
+ * - 末尾表格残行（流死在表格行中间）；
+ * - 中段无表头表格块（连续 ≥2 行 | 数据行缺失表头+分隔行——续写拼接
+ *   拆断表格的典型残骸，裸行块不会被合法 Markdown 表格引用）。
  * 默认 warn（写入报告）；opts.truncated（续写耗尽后仍截断的生成期事实）时升级为
  * error —— 拒绝写盘，由上层降级规则路径确定性重建完整页面。
  * 悬空句子/缺失小节等启发式信号误报率高，不检测（诚实优于噪音）。
@@ -212,12 +214,44 @@ export function checkIncompletePage(text: string, opts: ValidateOptions, issues:
   const signals: string[] = [];
   if (hasUnclosedFence(lines)) signals.push('未闭合代码块');
   if (endsWithIncompleteTableRow(lines)) signals.push('末尾表格残行');
+  const orphanAt = firstOrphanTableBlock(lines);
+  if (orphanAt >= 0) signals.push(`中段无表头表格块（第 ${orphanAt + 1} 行起）`);
   if (signals.length === 0) return;
   issues.push({
     rule: 'incomplete-page',
     severity: opts.truncated ? 'error' : 'warn',
     message: `疑似截断残页（${signals.join('、')}）${opts.truncated ? '：续写耗尽后仍截断' : ''}`,
   });
+}
+
+/** 表格分隔行形态：`| --- | --- |`（允许对齐冒号与省略首尾竖线） */
+const TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/;
+
+/**
+ * 围栏外第一个「无表头表格块」的起始行号（0 基）；没有则 -1。
+ * 无表头表格块 = 连续 ≥2 行以 | 开头、且第二行不是分隔行（缺失表头+分隔结构）。
+ * 单行 | 块不判定（正文竖线误报率高，诚实优于噪音）。
+ */
+function firstOrphanTableBlock(lines: string[]): number {
+  let inFence = false;
+  let i = 0;
+  while (i < lines.length) {
+    if (/^\s*```/.test(lines[i])) {
+      inFence = !inFence;
+      i++;
+      continue;
+    }
+    if (!inFence && lines[i].trimStart().startsWith('|')) {
+      let end = i;
+      while (end + 1 < lines.length && lines[end + 1].trimStart().startsWith('|')) end++;
+      const blockLen = end - i + 1;
+      if (blockLen >= 2 && !TABLE_SEPARATOR_RE.test(lines[i + 1])) return i;
+      i = end + 1;
+      continue;
+    }
+    i++;
+  }
+  return -1;
 }
 
 /** 需要逐行 import 点锚点的依赖小节（R3：用途须有 import 点佐证；「声明未用」小节豁免） */

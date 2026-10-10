@@ -291,3 +291,49 @@ describe('unanchored-dependency（tech-stack 依赖 import 点核验）', () => 
     expect(validatePageContent(withoutAnchor, baseOpts).issues.some(i => i.rule === 'unanchored-dependency')).toBe(false);
   });
 });
+
+describe('incomplete-page：中段无表头表格块（续写拆断表格的残骸）', () => {
+  it('正文中段出现无表头表格块（≥2 行数据行、第二行非分隔行）→ warn', () => {
+    // 典型残骸：表格被空行拆断后，续写段成为无表头的裸行块
+    const content = [
+      '# Overview',
+      '',
+      '完整正文段落。',
+      '',
+      '| 符号 | 文件 |',
+      '|---|---|',
+      '| a | src/a.ts |',
+      '',
+      '| b | src/b.ts |',
+      '| c | src/c.ts |',
+      '',
+      '后续正文。',
+    ].join('\n');
+    const r = validatePageContent(content, baseOpts);
+    expect(r.issues).toContainEqual(
+      expect.objectContaining({ rule: 'incomplete-page', message: expect.stringContaining('中段无表头表格块') }),
+    );
+    expect(r.passed).toBe(true); // 默认 warn 不拦截
+  });
+
+  it('合法表格（表头 + 分隔行）不误报；单行竖线行不判定', () => {
+    const content = [
+      '# Overview',
+      '',
+      '| 符号 | 文件 |',
+      '|---|---|',
+      '| a | src/a.ts |',
+      '| b | src/b.ts |',
+      '',
+      '正文中的单行 `| x |` 形态不构成表格块。',
+      '',
+      '```ts',
+      '// 围栏内的 | 行不算',
+      '| fenced | row |',
+      '| fenced2 | row2 |',
+      '```',
+    ].join('\n');
+    const r = validatePageContent(content, baseOpts);
+    expect(r.issues.some(i => i.rule === 'incomplete-page')).toBe(false);
+  });
+});

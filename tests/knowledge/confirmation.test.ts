@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -268,5 +268,52 @@ describe('evaluateConfirmedEntries（指纹重校验）', () => {
     const entries: ConfirmedEntry[] = [{ raw: 'ambiguousDep', files: [], hashes: [], head, confirmedAt: '' }];
     expect(evaluateConfirmedEntries(entries, head, hashOf).stale).toHaveLength(0);
     expect(evaluateConfirmedEntries(entries, 'other', hashOf).stale.map(e => e.raw)).toEqual(['ambiguousDep']);
+  });
+});
+
+describe('S4/S5：畸形条目 fail-open + dirty tree 指纹过期', () => {
+  let agentDir: string;
+
+  beforeEach(() => { agentDir = mkdtempSync(join(tmpdir(), 'confirm-store-s-')); });
+  afterEach(() => { rmSync(agentDir, { recursive: true, force: true }); });
+
+  it('S4：v2 条目缺 files/hashes/head 字段 → 逐条丢弃不抛错（fail-open 不炸构建）', () => {
+    writeFileSync(join(agentDir, 'confirmations.json'), JSON.stringify({
+      version: 2,
+      entries: [
+        { raw: 'noFiles' },                                  // 缺 files/hashes/head/confirmedAt
+        { raw: 'badFiles', files: 'src/a.ts', hashes: [], head: '', confirmedAt: '' }, // files 非数组
+        { raw: 42, files: [], hashes: [], head: '', confirmedAt: '' },                 // raw 非字符串
+        { raw: 'good', files: ['src/a.ts'], hashes: ['h'], head: 'abc', confirmedAt: 't' },
+      ],
+    }), 'utf-8');
+    const loaded = loadConfirmedEntries(agentDir);
+    expect(loaded.map(e => e.raw)).toEqual(['good']);
+  });
+
+  it('S5：同 HEAD 下指纹文件被修改（未提交）→ 条目过期重审', () => {
+    const entry: ConfirmedEntry = {
+      raw: 'stableClaim', files: ['src/a.ts'], hashes: ['hash(src/a.ts)'], head: 'abc1234', confirmedAt: '',
+    };
+    const dirtyHash = (f: string) => (f === 'src/a.ts' ? 'hash-modified' : `hash(${f})`);
+    // 旧语义：HEAD 短路 → 有效（bug）；新语义：哈希为权威 → 过期
+    const r = evaluateConfirmedEntries([entry], 'abc1234', dirtyHash);
+    expect(r.validRaws.size).toBe(0);
+    expect(r.stale.map(e => e.raw)).toEqual(['stableClaim']);
+  });
+
+  it('S5：哈希一致时与 HEAD 无关（新提交但指纹文件未动 → 仍有效）', () => {
+    const entry: ConfirmedEntry = {
+      raw: 'stableClaim', files: ['src/a.ts'], hashes: ['hash(src/a.ts)'], head: 'old0000', confirmedAt: '',
+    };
+    const r = evaluateConfirmedEntries([entry], 'new1111', (f) => `hash(${f})`);
+    expect(r.validRaws.has('stableClaim')).toBe(true);
+  });
+
+  it('S4：保存为原子写（临时文件 + rename），无 .tmp 残留', () => {
+    saveConfirmedEntries(agentDir, [{ raw: 'x', files: [], hashes: [], head: '', confirmedAt: '' }]);
+    const leftovers = readdirSync(agentDir).filter(f => f.includes('.tmp'));
+    expect(leftovers).toEqual([]);
+    expect(loadConfirmedEntries(agentDir).map(e => e.raw)).toEqual(['x']);
   });
 });

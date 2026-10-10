@@ -22,6 +22,8 @@ export class VerificationHub {
   private sourceLineCache = new Map<string, string[] | null>();
   /** outlineKnown 源码回落专用缓存（绝对路径 → 内容） */
   private outlineSourceCache = new Map<string, string | null>();
+  /** search_code compact 命中按 name 跨页缓存（子进程一次，作用域过滤每调用方各自执行） */
+  private searchMatchesCache = new Map<string, Array<{ file: string; line: number }>>();
 
   constructor(
     private client: CodebaseMemoryClient,
@@ -99,7 +101,7 @@ export class VerificationHub {
    * fail-open 回退（按有实据处理，宁漏勿误）。
    */
   probeClaimEvidence(name: string, scopeFiles: ReadonlySet<string>): ProbeEvidenceKind | null {
-    const matches = this.client.searchCodeMatches(name, 20);
+    const matches = this.searchMatchesCached(name);
     const scoped = matches.filter(m => scopeFiles.has(m.file) && !m.file.startsWith('.wiki/'));
     if (scoped.length === 0) return null;
     for (const m of scoped) {
@@ -109,6 +111,16 @@ export class VerificationHub {
       return 'usage';
     }
     return 'mention'; // 作用域内命中全在注释/提及行
+  }
+
+  /** search_code 命中缓存：同名 claim 在多页出现时只起一个子进程（build 内图谱不变，命中集恒定） */
+  private searchMatchesCached(name: string): Array<{ file: string; line: number }> {
+    let matches = this.searchMatchesCache.get(name);
+    if (matches === undefined) {
+      matches = this.client.searchCodeMatches(name, 20);
+      this.searchMatchesCache.set(name, matches);
+    }
+    return matches;
   }
 
   /** 源码行缓存（断言核验的命中行分类用；读失败缓存 null → fail-open） */

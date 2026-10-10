@@ -6,7 +6,7 @@
 import { collectFingerprints } from './collector.js';
 import { detectDuplication } from './duplication.js';
 import { detectScopeOverlap } from './scope.js';
-import { detectDepConsistency, detectTermInconsistency } from './consistency.js';
+import { detectDepConsistency, detectMetricMismatch, detectTermInconsistency } from './consistency.js';
 import type { CrossLink } from '../page-registry.js';
 import { findPageDescriptor } from '../page-registry.js';
 import { COMPLEMENT_PAGES } from './types.js';
@@ -88,6 +88,7 @@ export function crosspageReview(input: ReviewInput): {
     ...detectScopeOverlap(fingerprints),
     ...detectTermInconsistency(fingerprints),
     ...detectDepConsistency(input.contexts ?? new Map()),
+    ...detectMetricMismatch(fingerprints),
   ];
   const affinity = computeAffinity(fingerprints);
 

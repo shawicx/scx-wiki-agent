@@ -10,6 +10,8 @@ export interface TableFingerprint {
   firstColumn: Set<string>;
   /** 表格所在的小节标题（就近向上找 ##/###） */
   section: string;
+  /** 数值列指纹（表头名 + 按行序的数值序列；≥5 行且以纯数字为主的列才采集）——跨页同数异名检测用 */
+  numericColumns: Array<{ header: string; values: number[] }>;
 }
 
 /** 单页指纹：表格/术语/依赖/意图证据锚点 */
@@ -33,7 +35,8 @@ export interface CrossPageIssue {
     | 'intent-evidence-duplication'
     | 'page-scope-overlap'
     | 'term-inconsistency'
-    | 'dep-consistency';
+    | 'dep-consistency'
+    | 'metric-mismatch';
   /** 涉及页面（1-2 个） */
   pages: string[];
   /** 人读消息（进构建报告） */

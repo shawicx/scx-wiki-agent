@@ -166,7 +166,9 @@ export function detectIoEvents(line: string, domain: string): IoHit[] {
           }
         }
       }
-      break;
+      // 继续枚举本规则在同行内的其余命中（`mkdirSync(a); mkdirSync(b)` 的第二个事件不丢）；
+      // consumed 集合已保证同一位置不会重复记录
+      continue;
     }
   }
   return hits;

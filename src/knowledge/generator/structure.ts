@@ -46,7 +46,9 @@ function buildArchitectureSections(ctx: ArchitectureContext): PageConfig[] {
   const detailBatches = chunk(ctx.modules.map(toDetail), 6);
   const sectionTitles = [
     '整体架构设计思路与架构图',
-    ...detailBatches.map((_, i) => `核心模块详解（第${i + 1}批）`),
+    ...detailBatches.map((batch, i) => detailBatches.length > 1
+      ? `核心模块详解 ${i + 1}：${batch.map(m => m.name).slice(0, 3).join('、')}${batch.length > 3 ? ' 等' : ''}`
+      : '核心模块详解'),
     '模块依赖分析与横切关注点',
   ];
 
@@ -158,7 +160,9 @@ function buildModulesSections(ctx: ModulesContext): PageConfig[] {
   const detailBatches = chunk(ctx.modules, 4).map(batch => batch.map(toDetail));
   const sectionTitles = [
     '组织方式概述',
-    ...detailBatches.map((_, i) => `模块详解（第${i + 1}批）`),
+    ...detailBatches.map((batch, i) => detailBatches.length > 1
+      ? `模块详解 ${i + 1}：${batch.map(m => m.name).slice(0, 3).join('、')}${batch.length > 3 ? ' 等' : ''}`
+      : '模块详解'),
     ...(hasOther ? ['其他模块汇总'] : []),
   ];
 
@@ -271,7 +275,7 @@ function buildGlossarySections(ctx: GlossaryContext): PageConfig[] {
     complexity: s.complexity,
   });
 
-  const sectionTitles = buckets.map((b, i) => `关键概念（第${i + 1}批·${b.keys.join('/') || '补强符号'}）`);
+  const sectionTitles = buckets.map(b => b.keys.length > 0 ? `关键概念：${b.keys.join(' / ')}` : '关键概念（补强符号）');
 
   return buckets.map((b, i) => ({
     systemPrompt: `${sectionScope('关键概念参考', sectionTitles[i], sectionTitles)}\n\n你是一个资深代码文档专家。请生成"关键概念"参考页的这一批符号内容（Markdown格式）。

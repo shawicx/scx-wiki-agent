@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -7,6 +7,7 @@ import {
   countIntentEvidence,
 } from '../../src/knowledge/intent-evidence.js';
 import type { GitRunner } from '../../src/knowledge/intent-evidence.js';
+import { saveIntentGitCache } from '../../src/knowledge/intent/git-cache.js';
 import type { ScanResult, ScannedFile } from '../../src/core/scanner.js';
 
 /** 在真实 root 下写文件并生成对应的扫描清单项（absolutePath 必须指向真实文件） */
@@ -256,8 +257,9 @@ describe('IntentEvidenceProvider git 挖掘', () => {
 
       const p2 = new IntentEvidenceProvider(scan, { runGit: counting, agentDir });
       expect(p2.gitForFile('src/a.ts')!.count).toBe(2);
-      // 第二个实例：rev-parse（缓存校验）之外不应再跑文件 log
-      expect(calls).toBe(afterFirst + 1);
+      // 第二个实例：构造器 HEAD 取定（竞态防护，每实例固定 1 次 rev-parse）
+      // + 无缓存文件时重挖（1 次 log）；不得有其他重复子进程
+      expect(calls).toBe(afterFirst + 2);
     } finally {
       rmSync(agentDir, { recursive: true, force: true });
     }

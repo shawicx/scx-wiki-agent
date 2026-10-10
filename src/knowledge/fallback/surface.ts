@@ -7,7 +7,7 @@ import type {
   TroubleshootingContext,
   ReadmeContext,
 } from '../types.js';
-import { hasIntent, intentTable, summarizeDocstring, renderFactsAndUnknowns } from './shared.js';
+import { flattenSignature, hasIntent, intentTable, summarizeDocstring, renderFactsAndUnknowns } from './shared.js';
 
 export function buildApi(ctx: ApiContext): string {
   const builder = new WikiBuilder()
@@ -65,7 +65,7 @@ export function buildApi(ctx: ApiContext): string {
   if (functions.length > 0) {
     builder.addSection('导出函数', '').addTable(
       ['函数', '签名', '文件'],
-      functions.map(f => [f.name, f.signature ?? '', f.filePath]),
+      functions.map(f => [f.name, flattenSignature(f.signature) || '-', f.filePath]),
     );
   }
 
@@ -106,7 +106,7 @@ export function buildGlossary(ctx: GlossaryContext): string {
     ctx.symbols.map(s => [
       s.name,
       s.type,
-      s.signature ?? '',
+      flattenSignature(s.signature) || '-',
       summarizeDocstring(s.docstring),
       s.startLine && s.startLine > 0 ? `${s.filePath}:${s.startLine}` : s.filePath,
     ]),

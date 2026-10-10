@@ -39,21 +39,43 @@ export function extractTables(content: string): TableFingerprint[] {
     if (isTableHeader(line, lines[i + 1])) {
       const header = splitCells(line);
       const firstColumn = new Set<string>();
-      let rows = 0;
+      const rowCells: string[][] = [];
       let j = i + 2;
       for (; j < lines.length; j++) {
         const row = lines[j].trim();
         if (!row.startsWith('|')) break;
         if (/^\|[\s:|-]+\|?$/.test(row)) break;
-        rows++;
         const cells = splitCells(row);
+        rowCells.push(cells);
         if (cells.length > 0 && cells[0]) firstColumn.add(cells[0]);
       }
-      tables.push({ header, rows, firstColumn, section: lastSection });
+      const rows = rowCells.length;
+      tables.push({ header, rows, firstColumn, section: lastSection, numericColumns: numericColumns(header, rowCells) });
       i = j - 1;
     }
   }
   return tables;
+}
+
+/** 数值列提取：列 ≥5 行、≥80% 单元格为纯数字时记录（表头名 + 按行序数值序列） */
+function numericColumns(header: string[], rowCells: string[][]): Array<{ header: string; values: number[] }> {
+  const out: Array<{ header: string; values: number[] }> = [];
+  if (rowCells.length < 5) return out;
+  for (let c = 0; c < header.length; c++) {
+    const values: number[] = [];
+    let numeric = 0;
+    for (const cells of rowCells) {
+      const cell = cells[c] ?? '';
+      if (/^\d+(?:\.\d+)?$/.test(cell)) {
+        numeric++;
+        values.push(Number(cell));
+      }
+    }
+    if (values.length >= rowCells.length * 0.8 && values.length >= 5) {
+      out.push({ header: header[c] ?? `第${c + 1}列`, values });
+    }
+  }
+  return out;
 }
 
 /** 正文反引号标识符提取（术语统一检测域；跳过 fenced 与 evidence 表锚点列噪音由调用方过滤） */

@@ -44,6 +44,7 @@ import { archiveWikiDir } from './archive.js';
 import { runConfirmPhase } from './confirm-phase.js';
 import { writeProducedPages } from './write-phase.js';
 import { generateAllPages } from './generate-phase.js';
+import { stampFreshness } from './freshness.js';
 import { resolvePages } from './resolve.js';
 import { crosspageReview } from '../../knowledge/crosspage/index.js';
 import { applyCrossPageActions } from '../../knowledge/crosspage/actions.js';
@@ -270,6 +271,11 @@ export class WikiService {
 
     // IPC 对账摘要（口径局限 vs 真孤儿，供人工核对页面断言与扫描盲区一致性）
     const ipcConsistency = summarizeIpcConsistency(contexts.values());
+
+    // 时效戳（W7）：README 索引页头注入生成基准（commit + 日期）——静态快照的
+    // 过期状态对读者/AI 可感知。只改 README 一页，update 模式其余页的
+    // 内容一致跳过不受影响（戳变 → 仅 README 重写）
+    stampFreshness(producedEntries, repoHead);
 
     // ---- 阶段二：待确认项人工裁决（生成后、写盘前，单次会话跨页去重） ----
     const confirmResult = await runConfirmPhase(

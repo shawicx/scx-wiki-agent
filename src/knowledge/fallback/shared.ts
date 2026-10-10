@@ -10,6 +10,15 @@ export function sanitizeMermaid(name: string): string {
  * docstring 摘要渲染：剥 JSDoc 星号、字面 \n 还原为换行、取第一段，
  * 列表行转 <br>、普通换行转空格、截断防破表。无内容返回 '—'（不输出空话）。
  */
+/**
+ * 签名表格渲染：图谱把多行签名存成字面 `\n`（AGENTS 已知问题），表格单元格
+ * 里直接渲染会以 `\n    client: X,` 形态泄漏——压平为单行空格并收拢空白。
+ */
+export function flattenSignature(raw: string | null | undefined): string {
+  if (!raw) return '';
+  return raw.replace(/\\n/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 export function summarizeDocstring(raw: string | null | undefined, maxLen = 120): string {
   if (!raw) return '—';
   const text = raw

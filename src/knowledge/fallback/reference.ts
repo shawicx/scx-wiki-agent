@@ -1,7 +1,7 @@
 import { WikiBuilder } from '../wiki-builder.js';
 import { unconfirmedNote } from '../wiki-markers.js';
 import type { CallsContext, ClassesContext } from '../types.js';
-import { hasIntent, intentTable, summarizeDocstring, renderFactsAndUnknowns } from './shared.js';
+import { flattenSignature, hasIntent, intentTable, summarizeDocstring, renderFactsAndUnknowns } from './shared.js';
 
 /**
  * calls.md：调用边表（R2 边表优于时序图）。
@@ -117,7 +117,7 @@ export function buildClasses(ctx: ClassesContext): string {
         cls.methods.map(m => [
           m.name,
           m.visibility,
-          m.signature ? `\`${m.signature}\`` : '-',
+          m.signature ? `\`${flattenSignature(m.signature)}\`` : '-',
           summarizeDocstring(m.docstring),
           m.startLine > 0 ? `${m.filePath}:${m.startLine}` : m.filePath,
         ]),

@@ -38,8 +38,8 @@ export function buildOverview(ctx: OverviewContext): string {
 
   if (ctx.topSymbols.length > 0) {
     builder.addSection('热点符号（高扇入）', '').addTable(
-      ['符号', '类型', '复杂度'],
-      ctx.topSymbols.map(s => [s.name, s.type, String(s.complexity ?? '')]),
+      ['符号', '类型', '扇入'],
+      ctx.topSymbols.map(s => [s.name, s.type, String(s.fanIn ?? '')]),
     );
   }
 

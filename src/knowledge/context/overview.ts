@@ -15,12 +15,13 @@ export function buildOverviewContext(deps: ContextDeps): OverviewContext {
     .filter(f => ENTRY_FILE_NAMES.some(e => f.relativePath.endsWith('/' + e) || f.relativePath === e))
     .map(f => ({ name: f.relativePath.split('/').pop()!, path: f.relativePath }));
 
-  // hotspots 即高扇入符号，用作 topSymbols，体现项目核心（qn 供锚点与 trace 复用）
+  // hotspots 即高扇入符号，用作 topSymbols，体现项目核心（qn 供锚点与 trace 复用）。
+  // 字段名如实为 fanIn——旧名 complexity 曾使 overview 页把扇入误标成「复杂度」。
   const topSymbols = arch.hotspots.slice(0, 10).map(h => ({
     name: h.name,
     type: 'function' as SymbolType,
     qualifiedName: h.qualified_name,
-    complexity: h.fan_in,
+    fanIn: h.fan_in,
   }));
 
   const pkgMeta = readPackageMeta(deps);

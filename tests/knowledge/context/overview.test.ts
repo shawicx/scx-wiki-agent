@@ -28,7 +28,7 @@ import { makeScanResult, scannedFile } from './helpers.js';
 
       expect(ctx.topSymbols.length).toBeGreaterThan(0);
       expect(ctx.topSymbols[0].name).toBe('build');
-      expect(ctx.topSymbols[0].complexity).toBe(8);
+      expect(ctx.topSymbols[0].fanIn).toBe(8);
     });
 
   it('entryFiles 检测 index.ts', () => {

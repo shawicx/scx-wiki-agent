@@ -8,6 +8,7 @@ import { nativeTopLevelDef, nativeDefinedNameOn, nativeDefinitionPatterns } from
 import { NATIVE_CONST_DEF_RE } from '../../src/shared/language-patterns.js';
 import { collectCommentEvidence } from '../../src/knowledge/intent/comments.js';
 import { detectIoEvents } from '../../src/knowledge/dataflow/io-scan.js';
+import { scanIpcSurface } from '../../src/knowledge/tauri-ipc.js';
 import { ConfigDetector } from '../../src/knowledge/config-detector.js';
 
 let dir: string;
@@ -195,5 +196,58 @@ describe('非 node 运行态与 env 提取', () => {
     expect(env.packageManager).toBe('go modules');
     expect(env.packageName).toBe('example.com/svc');
     expect(env.envVars.map(v => v.name)).toContain('APP_MODE');
+  });
+});
+
+describe('H7：正则误采/误杀修复', () => {
+  it('JVM：注释行不产生幽灵符号（KDoc/行注释中的 interface/fun）', () => {
+    expect(nativeDefinedNameOn('// implements Foo interface Bar', 'jvm')).toBeNull();
+    expect(nativeDefinedNameOn(' * fun doStuff() does things', 'jvm')).toBeNull();
+    expect(nativeDefinedNameOn('/* class LegacyImpl */', 'jvm')).toBeNull();
+    // 真定义不受影响（含修饰符前缀）
+    expect(nativeDefinedNameOn('class RealService', 'jvm')).toEqual({ name: 'RealService', type: 'class' });
+    expect(nativeDefinedNameOn('private fun doWork()', 'jvm')).toEqual({ name: 'doWork', type: 'function' });
+    expect(nativeDefinedNameOn('override fun render()', 'jvm')).toEqual({ name: 'render', type: 'function' });
+  });
+
+  it('io-scan：同一行多个同类 I/O 调用全部采集（不再只记第一个）', () => {
+    const hits = detectIoEvents("mkdirSync(a); mkdirSync(b);", 'ts');
+    expect(hits.filter(h => h.kind === 'directory-write')).toHaveLength(2);
+  });
+
+  it('Tauri：真实命名空间事件（tauri://、plugin:）不被冒号过滤器误杀；v-model 噪声仍被排除', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tauri-ipc-h7-'));
+    try {
+      const srcPath = join(dir, 'src', 'main.ts');
+      mkdirSync(join(dir, 'src'), { recursive: true });
+      writeFileSync(srcPath, [
+        "import { listen, emit } from '@tauri-apps/api/event';",
+        "listen('tauri://blur', () => {});",
+        "listen('plugin:log|log', () => {});",
+        "emit('update:modelValue', 'x');",
+      ].join('\n'));
+      const scan = {
+        rootDir: dir,
+        files: [],
+        techStack: [],
+        testTechStack: [],
+        projectType: 'frontend',
+        hasTypeScript: true,
+        sourceDirs: ['src'],
+        fileCounts: { production: 1, test: 0 },
+        productionFiles: [{
+          absolutePath: srcPath, relativePath: 'src/main.ts',
+          language: 'ts', extension: '.ts', size: 10, scope: 'production',
+        }],
+        testFiles: [],
+      } as never;
+      const surface = scanIpcSurface(scan, new Map());
+      const names = surface.events.map(e => e.name);
+      expect(names).toContain('tauri://blur');
+      expect(names).toContain('plugin:log|log');
+      expect(names).not.toContain('update:modelValue');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

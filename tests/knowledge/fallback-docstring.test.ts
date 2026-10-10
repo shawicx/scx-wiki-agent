@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summarizeDocstring, renderFactsAndUnknowns } from '../../src/knowledge/fallback/shared.js';
+import { flattenSignature, summarizeDocstring, renderFactsAndUnknowns } from '../../src/knowledge/fallback/shared.js';
 import { WikiBuilder } from '../../src/knowledge/wiki-builder.js';
 
 describe('summarizeDocstring（JSDoc 摘要渲染）', () => {
@@ -50,5 +50,18 @@ describe('renderFactsAndUnknowns（事实/未知项区块）', () => {
     renderFactsAndUnknowns(builder, [], []);
     expect(builder.build()).not.toContain('本页确定知道的事实');
     expect(builder.build()).not.toContain('未知项');
+  });
+});
+
+describe('H4：flattenSignature（图谱字面 \\n 压平）', () => {
+  it('多行签名的字面 \\n 与缩进压平为单行（表格单元格不再泄漏 \\n）', () => {
+    expect(flattenSignature('(\\n    client: CodebaseMemoryClient,\\n    scanResult: ScanResult,\\n  )'))
+      .toBe('( client: CodebaseMemoryClient, scanResult: ScanResult, )');
+  });
+  it('空值与纯空白签名返回空串；单行签名原样保留', () => {
+    expect(flattenSignature(null)).toBe('');
+    expect(flattenSignature(undefined)).toBe('');
+    expect(flattenSignature('  ')).toBe('');
+    expect(flattenSignature('(a: string)')).toBe('(a: string)');
   });
 });

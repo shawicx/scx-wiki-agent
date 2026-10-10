@@ -177,8 +177,11 @@ export async function generatePage(
       } else {
         llmDrop = 'LLM 输出为空';
       }
-    } catch {
-      llmDrop = 'LLM 生成异常';
+    } catch (err) {
+      // 保留可诊断的错误摘要（超时/限流/鉴权/断网可区分）；
+      // AbortSignal.timeout → "This operation was aborted"、429 → provider 报文
+      const detail = err instanceof Error ? err.message : String(err);
+      llmDrop = `LLM 生成异常（${detail.slice(0, 120)}）`;
     }
   }
   return { content: fallback.buildByName(page, pageContext), source: 'fallback', llmDrop };

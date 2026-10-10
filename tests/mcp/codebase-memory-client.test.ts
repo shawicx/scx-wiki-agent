@@ -96,3 +96,26 @@ describe('S6：parseJsonOutput 括号配对提取（多行 pretty JSON / JSON �
     expect(client.getArchitecture().total_nodes).toBe(1);
   });
 });
+
+describe('H1：getArchitecture 实例级 memoize', () => {
+  const mockExec = execFileSync as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => { mockExec.mockReset(); });
+  it('同一客户端实例多次调用只起一次子进程（全 build 复用同一响应）', () => {
+    mockExec.mockReturnValue(JSON.stringify({ total_nodes: 3 }));
+    const client = new CodebaseMemoryClient('/proj');
+    client.getArchitecture();
+    client.getArchitecture();
+    client.getArchitecture();
+    const archCalls = mockExec.mock.calls.filter(c => c[1]?.[1] === 'get_architecture');
+    expect(archCalls).toHaveLength(1);
+  });
+
+  it('不同实例各自查询（缓存不跨 build）', () => {
+    mockExec.mockReturnValue(JSON.stringify({ total_nodes: 3 }));
+    new CodebaseMemoryClient('/proj').getArchitecture();
+    new CodebaseMemoryClient('/proj').getArchitecture();
+    const archCalls = mockExec.mock.calls.filter(c => c[1]?.[1] === 'get_architecture');
+    expect(archCalls).toHaveLength(2);
+  });
+});

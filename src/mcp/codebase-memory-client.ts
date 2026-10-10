@@ -171,6 +171,9 @@ export class CodebaseMemoryClient {
   private readonly binaryPath: string;
   private readonly projectName: string;
   private readonly repoPath: string;
+  /** getArchitecture 实例级缓存：最重的全量查询，一次 build 10+ 消费点只跑一次子进程，
+   *  同时消灭不同消费点拿到不同响应的口径漂移（客户端每 build 一个实例） */
+  private archCache: ArchitectureData | null = null;
 
   constructor(repoPath: string, binaryPath?: string) {
     this.repoPath = resolve(repoPath);
@@ -187,14 +190,16 @@ export class CodebaseMemoryClient {
     }) as IndexResult;
   }
 
-  /** 架构概览 */
+  /** 架构概览（实例级 memoize：一次 build 只跑一次子进程） */
   getArchitecture(): ArchitectureData {
+    if (this.archCache !== null) return this.archCache;
     const raw = this.exec('get_architecture', {
       project: this.projectName,
       aspects: ['all'],
       format: 'json',
     });
-    return adaptArchitecture(raw as Record<string, any>);
+    this.archCache = adaptArchitecture(raw as Record<string, any>);
+    return this.archCache;
   }
 
   /** 双向调用链追踪 */

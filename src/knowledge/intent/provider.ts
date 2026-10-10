@@ -51,10 +51,13 @@ export class IntentEvidenceProvider {
   private candidateStatsValue: IntentCandidateStats | null = null;
   private rootCommitRef: GitCommitRef | null = null;
   private rootCommitQueried = false;
+  /** 挖掘开始时的 HEAD（落盘键绑定此值，竞态防护见 git-cache.ts） */
+  private readonly headAtMiningStart: string | null;
 
   constructor(private scanResult: ScanResult, opts?: IntentProviderOptions) {
     this.runGit = opts?.runGit ?? defaultGitRunner(scanResult.rootDir);
     this.agentDir = opts?.agentDir;
+    this.headAtMiningStart = this.runGit(['rev-parse', 'HEAD']); // 挖掘开始时取定
     this.loadGitCache();
   }
 
@@ -327,11 +330,7 @@ export class IntentEvidenceProvider {
     const file = this.scanResult.files.find(f => f.relativePath === rel);
     let src: string | null = null;
     if (file) {
-      try {
-        src = readFileSync(file.absolutePath, 'utf-8');
-      } catch {
-        src = null;
-      }
+      try { src = readFileSync(file.absolutePath, 'utf-8'); } catch { src = null; }
     }
     this.sourceCache.set(rel, src);
     return src;
@@ -341,7 +340,8 @@ export class IntentEvidenceProvider {
 
   private loadGitCache(): void {
     if (!this.agentDir) return;
-    const cached = loadIntentGitCache(this.agentDir, this.runGit);
+    // 复用构造器取定的 HEAD（挖掘开始时），不重复起子进程
+    const cached = loadIntentGitCache(this.agentDir, this.runGit, this.headAtMiningStart);
     if (!cached) return;
     for (const [file, info] of cached.gitByFile) {
       this.gitByFile.set(file, info);
@@ -355,6 +355,6 @@ export class IntentEvidenceProvider {
 
   private saveGitCache(): void {
     if (!this.gitAvailable) return;
-    saveIntentGitCache(this.agentDir, this.runGit, this.gitByFile, this.repoGitSubjects(), this.rootCommitQueried ? this.rootCommitRef : this.rootCommit());
+    saveIntentGitCache(this.agentDir, this.headAtMiningStart, this.gitByFile, this.repoGitSubjects(), this.rootCommitQueried ? this.rootCommitRef : this.rootCommit());
   }
 }

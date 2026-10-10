@@ -22,7 +22,7 @@ export async function generateOverview(deps: GeneratorDeps, ctx: OverviewContext
 - techStack 只包含生产代码 import 的依赖；depUsage.usageKind=test 的依赖只能说明为测试专用，不得写成生产运行时技术栈
 - "项目结构"章节：逐一描述每个源代码目录的职责（至少覆盖所有 sourceDirs），说明目录间的关系，并引用 productionFileCount/testFileCount 区分生产与测试规模；多语言项目的 sourceDirs 含各语言的源码目录（如 src 与 src-tauri）
 - "入口文件"章节：列出每个入口点，说明其启动流程和职责
-- "核心组件"章节：基于 topSymbols 数据，用一段话介绍项目中复杂度最高/调用最频繁的核心组件
+- "核心组件"章节：基于 topSymbols 数据（fanIn = 被调用次数/扇入，不是圈复杂度），用一段话介绍项目中调用最频繁的核心组件
 - 不要只列举符号名，要解释每个组件的用途和设计意图
 - 内容要充实，宁可详细也不要遗漏重要信息`,
     userPrompt: JSON.stringify({
@@ -46,7 +46,7 @@ export async function generateOverview(deps: GeneratorDeps, ctx: OverviewContext
           name: s.name,
           type: s.type,
           docstring: s.docstring,
-          complexity: s.complexity,
+          fanIn: s.fanIn,
         })),
       supplementalSymbols: ctx.supplementalSymbols ?? [],
       depUsage: ctx.depUsage ?? [],

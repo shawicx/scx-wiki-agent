@@ -1,6 +1,6 @@
 import { WikiBuilder } from '../wiki-builder.js';
 import type { TopicContext, ChapterPageContext } from '../types.js';
-import { hasIntent, intentTable, summarizeDocstring, renderFactsAndUnknowns } from './shared.js';
+import { flattenSignature, hasIntent, intentTable, summarizeDocstring, renderFactsAndUnknowns } from './shared.js';
 
 /**
  * 主题页：仓库专属跨模块协作面（图谱推导）。
@@ -21,7 +21,7 @@ export function buildTopic(ctx: TopicContext): string {
       ctx.symbols.map(s => [
         `\`${s.name}\``,
         s.type,
-        s.signature ? `\`${s.signature}\`` : '-',
+        s.signature ? `\`${flattenSignature(s.signature)}\`` : '-',
         summarizeDocstring(s.docstring),
         s.startLine && s.startLine > 0 ? `${s.file}:${s.startLine}` : s.file,
       ]),
@@ -83,7 +83,7 @@ export function buildChapterPage(ctx: ChapterPageContext): string {
       ctx.symbols.map(s => [
         `\`${s.name}\``,
         s.type,
-        s.signature ? `\`${s.signature}\`` : '-',
+        s.signature ? `\`${flattenSignature(s.signature)}\`` : '-',
         summarizeDocstring(s.docstring),
         s.startLine && s.startLine > 0 ? `${s.file}:${s.startLine}` : s.file,
       ]),

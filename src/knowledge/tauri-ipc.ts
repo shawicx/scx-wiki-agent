@@ -41,6 +41,8 @@ function ipcKey(name: string): string {
 const INVOKE_RE = /\binvoke\s*\(\s*['"`]([^'"`\n]+)['"`]/g;
 const LISTEN_RE = /\blisten\s*\(\s*['"`]([^'"`\n]+)['"`]/g;
 const EMIT_RE = /\bemit\s*\(\s*['"`]([^'"`\n]+)['"`]/g;
+/** Vue 组件事件噪声形态：v-model 双向绑定（update:xxx）等 v-指令修饰事件，非 Tauri 事件 */
+const VUE_EVENT_NOISE_RE = /^(?:update|input|change|blur|focus|visible|show|hide|click|close|open|clear|select|toggle|load|scroll|drag|drop|keydown|keyup|mouseenter|mouseleave):[A-Za-z_][\w.-]*$/;
 const EMIT_TO_RE = /\.emit_to\s*\(\s*[^,()]+,\s*['"`]([^'"`\n]+)['"`]/g;
 const EMIT_ALL_RE = /\.emit_all\s*\(\s*[^,()]+,\s*['"`]([^'"`\n]+)['"`]/g;
 const RUST_CMD_ATTR_RE = /^#\[\s*tauri::command/;
@@ -137,16 +139,18 @@ export function scanIpcSurface(scanResult: ScanResult, cache: SourceCache): IpcS
       scanFullText(src, EMIT_ALL_RE, (name, line) => eventOf(name).emits.push({ file: rel, line, side: 'rust' }));
     } else {
       // 事件 API 噪声防护：Vue 组件的 emit('update:modelValue') 不是 Tauri 事件——
-      // 仅当文件 import 了 @tauri-apps/api/event 时才采集该文件的 listen/emit
+      // 仅当文件 import 了 @tauri-apps/api/event 时才采集该文件的 listen/emit。
+      // 冒号过滤只挡 Vue v-model 事件名（update:xxx 等 v-指令修饰形态），
+      // 不再一刀切——`tauri://blur`、`plugin:log|log` 等真实命名空间事件必须保留
       const invokeSrc = blankCallGenerics(src);
       scanFullText(invokeSrc, INVOKE_RE, (name, line) =>
         commandOf(name).frontendCalls.push({ file: rel, line }));
       if (/@tauri-apps\/api\/event/.test(src)) {
         scanFullText(invokeSrc, LISTEN_RE, (name, line) => {
-          if (!name.includes(':')) eventOf(name).listeners.push({ file: rel, line });
+          if (!VUE_EVENT_NOISE_RE.test(name)) eventOf(name).listeners.push({ file: rel, line });
         });
         scanFullText(invokeSrc, EMIT_RE, (name, line) => {
-          if (!name.includes(':')) eventOf(name).emits.push({ file: rel, line, side: 'frontend' });
+          if (!VUE_EVENT_NOISE_RE.test(name)) eventOf(name).emits.push({ file: rel, line, side: 'frontend' });
         });
       }
     }

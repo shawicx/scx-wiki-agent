@@ -33,10 +33,14 @@ const GO_DEF_PATTERNS: Array<{ re: RegExp; type: SymbolType }> = [
   { re: /^type\s+([A-Za-z_]\w*)\s+(?:struct|interface)/, type: 'class' },
   { re: /^const\s+([A-Za-z_]\w*)/, type: 'variable' },
 ];
+/** JVM 定义行允许的前导修饰符（Kotlin/Java；锚定行首的同时不误伤带修饰符的真定义） */
+const JVM_MODIFIERS = '(?:(?:public|private|protected|internal|static|final|abstract|open|override|sealed|data|inline|suspend|companion)\\s+)*';
 const JVM_DEF_PATTERNS: Array<{ re: RegExp; type: SymbolType }> = [
-  { re: /(?:class|interface|object|enum)\s+([A-Za-z_]\w*)/, type: 'class' },
-  { re: /fun\s+([A-Za-z_]\w*)\s*\(/, type: 'function' },
-  { re: /(?:public|private|protected|static|final)\s+(?:[\w<>[\], ?]+\s+)?([A-Za-z_]\w*)\s*\(/, type: 'method' },
+  // 行首锚定（trimmed 行）：未锚定时注释/KDoc 里的 `interface Bar`、`fun doStuff()`
+  // 会被采成幽灵符号并入符号全集，反向免标 LLM 编造的同名声明
+  { re: new RegExp(`^${JVM_MODIFIERS}(?:class|interface|object|enum)\\s+([A-Za-z_]\\w*)`), type: 'class' },
+  { re: new RegExp(`^${JVM_MODIFIERS}fun\\s+([A-Za-z_]\\w*)\\s*\\(`), type: 'function' },
+  { re: new RegExp(`^(?:public|private|protected|static|final)\\s+(?:[\\w<>\\[\\], ?]+\\s+)?([A-Za-z_]\\w*)\\s*\\(`), type: 'method' },
 ];
 
 export function nativeDefinedNameOn(line: string, domain: string): { name: string; type: SymbolType } | null {
@@ -45,6 +49,8 @@ export function nativeDefinedNameOn(line: string, domain: string): { name: strin
     : domain === 'jvm' ? JVM_DEF_PATTERNS : null;
   if (patterns === null) return null;
   const trimmed = line.trim();
+  // 注释行整体排除（//、/*、*、#）：注释中提及 def/class/fun 关键字不产生符号
+  if (/^(?:\/\/|\/\*|\*|#)/.test(trimmed)) return null;
   for (const { re, type } of patterns) {
     const m = trimmed.match(re);
     if (m) return { name: m[1], type };
@@ -58,8 +64,8 @@ export function nativeDefinitionPatterns(name: string, domain: string): RegExp[]
   if (domain === 'python') return [new RegExp(`^(?:async\\s+)?def\\s+${n}\\b`), new RegExp(`^class\\s+${n}\\b`)];
   if (domain === 'go') return [new RegExp(`^func\\s+(?:\\([^)]*\\)\\s+)?${n}\\b`), new RegExp(`^type\\s+${n}\\b`)];
   if (domain === 'jvm') return [
-    new RegExp(`(?:class|interface|object|enum)\\s+${n}\\b`),
-    new RegExp(`fun\\s+${n}\\s*\\(`),
+    new RegExp(`^${JVM_MODIFIERS}(?:class|interface|object|enum)\\s+${n}\\b`),
+    new RegExp(`^${JVM_MODIFIERS}fun\\s+${n}\\s*\\(`),
   ];
   return [];
 }

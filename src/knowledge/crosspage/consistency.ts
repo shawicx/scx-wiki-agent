@@ -78,3 +78,47 @@ export function detectDepConsistency(
   }
   return issues;
 }
+
+/**
+ * 跨页同数异名检测（metric-mismatch）：两个页面的表格出现**完全相同**的数值序列
+ * （≥5 项，按行序逐一相等）但列头语义不同（如「复杂度」vs「扇入」）——
+ * 同一份底层数据被两个标签渲染，必有一处语义错误。
+ * 典型事故：overview 把 hotspots 的 fan_in 误标成「复杂度」，与 calls 页「扇入」同数双标。
+ */
+export function detectMetricMismatch(
+  fingerprints: ReadonlyMap<string, PageFingerprint>,
+): CrossPageIssue[] {
+  // 数值序列签名（长度 ≥5 才有区分度）→ [{page, header}]
+  const bySignature = new Map<string, Array<{ page: string; header: string }>>();
+  for (const [page, fp] of fingerprints) {
+    for (const table of fp.tables) {
+      for (const col of table.numericColumns) {
+        if (col.values.length < 5) continue;
+        const sig = col.values.join(',');
+        let list = bySignature.get(sig);
+        if (list === undefined) bySignature.set(sig, (list = []));
+        if (!list.some(e => e.page === page && e.header === col.header)) {
+          list.push({ page, header: col.header });
+        }
+      }
+    }
+  }
+  const issues: CrossPageIssue[] = [];
+  const reported = new Set<string>();
+  for (const [sig, owners] of bySignature) {
+    if (owners.length < 2) continue;
+    // 同一页内同表头重复不算跨页矛盾；不同表头（无论是否跨页）才报
+    const headers = new Set(owners.map(o => o.header));
+    if (headers.size < 2) continue;
+    const key = [...owners].map(o => `${o.page}:${o.header}`).sort().join('|');
+    if (reported.has(key)) continue;
+    reported.add(key);
+    const n = sig.split(',').length;
+    issues.push({
+      rule: 'metric-mismatch',
+      pages: [...new Set(owners.map(o => o.page))],
+      message: `同一数值序列（${n} 项）在多处以不同语义渲染：${[...owners].map(o => `${o.page} 页「${o.header}」列`).join('、')}——同一底层数据被两个标签引用，至少一处语义有误，请核对数据源字段`,
+    });
+  }
+  return issues;
+}

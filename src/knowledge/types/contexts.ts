@@ -25,7 +25,7 @@ export interface OverviewContext {
   packageName?: string;
   packageDescription?: string;
   entryFiles: Array<{ name: string; path: string }>;
-  topSymbols: Array<{ name: string; type: SymbolType; qualifiedName?: string; docstring?: string | null; complexity?: number }>;
+  topSymbols: Array<{ name: string; type: SymbolType; qualifiedName?: string; docstring?: string | null; fanIn?: number }>;
   /** 技术栈依赖的使用证据（防 R5 把真实依赖标成待确认/声明未用） */
   depUsage?: DepUsage[];
   supplementalSymbols?: SupplementalSymbol[];

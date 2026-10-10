@@ -145,3 +145,43 @@ describe('crosspageReview 编排', () => {
     }
   });
 });
+
+describe('H3：metric-mismatch 跨页同数异名检测', () => {
+  const tablePage = (page: string, header: string) => ({
+    page,
+    content: [
+      `# ${page}`,
+      '',
+      `| 符号 | ${header} |`,
+      '|---|---|',
+      ...['renderFacts', 'isTestPath', 'generateX', 'languageDomain', 'intentTable'].map((n, i) => `| ${n} | ${[28, 27, 22, 14, 10][i]} |`),
+      '',
+      '正文。',
+    ].join('\n'),
+  });
+
+  it('同一数值序列在不同页以不同列头渲染 → 告警（如「复杂度」vs「扇入」）', () => {
+    const r = crosspageReview({
+      pages: [tablePage('overview', '复杂度'), tablePage('calls', '扇入')],
+      plannedPages: ['overview', 'calls'],
+    });
+    const issue = r.report.issues.find(i => i.rule === 'metric-mismatch');
+    expect(issue).toBeDefined();
+    expect(issue!.pages).toContain('overview');
+    expect(issue!.message).toContain('复杂度');
+    expect(issue!.message).toContain('扇入');
+  });
+
+  it('同列头（或单页出现）不告警', () => {
+    const same = crosspageReview({
+      pages: [tablePage('overview', '扇入'), tablePage('calls', '扇入')],
+      plannedPages: ['overview', 'calls'],
+    });
+    expect(same.report.issues.some(i => i.rule === 'metric-mismatch')).toBe(false);
+    const single = crosspageReview({
+      pages: [tablePage('overview', '复杂度')],
+      plannedPages: ['overview'],
+    });
+    expect(single.report.issues.some(i => i.rule === 'metric-mismatch')).toBe(false);
+  });
+});

@@ -13,9 +13,12 @@ describe('CodebaseMemoryClient', () => {
     mockExec.mockReset();
   });
 
-  it('项目名转义：路径 → MCP 标识符', () => {
-    const client = new CodebaseMemoryClient('/Users/scx/proj/foo');
+  it('项目名与 MCP 侧路径派生规则逐字对齐（不可加哈希后缀，否则 project not found）', () => {
+    const client = new CodebaseMemoryClient('/Users/sccx/proj/foo'.replace('sccx', 'scx'));
     expect((client as any)['projectName']).toBe('Users-scx-proj-foo');
+    // 已知局限（文档化）：`:` 与 `-` 折叠同键——MCP 侧派生规则使然，客户端无法单侧修复
+    expect((new CodebaseMemoryClient('/a:b/c') as any)['projectName'])
+      .toBe((new CodebaseMemoryClient('/a-b/c') as any)['projectName']);
   });
 
   it('getArchitecture 解析 JSON 输出', () => {

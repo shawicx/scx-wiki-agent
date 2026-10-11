@@ -16,35 +16,55 @@ import { pageRelPath, isTopicPage } from '../../knowledge/page-registry.js';
 import type { VerificationHub } from './verification.js';
 import type { PageProduced, ProducedEntry } from './types.js';
 
+/**
+ * 阶段一输入：builders + 作用域集 + 人工确认白名单等装配依赖。
+ * （替代旧的 21 个位置参数——位置实参换序/漏传无编译期防护。）
+ */
+export interface PageGenerationInput {
+  verify: VerificationHub;
+  rootDir: string;
+  /** 计划生成的页面名（经 precheck 过滤） */
+  pages: string[];
+  /** precheck 期已建好的 context（data-flow/decisions 复用，避免重复图谱查询） */
+  prebuiltContexts: ReadonlyMap<string, unknown>;
+  contextBuilder: WikiContextBuilder;
+  fallbackBuilder: WikiFallbackBuilder;
+  pageGenerator: WikiPageGenerator;
+  noLlm: boolean;
+  onChunk: (filename: string, text: string) => void;
+  knownFiles: ReadonlySet<string>;
+  productionKnownFiles: ReadonlySet<string>;
+  persistedConfirmed: ReadonlySet<string>;
+  /** 当前页名同步（service 侧 notice 统计的 currentPage 闭包替代） */
+  setCurrentPage: (page: string) => void;
+}
+
+/** 构建期可变统计累加器（报告数据源；notice 回调在生成期间写入） */
+export interface BuildStats {
+  continuations: Array<{ page: string; rounds: number; truncated: boolean }>;
+  sectionedPages: Array<{ page: string; sections: number; continuedSections: number; truncated: boolean }>;
+  thinkingOnly: Array<{ page: string; recovered: boolean }>;
+  llmDropped: Array<{ page: string; reason: string }>;
+  skippedPages: Array<{ page: string; reason: string }>;
+  claimStats: Array<{ page: string } & ClaimStats>;
+  citationStats: Array<{ page: string; cited: number; invalid: number }>;
+  intentCoverage: Array<{ page: string; counts: Record<string, number> }>;
+}
+
 export async function generateAllPages(
-  verify: VerificationHub,
-  rootDir: string,
-  pages: string[],
-  prebuiltContexts: Map<string, unknown>,
-  contextBuilder: WikiContextBuilder,
-  fallbackBuilder: WikiFallbackBuilder,
-  pageGenerator: WikiPageGenerator,
-  noLlm: boolean,
-  onChunk: (filename: string, text: string) => void,
-  knownFiles: Set<string>,
-  productionKnownFiles: Set<string>,
-  persistedConfirmed: Set<string>,
-  continuations: Array<{ page: string; rounds: number; truncated: boolean }>,
-  sectionedPages: Array<{ page: string; sections: number; continuedSections: number; truncated: boolean }>,
-  thinkingOnly: Array<{ page: string; recovered: boolean }>,
-  llmDropped: Array<{ page: string; reason: string }>,
-  skippedPages: Array<{ page: string; reason: string }>,
-  setCurrentPage: (page: string) => void,
-  claimStats: Array<{ page: string } & ClaimStats>,
-  citationStats: Array<{ page: string; cited: number; invalid: number }>,
-  intentCoverage: Array<{ page: string; counts: Record<string, number> }>,
-): Promise<ProducedEntry[]> {
+  input: PageGenerationInput,
+  stats: BuildStats,): Promise<ProducedEntry[]> {
   // 预遍历：先建全部 context，null 的页在生成前剔除——
   // plannedPaths / readme 索引 / 跨页链接都必须基于「实际会产出」的页面集，
   // 否则生成期才跳过的页面（如无 vue-router 的 routing）会以死链漏进索引与正文
+  const { verify, contextBuilder, fallbackBuilder, pageGenerator, noLlm, onChunk } = input;
+  const { knownFiles, productionKnownFiles, persistedConfirmed, setCurrentPage } = input;
+  const { continuations, sectionedPages, thinkingOnly, llmDropped } = stats;
+  const { skippedPages, claimStats, citationStats, intentCoverage } = stats;
+  const pages = input.pages;
   const contexts = new Map<string, unknown>();
   for (const page of pages) {
-    contexts.set(page, prebuiltContexts.get(page) ?? contextBuilder.buildByName(page, pages));
+    contexts.set(page, input.prebuiltContexts.get(page) ?? contextBuilder.buildByName(page, pages));
   }
   const effectivePages = pages.filter(p => {
     const ctx = contexts.get(p);
@@ -146,7 +166,7 @@ export async function generateAllPages(
       source: produced.source,
       content: bodyContent,
       // 分层相关性排序（T1 正文引用置顶 > 符号定义 > 意图证据 > 入口/代表 > 配置兜底）
-      evidenceFiles: rankEvidenceFiles(pageContext, bodyContent, pageKnownFiles, rootDir),
+      evidenceFiles: rankEvidenceFiles(pageContext, bodyContent, pageKnownFiles, input.rootDir),
       context: pageContext,
     });
   }

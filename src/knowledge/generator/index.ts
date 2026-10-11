@@ -55,6 +55,38 @@ import {
   generateRouting, generateWorkspaces, generatePackageBoundaries, generateDbSchema,
 } from './tier2.js';
 
+
+/**
+ * 页面名 → LLM 生成函数的注册表映射（generateByName 的唯一事实源）。
+ * 键集与 PAGE_REGISTRY 的差集必须恰为 LLM_EXEMPT_PAGES（无 LLM 叙述页），
+ * 由 page-dispatch-consistency.test.ts 静态校验——漏注册在 CI 即失败。
+ */
+export const GENERATOR_PAGES: Record<string, (deps: GeneratorDeps, ctx: any, onChunk: (text: string) => void) => Promise<string>> = {
+  overview: generateOverview,
+  architecture: generateArchitecture,
+  'data-flow': generateDataFlow,
+  modules: generateModules,
+  api: generateApi,
+  onboarding: generateOnboarding,
+  troubleshooting: generateTroubleshooting,
+  glossary: generateGlossary,
+  testing: generateTesting,
+  constraints: generateConstraints,
+  decisions: generateDecisions,
+  environment: generateEnvironment,
+  'tech-stack': generateTechStack,
+  conventions: generateConventions,
+  cli: generateCliPage,
+  'public-api': generatePublicApi,
+  routes: generateRoutes,
+  components: generateComponents,
+  state: generateStatePage,
+  routing: generateRouting,
+  workspaces: generateWorkspaces,
+  'package-boundaries': generatePackageBoundaries,
+  'db-schema': generateDbSchema,
+};
+
 export type { GeneratorSettings, PageGenNotice } from './shared.js';
 
 export class WikiPageGenerator {
@@ -95,36 +127,12 @@ export class WikiPageGenerator {
     return r.content;
   }
 
-  /** 按页面名派发 LLM 生成（供 PageRegistry 调用） */
+  /** 按页面名派发 LLM 生成（供 PageRegistry 调用）；未注册页返回空串走上层降级 */
   async generateByName(page: string, ctx: any, onChunk: (text: string) => void): Promise<string> {
     if (isChapterPage(page)) return this.generateChapterPage(ctx, onChunk);
     if (isTopicPage(page)) return this.generateTopic(ctx, onChunk);
-    switch (page) {
-      case 'overview': return this.generateOverview(ctx, onChunk);
-      case 'architecture': return this.generateArchitecture(ctx, onChunk);
-      case 'data-flow': return this.generateDataFlow(ctx, onChunk);
-      case 'modules': return this.generateModules(ctx, onChunk);
-      case 'api': return this.generateApi(ctx, onChunk);
-      case 'onboarding': return this.generateOnboarding(ctx, onChunk);
-      case 'troubleshooting': return this.generateTroubleshooting(ctx, onChunk);
-      case 'glossary': return this.generateGlossary(ctx, onChunk);
-      case 'testing': return this.generateTesting(ctx, onChunk);
-      case 'constraints': return this.generateConstraints(ctx, onChunk);
-      case 'decisions': return this.generateDecisions(ctx, onChunk);
-      case 'environment': return this.generateEnvironment(ctx, onChunk);
-      case 'tech-stack': return this.generateTechStack(ctx, onChunk);
-      case 'conventions': return this.generateConventions(ctx, onChunk);
-      case 'cli': return this.generateCliPage(ctx, onChunk);
-      case 'public-api': return this.generatePublicApi(ctx, onChunk);
-      case 'routes': return this.generateRoutes(ctx, onChunk);
-      case 'components': return this.generateComponents(ctx, onChunk);
-      case 'state': return this.generateStatePage(ctx, onChunk);
-      case 'routing': return this.generateRouting(ctx, onChunk);
-      case 'workspaces': return this.generateWorkspaces(ctx, onChunk);
-      case 'package-boundaries': return this.generatePackageBoundaries(ctx, onChunk);
-      case 'db-schema': return this.generateDbSchema(ctx, onChunk);
-      default: return '';
-    }
+    const gen = GENERATOR_PAGES[page];
+    return gen ? gen(this.deps, ctx, onChunk) : '';
   }
 
   async generateOverview(ctx: OverviewContext, onChunk: (text: string) => void): Promise<string> {

@@ -201,7 +201,12 @@ describe('loadOutline / saveOutline', () => {
     };
     saveOutline(tmp, data);
     expect(existsSync(join(tmp, 'outline.json'))).toBe(true);
-    expect(loadOutline(tmp)).toEqual(data);
-    expect(validateOutline(loadOutline(tmp), known).chapters).toHaveLength(1);
+    // M8：写盘带 schemaVersion 字段（结构演进可识别），加载原样透传、校验器宽松忽略
+    const loaded = loadOutline(tmp) as typeof data & { schemaVersion: number };
+    expect(loaded.schemaVersion).toBe(1);
+    const { schemaVersion, ...rest } = loaded;
+    void schemaVersion;
+    expect(rest).toEqual(data);
+    expect(validateOutline(loaded, known).chapters).toHaveLength(1);
   });
 });

@@ -9,7 +9,7 @@
  * 固定 PageRegistry 页面照常构建。所有剔除与告警进 OutlineReport 供构建报告呈现。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { isTestPath, matchPackageForFile } from '../shared/utils.js';
 
@@ -108,7 +108,11 @@ export function loadOutline(agentDir: string): unknown | null {
 
 export function saveOutline(agentDir: string, data: OutlineFileData): void {
   mkdirSync(agentDir, { recursive: true });
-  writeFileSync(join(agentDir, OUTLINE_FILE), JSON.stringify(data, null, 2), 'utf-8');
+  // M8：版本字段（结构演进可识别）+ tmp/rename 原子写（中断不留截断 JSON）
+  const target = join(agentDir, OUTLINE_FILE);
+  const tmp = `${target}.tmp-${process.pid}`;
+  writeFileSync(tmp, JSON.stringify({ ...data, schemaVersion: 1 }, null, 2), 'utf-8');
+  renameSync(tmp, target);
 }
 
 function clampText(text: unknown, max: number): string {

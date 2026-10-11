@@ -50,40 +50,47 @@ import {
   buildRouting, buildWorkspaces, buildPackageBoundaries, buildDbSchema,
 } from './tier2.js';
 
+
+/**
+ * 页面名 → 规则生成函数的注册表映射（buildByName 的唯一事实源）。
+ * 键集与 PAGE_REGISTRY 完全一致，由 page-dispatch-consistency.test.ts
+ * 静态校验——漏注册在 CI 即失败，不再静默产出空页。
+ */
+export const FALLBACK_PAGES: Record<string, (ctx: any) => string> = {
+  overview: buildOverview,
+  architecture: buildArchitecture,
+  'data-flow': buildDataFlow,
+  modules: buildModules,
+  api: buildApi,
+  onboarding: buildOnboarding,
+  troubleshooting: buildTroubleshooting,
+  glossary: buildGlossary,
+  calls: buildCalls,
+  classes: buildClasses,
+  readme: buildReadme,
+  environment: buildEnvironment,
+  testing: buildTesting,
+  conventions: buildConventions,
+  constraints: buildConstraints,
+  decisions: buildDecisions,
+  cli: buildCli,
+  'tech-stack': buildTechStack,
+  'public-api': buildPublicApi,
+  routes: buildRoutes,
+  components: buildComponents,
+  state: buildState,
+  routing: buildRouting,
+  workspaces: buildWorkspaces,
+  'package-boundaries': buildPackageBoundaries,
+  'db-schema': buildDbSchema,
+};
+
 export class WikiFallbackBuilder {
-  /** 按页面名派发规则生成（供 PageRegistry 调用） */
+  /** 按页面名派发规则生成（供 PageRegistry 调用）；未注册页返回空串（上游 null-context 已拦截） */
   buildByName(page: string, ctx: any): string {
     if (isTopicPage(page)) return this.buildTopic(ctx);
     if (isChapterPage(page)) return this.buildChapterPage(ctx);
-    switch (page) {
-      case 'overview': return this.buildOverview(ctx);
-      case 'architecture': return this.buildArchitecture(ctx);
-      case 'data-flow': return this.buildDataFlow(ctx);
-      case 'modules': return this.buildModules(ctx);
-      case 'api': return this.buildApi(ctx);
-      case 'onboarding': return this.buildOnboarding(ctx);
-      case 'troubleshooting': return this.buildTroubleshooting(ctx);
-      case 'glossary': return this.buildGlossary(ctx);
-      case 'calls': return this.buildCalls(ctx);
-      case 'classes': return this.buildClasses(ctx);
-      case 'readme': return this.buildReadme(ctx);
-      case 'environment': return this.buildEnvironment(ctx);
-      case 'testing': return this.buildTesting(ctx);
-      case 'conventions': return this.buildConventions(ctx);
-      case 'constraints': return this.buildConstraints(ctx);
-      case 'decisions': return this.buildDecisions(ctx);
-      case 'cli': return this.buildCli(ctx);
-      case 'tech-stack': return this.buildTechStack(ctx);
-      case 'public-api': return this.buildPublicApi(ctx);
-      case 'routes': return this.buildRoutes(ctx);
-      case 'components': return this.buildComponents(ctx);
-      case 'state': return this.buildState(ctx);
-      case 'routing': return this.buildRouting(ctx);
-      case 'workspaces': return this.buildWorkspaces(ctx);
-      case 'package-boundaries': return this.buildPackageBoundaries(ctx);
-      case 'db-schema': return this.buildDbSchema(ctx);
-      default: return '';
-    }
+    return FALLBACK_PAGES[page]?.(ctx) ?? '';
   }
 
   buildOverview(ctx: OverviewContext): string {

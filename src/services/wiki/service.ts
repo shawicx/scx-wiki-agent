@@ -22,28 +22,21 @@ import type { TopicDefinition } from '../../knowledge/topic-discovery.js';
 import { loadOutline, saveOutline, validateOutline } from '../../knowledge/outline.js';
 import type { OutlineFileData, OutlineReport } from '../../knowledge/outline.js';
 import { OutlinePlanner } from '../../knowledge/outline-planner.js';
-import {
-  pageRelPath, isTopicPage, topicPageName,
-  chapterPageName,
-} from '../../knowledge/page-registry.js';
+import { pageRelPath, isTopicPage, topicPageName, chapterPageName } from '../../knowledge/page-registry.js';
 import type { WikiBuildOptions } from '../../knowledge/types.js';
 import { runPagePrechecks } from './precheck.js';
 
 export { dataFlowDropReason } from './precheck.js';
 import { VerificationHub } from './verification.js';
 import {
-  cleanupLegacyFlatFiles,
-  cleanupRetiredPages,
-  cleanupStaleTopicPages,
-  cleanupStaleChapterPages,
-  removeEmptyOwnedDirs,
-  cleanupStaleNumberedDirFiles,
+  cleanupLegacyFlatFiles, cleanupRetiredPages, cleanupStaleTopicPages,
+  cleanupStaleChapterPages, removeEmptyOwnedDirs, cleanupStaleNumberedDirFiles,
 } from './cleanup.js';
 import { printBuildReport } from './report.js';
 import { archiveWikiDir } from './archive.js';
 import { runConfirmPhase } from './confirm-phase.js';
 import { writeProducedPages } from './write-phase.js';
-import { generateAllPages } from './generate-phase.js';
+import { generateAllPages, type BuildStats } from './generate-phase.js';
 import { stampFreshness } from './freshness.js';
 import { resolvePages } from './resolve.js';
 import { crosspageReview } from '../../knowledge/crosspage/index.js';
@@ -92,20 +85,20 @@ export class WikiService {
 
     // 页生成器（章树 planner 复用其模型能力）与通知统计，声明在前供 planner 触发
     const noLlm = options?.noLlm ?? false;
-    const continuations: Array<{ page: string; rounds: number; truncated: boolean }> = [];
-    const sectionedPages: Array<{ page: string; sections: number; continuedSections: number; truncated: boolean }> = [];
-    const thinkingOnly: Array<{ page: string; recovered: boolean }> = [];
-    const llmDropped: Array<{ page: string; reason: string }> = [];
+    const stats: BuildStats = {
+      continuations: [], sectionedPages: [], thinkingOnly: [], llmDropped: [],
+      skippedPages: [], claimStats: [], citationStats: [], intentCoverage: [],
+    };
     let currentPage = '';
     const pageGenerator = new WikiPageGenerator(
       options?.model, options?.baseURL, options?.apiKey,
       n => {
         if (n.kind === 'continuation') {
-          continuations.push({ page: currentPage, rounds: n.rounds, truncated: n.truncated });
+          stats.continuations.push({ page: currentPage, rounds: n.rounds, truncated: n.truncated });
         } else if (n.kind === 'thinking-only') {
-          thinkingOnly.push({ page: currentPage, recovered: n.recovered });
+          stats.thinkingOnly.push({ page: currentPage, recovered: n.recovered });
         } else {
-          sectionedPages.push({
+          stats.sectionedPages.push({
             page: currentPage, sections: n.sections,
             continuedSections: n.continuedSections, truncated: n.truncated,
           });
@@ -168,7 +161,6 @@ export class WikiService {
     const fallbackBuilder = new WikiFallbackBuilder();
     const onChunk = options?.onChunk ?? (() => {});
 
-    const skippedPages: Array<{ page: string; reason: string }> = [];
     const legacyRemoved: string[] = [];
 
     // 归档标签：HEAD 短哈希（无 git 时时间戳）；repoHead 在此提前取定供下文复用
@@ -181,7 +173,7 @@ export class WikiService {
     const precheck = runPagePrechecks(contextBuilder, wikiDir, agentDir, archiveLabel, pages);
     pages = precheck.pages;
     const prebuiltContexts = precheck.prebuiltContexts;
-    skippedPages.push(...precheck.skipped);
+    stats.skippedPages.push(...precheck.skipped);
     legacyRemoved.push(...precheck.legacyRemoved);
 
     // 接管式清理（update 模式路径；full 模式写盘前整目录重建，跳过）：
@@ -196,10 +188,6 @@ export class WikiService {
         ...removeEmptyOwnedDirs(wikiDir),
       );
     }
-
-    const claimStats: Array<{ page: string } & ClaimStats> = [];
-    const citationStats: Array<{ page: string; cited: number; invalid: number }> = [];
-    const intentCoverage: Array<{ page: string; counts: Record<string, number> }> = [];
 
     // 持久化确认（confirmations.json v2 指纹条目）：指纹仍有效的 claim 本次免标；
     // 过期条目（HEAD 变且文件哈希失配 / 歧义名 HEAD-scoped 过期）重新进入待确认
@@ -229,13 +217,22 @@ export class WikiService {
     // 必须发生在写盘前——确认结果在内存改写最终内容，统一过闸写盘，update 模式
     // 的内容比较也因此基于裁决后的终稿。
     const producedEntries = await generateAllPages(
-      this.verify, this.scanResult.rootDir,
-      pages, prebuiltContexts, contextBuilder, fallbackBuilder, pageGenerator,
-      noLlm, onChunk, knownFiles, productionKnownFiles,
-      persistedConfirmed, continuations, sectionedPages, thinkingOnly, llmDropped,
-      skippedPages,
-      (p: string) => { currentPage = p; },
-      claimStats, citationStats, intentCoverage,
+      {
+        verify: this.verify,
+        rootDir: this.scanResult.rootDir,
+        pages,
+        prebuiltContexts,
+        contextBuilder,
+        fallbackBuilder,
+        pageGenerator,
+        noLlm,
+        onChunk,
+        knownFiles,
+        productionKnownFiles,
+        persistedConfirmed,
+        setCurrentPage: (p: string) => { currentPage = p; },
+      },
+      stats,
     );
 
     // 实际产出的页面路径集（null-context 页已在阶段一剔除）——
@@ -295,17 +292,17 @@ export class WikiService {
 
     printBuildReport(
       writeResult.writtenPages,
-      [...skippedPages, ...writeResult.skippedPages],
+      [...stats.skippedPages, ...writeResult.skippedPages],
       writeResult.qualityReports,
       legacyRemoved,
-      continuations,
-      sectionedPages,
-      thinkingOnly,
-      llmDropped,
+      stats.continuations,
+      stats.sectionedPages,
+      stats.thinkingOnly,
+      stats.llmDropped,
       outlineReport,
-      claimStats,
-      citationStats,
-      intentCoverage,
+      stats.claimStats,
+      stats.citationStats,
+      stats.intentCoverage,
       confirmResult.summary,
       {
         valid: persistedConfirmed.size,

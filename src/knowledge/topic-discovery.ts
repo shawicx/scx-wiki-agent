@@ -12,7 +12,7 @@
  * 用户可手工编辑（删主题/改标题），build 尊重手工内容；--refresh-topics 重新探测覆盖。
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CodebaseMemoryClient } from '../mcp/codebase-memory-client.js';
 import type { ArchitectureData } from '../mcp/types.js';
@@ -58,6 +58,29 @@ function overlapRatio(a: string[], b: string[]): number {
   return union > 0 ? inter / union : 0;
 }
 
+
+/**
+ * M4 语义门槛：纯 re-export 兼容壳不成题。
+ * 聚度排序会把「全是 export … from 的兼容层文件」聚成高内聚簇（它们彼此
+ * 引用同一批目标），选中后产出的主题页 symbols/edges 全空、通篇「信息不足」。
+ * 判定：文件的非空非注释行全部是 re-export 形态 → 视为壳。主题至少需要
+ * 1 个非壳成员文件（有真实实现的协作面）才值得成页。
+ */
+const RE_EXPORT_RE = /^export\s+(?:type\s+)?(?:\*(?:\s+as\s+[\w$]+)?|\{[^}]*\})\s+from\s+['"]/;
+function isReExportShell(source: string): boolean {
+  let sawReExport = false;
+  for (const raw of source.split('\n')) {
+    const line = raw.trim();
+    if (line.length === 0 || line.startsWith('//') || line.startsWith('/*') || line.startsWith('*')) continue;
+    if (RE_EXPORT_RE.test(line)) {
+      sawReExport = true;
+      continue;
+    }
+    return false; // 存在任何实质语句
+  }
+  return sawReExport;
+}
+
 export class TopicDiscovery {
   constructor(
     private client: CodebaseMemoryClient,
@@ -74,6 +97,21 @@ export class TopicDiscovery {
     return topics;
   }
 
+  /** 至少一个成员文件含实质实现（非纯 re-export 壳；读失败按非壳处理，宁漏勿误） */
+  private hasSubstantiveMember(files: string[]): boolean {
+    const byPath = new Map(this.scanResult.productionFiles.map(f => [f.relativePath, f.absolutePath]));
+    for (const rel of files) {
+      const abs = byPath.get(rel);
+      if (!abs) continue;
+      try {
+        if (!isReExportShell(readFileSync(abs, 'utf-8'))) return true;
+      } catch {
+        return true; // 读失败不拦截（fail-open）
+      }
+    }
+    return false;
+  }
+
   private fromClusters(arch: ArchitectureData): TopicDefinition[] {
     const candidates = [...arch.clusters]
       .filter(c => c.members >= MIN_CLUSTER_MEMBERS && c.top_nodes.length >= 3)
@@ -85,6 +123,8 @@ export class TopicDiscovery {
       const files = this.filesForSymbols(cluster.top_nodes);
       const pkgs = this.packagesForFiles(files, arch);
       if (pkgs.size < 2 || files.length < MIN_TOPIC_FILES) continue;
+      // M4：成员全为 re-export 兼容壳的簇不成题（高聚度≠有语义）
+      if (!this.hasSubstantiveMember(files)) continue;
       // 与已立题主题高度重叠的簇不重复立题（同一协作面的两种聚类切法）
       if (topics.some(t => overlapRatio(t.files, files) > MAX_TOPIC_OVERLAP)) continue;
 
@@ -170,6 +210,7 @@ export class TopicDiscovery {
         .filter(p => matchPackageForFile(p, [pkgName]) !== null);
     const files = [...pkgFile(top.from), ...pkgFile(top.to)].slice(0, MAX_TOPIC_FILES);
     if (files.length < MIN_TOPIC_FILES) return null;
+    if (!this.hasSubstantiveMember(files)) return null; // M4：同款语义门槛
     return {
       id: `topic-${top.from}-${top.to}`,
       title: `${top.from} ↔ ${top.to} 协作`,
@@ -204,17 +245,26 @@ export class TopicDiscovery {
   }
 }
 
-/** 读取锁定的主题定义；文件不存在返回 null（触发首次探测） */
+/**
+ * 读取锁定的主题定义；文件不存在返回 null（触发首次探测）。
+ * M8：支持 v2 包装 `{ schemaVersion: 2, topics: [...] }`（写盘为该形态）；
+ * 旧版裸数组（v1）读入兼容（迁移在下次保存时自然完成）。
+ */
 export function loadTopics(agentDir: string): TopicDefinition[] | null {
   const file = join(agentDir, TOPICS_FILE);
   if (!existsSync(file)) return null;
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf-8'));
-    if (!Array.isArray(parsed)) return null;
-    const topics = parsed
+    const raw: unknown[] | null = Array.isArray(parsed)
+      ? parsed // v1 裸数组
+      : (parsed && typeof parsed === 'object' && parsed.schemaVersion === 2 && Array.isArray(parsed.topics)
+        ? parsed.topics
+        : null);
+    if (raw === null) return null;
+    const topics = raw
       .filter((t): t is TopicDefinition =>
-        t && typeof t === 'object' && typeof t.id === 'string'
-        && typeof t.title === 'string' && Array.isArray(t.files))
+        !!t && typeof t === 'object' && typeof (t as TopicDefinition).id === 'string'
+        && typeof (t as TopicDefinition).title === 'string' && Array.isArray((t as TopicDefinition).files))
       .filter(t => t.id.length > 0 && t.files.length > 0);
     return topics;
   } catch {
@@ -222,10 +272,13 @@ export function loadTopics(agentDir: string): TopicDefinition[] | null {
   }
 }
 
-/** 写入主题定义（--refresh-topics 或首次 build 时） */
+/** 写入主题定义（--refresh-topics 或首次 build 时）；v2 包装 + tmp/rename 原子写（M8） */
 export function saveTopics(agentDir: string, topics: TopicDefinition[]): void {
   mkdirSync(agentDir, { recursive: true });
-  writeFileSync(join(agentDir, TOPICS_FILE), JSON.stringify(topics, null, 2), 'utf-8');
+  const target = join(agentDir, TOPICS_FILE);
+  const tmp = `${target}.tmp-${process.pid}`;
+  writeFileSync(tmp, JSON.stringify({ schemaVersion: 2, topics }, null, 2), 'utf-8');
+  renameSync(tmp, target);
 }
 
 /**

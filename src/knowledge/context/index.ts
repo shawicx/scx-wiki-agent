@@ -67,6 +67,41 @@ export { buildWorkspacesContext, buildPackageBoundariesContext } from './workspa
 export { buildDbSchemaContext } from './db-schema.js';
 
 /**
+ * 页面名 → context 构建函数的注册表映射（dispatch 的唯一事实源）。
+ * 一致性测试（page-dispatch-consistency.test.ts）静态校验其键集与
+ * PAGE_REGISTRY 完全一致——漏注册任何页面在 CI 即失败，不再依赖运行期
+ * build report 才发现「页面被静默跳过」。
+ */
+export const CONTEXT_PAGES: Record<string, (deps: ContextDeps, plannedPages?: string[]) => unknown> = {
+  overview: buildOverviewContext,
+  architecture: buildArchitectureContext,
+  'data-flow': buildDataFlowContext,
+  modules: buildModulesContext,
+  api: buildApiContext,
+  onboarding: buildOnboardingContext,
+  troubleshooting: buildTroubleshootingContext,
+  glossary: buildGlossaryContext,
+  calls: buildCallsContext,
+  classes: buildClassesContext,
+  readme: buildReadmeContext,
+  environment: buildEnvironmentContext,
+  testing: buildTestingContext,
+  conventions: buildConventionsContext,
+  constraints: buildConstraintsContext,
+  decisions: buildDecisionsContext,
+  cli: buildCliContext,
+  'tech-stack': buildTechStackContext,
+  'public-api': buildPublicApiContext,
+  routes: buildRoutesContext,
+  components: buildComponentsContext,
+  state: buildStateContext,
+  routing: buildRoutingContext,
+  workspaces: buildWorkspacesContext,
+  'package-boundaries': buildPackageBoundariesContext,
+  'db-schema': buildDbSchemaContext,
+};
+
+/**
  * 从 codebase-memory-mcp 知识图谱构建各 wiki 页面的上下文数据。
  *
  * 替代了旧的 SQLite 直查方式。所有数据来自 MCP 的架构概览、调用链追踪、
@@ -105,35 +140,8 @@ export class WikiContextBuilder {
   private dispatchContext(page: string, plannedPages?: string[]): unknown {
     if (isTopicPage(page)) return buildTopicContext(this.deps, topicIdFromPage(page));
     if (isChapterPage(page)) return buildChapterPageContext(this.deps, page);
-    switch (page) {
-      case 'overview': return buildOverviewContext(this.deps);
-      case 'architecture': return buildArchitectureContext(this.deps);
-      case 'data-flow': return buildDataFlowContext(this.deps);
-      case 'modules': return buildModulesContext(this.deps);
-      case 'api': return buildApiContext(this.deps);
-      case 'onboarding': return buildOnboardingContext(this.deps);
-      case 'troubleshooting': return buildTroubleshootingContext(this.deps);
-      case 'glossary': return buildGlossaryContext(this.deps);
-      case 'calls': return buildCallsContext(this.deps);
-      case 'classes': return buildClassesContext(this.deps);
-      case 'readme': return buildReadmeContext(this.deps, plannedPages);
-      case 'environment': return buildEnvironmentContext(this.deps);
-      case 'testing': return buildTestingContext(this.deps);
-      case 'conventions': return buildConventionsContext(this.deps);
-      case 'constraints': return buildConstraintsContext(this.deps);
-      case 'decisions': return buildDecisionsContext(this.deps);
-      case 'cli': return buildCliContext(this.deps);
-      case 'tech-stack': return buildTechStackContext(this.deps);
-      case 'public-api': return buildPublicApiContext(this.deps);
-      case 'routes': return buildRoutesContext(this.deps);
-      case 'components': return buildComponentsContext(this.deps);
-      case 'state': return buildStateContext(this.deps);
-      case 'routing': return buildRoutingContext(this.deps);
-      case 'workspaces': return buildWorkspacesContext(this.deps);
-      case 'package-boundaries': return buildPackageBoundariesContext(this.deps);
-      case 'db-schema': return buildDbSchemaContext(this.deps);
-      default: return null;
-    }
+    const build = CONTEXT_PAGES[page];
+    return build ? build(this.deps, plannedPages) : null;
   }
 
   /**
@@ -155,75 +163,75 @@ export class WikiContextBuilder {
   }
 
   buildOverviewContext(): OverviewContext {
-    return buildOverviewContext(this.deps);
+    return this.dispatchContext('overview') as OverviewContext;
   }
 
   buildArchitectureContext(): ArchitectureContext {
-    return buildArchitectureContext(this.deps);
+    return this.dispatchContext('architecture') as ArchitectureContext;
   }
 
   buildDataFlowContext(): DataFlowContext {
-    return buildDataFlowContext(this.deps);
+    return this.dispatchContext('data-flow') as DataFlowContext;
   }
 
   buildModulesContext(): ModulesContext {
-    return buildModulesContext(this.deps);
+    return this.dispatchContext('modules') as ModulesContext;
   }
 
   buildApiContext(): ApiContext {
-    return buildApiContext(this.deps);
+    return this.dispatchContext('api') as ApiContext;
   }
 
   buildOnboardingContext(): OnboardingContext {
-    return buildOnboardingContext(this.deps);
+    return this.dispatchContext('onboarding') as OnboardingContext;
   }
 
   buildTroubleshootingContext(): TroubleshootingContext {
-    return buildTroubleshootingContext(this.deps);
+    return this.dispatchContext('troubleshooting') as TroubleshootingContext;
   }
 
   buildGlossaryContext(): GlossaryContext {
-    return buildGlossaryContext(this.deps);
+    return this.dispatchContext('glossary') as GlossaryContext;
   }
 
   buildCallsContext(): CallsContext {
-    return buildCallsContext(this.deps);
+    return this.dispatchContext('calls') as CallsContext;
   }
 
   buildClassesContext(): ClassesContext {
-    return buildClassesContext(this.deps);
+    return this.dispatchContext('classes') as ClassesContext;
   }
 
   buildReadmeContext(plannedPages?: string[]): ReadmeContext {
-    return buildReadmeContext(this.deps, plannedPages);
+    return this.dispatchContext('readme', plannedPages) as ReadmeContext;
   }
 
   buildEnvironmentContext(): EnvironmentContext {
-    return buildEnvironmentContext(this.deps);
+    return this.dispatchContext('environment') as EnvironmentContext;
   }
 
   buildTestingContext(): TestingContext {
-    return buildTestingContext(this.deps);
+    return this.dispatchContext('testing') as TestingContext;
   }
 
   buildConventionsContext(): ConventionsContext {
-    return buildConventionsContext(this.deps);
+    return this.dispatchContext('conventions') as ConventionsContext;
   }
 
   buildConstraintsContext(): ConstraintsContext {
-    return buildConstraintsContext(this.deps);
+    return this.dispatchContext('constraints') as ConstraintsContext;
   }
 
   buildDecisionsContext(): DecisionsContext | null {
-    return buildDecisionsContext(this.deps);
+    return this.dispatchContext('decisions') as DecisionsContext | null;
   }
 
   buildCliContext(): CliContext {
-    return buildCliContext(this.deps);
+    return this.dispatchContext('cli') as CliContext;
   }
 
   buildTechStackContext(): TechStackContext {
-    return buildTechStackContext(this.deps);
+    return this.dispatchContext('tech-stack') as TechStackContext;
   }
 
   buildTopicContext(topicId: string): TopicContext | null {

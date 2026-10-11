@@ -25,7 +25,8 @@ describe('WikiService 基础产出', () => {
     expect(generated).toContain('01-overview/overview.md');
     expect(generated).toContain('02-architecture/architecture.md');
     expect(generated).toContain('02-architecture/modules.md');
-    expect(generated).toContain('07-reference/glossary.md');
+    // M5：空图谱 mock 下 reference 清单页薄证据预检剔除（不再模板化摊派）
+    expect(generated).not.toContain('07-reference/glossary.md');
   });
 
   it('should write files to disk in numbered directories', async () => {
@@ -35,7 +36,6 @@ describe('WikiService 基础产出', () => {
     await service.buildWiki(wikiDir, { noLlm: true });
 
     expect(existsSync(join(wikiDir, '01-overview', 'overview.md'))).toBe(true);
-    expect(existsSync(join(wikiDir, '07-reference', 'glossary.md'))).toBe(true);
     expect(existsSync(join(wikiDir, '03-interface', 'api.md'))).toBe(true);
     expect(existsSync(join(wikiDir, 'README.md'))).toBe(true);
   });
@@ -139,9 +139,8 @@ describe('WikiService 基础产出', () => {
     expect(generated).not.toContain('02-architecture/data-flow.md');
     expect(generated).toContain('02-architecture/modules.md');
     expect(generated).toContain('03-interface/api.md');
-    expect(generated).toContain('07-reference/glossary.md');
     expect(generated).toContain('07-reference/calls.md');
-    expect(generated).toContain('07-reference/classes.md');
+    // M5：glossary/classes 薄证据预检剔除（阈值 3）
     expect(generated).toContain('README.md');
     // Tier 1 运行规约层
     expect(generated).toContain('01-overview/environment.md');

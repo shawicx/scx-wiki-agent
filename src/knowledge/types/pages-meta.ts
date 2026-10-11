@@ -29,6 +29,8 @@ export interface OnboardingContext {
   /** 各源码目录的真实文件样本（结构描述的锚点，防止「目录内容未提供」类待确认） */
   sourceDirFiles?: Array<{ dir: string; files: string[] }>;
   firstRunExample: string;
+  /** README 前置/环境要求小节（M6：版本要求/系统依赖的证据源，含锚点） */
+  readmePrereqs?: Array<{ title: string; text: string; anchor: string }>;
 }
 
 /** Context for troubleshooting page */

@@ -10,6 +10,7 @@ import type {
   DecisionsContext,
 } from '../types.js';
 import { commandDescription, parseCommanderOptions } from './cli.js';
+import { readmePrereqSections } from './readme-prereqs.js';
 import { mergeGraphSignature } from '../signature.js';
 import {
   type ContextDeps,
@@ -100,6 +101,7 @@ export function buildOnboardingContext(deps: ContextDeps): OnboardingContext {
   const firstRunExample = cliCommands[0]?.name
     ? `${packageManager} install\n${buildCmd}\nnode dist/bin.js ${runCmd}`
     : `${packageManager} install\n${runCmd}`;
+  const prereqs = readmePrereqSections(deps);
 
   return {
     projectType: deps.scanResult.projectType,
@@ -121,6 +123,8 @@ export function buildOnboardingContext(deps: ContextDeps): OnboardingContext {
         .slice(0, 8),
     })),
     firstRunExample,
+    // M6：README 前置小节（Node 版本/系统要求等），通道与 overview 的 README 摘录对齐
+    ...(prereqs.length > 0 ? { readmePrereqs: prereqs } : {}),
   };
 }
 

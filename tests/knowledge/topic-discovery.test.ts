@@ -280,3 +280,71 @@ describe('主题页注册表集成', () => {
     expect(related).toContain('../README.md');
   });
 });
+
+describe('M4：纯 re-export 兼容壳簇不成题（语义门槛）', () => {
+  it('成员全为 export…from 壳文件 → 簇被跳过；存在实质实现文件 → 正常立题', () => {
+    const dir = join(process.cwd(), '.test-topic-shell-tmp');
+    rmSync(dir, { recursive: true, force: true });
+    try {
+      // 3 个纯 re-export 壳 + 2 个实质实现
+      const shells = ['src/shell/a.ts', 'src/shell/b.ts', 'src/shell/c.ts'];
+      const real = ['src/core/impl-a.ts', 'src/core/impl-b.ts'];
+      for (const f of shells) {
+        mkdirSync(join(dir, f, '..'), { recursive: true });
+        writeFileSync(join(dir, f), "// compat shell\nexport { generateByName } from './real.js';\nexport * from './other.js';\n");
+      }
+      for (const f of real) {
+        mkdirSync(join(dir, f, '..'), { recursive: true });
+        writeFileSync(join(dir, f), 'export function realWork(n: number): number {\n  return n * 2;\n}\n');
+      }
+      const files = [...shells, ...real];
+      const scan = makeScanResult(files);
+      // 绝对路径改指真实临时目录（默认 makeScanResult 用 /tmp/test-project）
+      for (const f of scan.productionFiles) f.absolutePath = join(dir, f.relativePath);
+
+      const symbolsOf = (names: string[]) => symbolsCypher(names);
+      const rowsFor = (list: Array<[string, string]>) => ({
+        columns: ['name', 'file'],
+        rows: list,
+        total: list.length,
+      });
+      const mkClient = (rows: Array<[string, string]>, names: string[]) => {
+        const q = new Map<string, QueryResult>([[symbolsOf(names), rowsFor(rows)]]);
+        return createMockClient({
+          architecture: {
+            total_nodes: 10, total_edges: 5,
+            node_labels: [], edge_types: [], languages: [],
+            packages: [
+              { name: 'shell', node_count: 3, fan_in: 1, fan_out: 3 },
+              { name: 'core', node_count: 5, fan_in: 2, fan_out: 1 },
+            ],
+            entry_points: [], hotspots: [], boundaries: [], layers: [],
+            clusters: [{
+              id: 'c1', label: '', members: 5, cohesion: 0.9,
+              top_nodes: names,
+            }],
+          },
+          queryResults: q,
+        } as never);
+      };
+      // 全壳成员：filesForSymbols 解析到 3 个壳文件 → 语义门槛拦截
+      const shellClient = mkClient(
+        shells.map((f, i) => [`sym${i}`, f] as [string, string]),
+        ['sym0', 'sym1', 'sym2'],
+      );
+      const shellTopics = new TopicDiscovery(shellClient as never, scan).discover();
+      expect(shellTopics).toHaveLength(0);
+
+      // 存在实质成员 → 通过门槛（其余条件相同）
+      const mixClient = mkClient(
+        [...shells.slice(0, 2).map((f, i) => [`sym${i}`, f] as [string, string]),
+         ...real.map((f, i) => [`real${i}`, f] as [string, string])],
+        ['sym0', 'sym1', 'real0', 'real1'],
+      );
+      const mixTopics = new TopicDiscovery(mixClient as never, scan).discover();
+      expect(mixTopics.length).toBeGreaterThanOrEqual(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

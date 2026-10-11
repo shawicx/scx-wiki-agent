@@ -39,7 +39,7 @@ export function writeProducedPages(
     const { page, relPath, source } = entry;
 
     // pending marker 是确认会话期脚手架，绝不写盘（keep 项的可见「待确认」文本保留）
-    const content =
+    let content =
       injectEvidenceBlock(stripPendingMarkers(entry.content), buildEvidenceBlock(entry.evidenceFiles)) +
       buildRelatedSection(page, pages, crossLinks?.get(page));
 
@@ -65,6 +65,11 @@ export function writeProducedPages(
       skippedPages.push({ page, reason: `质量闸门拦截：${errors}` });
       continue;
     }
+
+    // M9：页脚标注生成路径（闸门之后注入，不影响质量检查）——
+    // 逐页混用回退时读者可预期深度差异；source 翻转（llm↔fallback）时
+    // 页脚随内容变化，update 模式自然触发重写
+    content += `\n<!-- wiki:source: ${source} -->\n`;
 
     const targetPath = join(wikiDir, relPath);
     const existed = existsSync(targetPath);

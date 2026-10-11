@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { WikiService } from '../../../src/services/wiki-service.js';
 import { createMockClient } from '../../helpers/mock-mcp-client.js';
+import { classesDropReason, glossaryDropReason } from '../../../src/services/wiki/precheck.js';
 import { join } from 'path';
 import { mkdirSync, rmSync, existsSync, readFileSync } from 'fs';
 import { tmpBase, makeCliScanResult } from './helpers.js';
@@ -141,5 +142,24 @@ describe('data-flow 成页预检', () => {
     // README 索引包含本届产出的 data-flow 页（无死链）
     const readme = readFileSync(join(wikiDir, 'README.md'), 'utf-8');
     expect(readme).toContain('data-flow.md');
+  });
+});
+
+describe('M5：reference 层薄证据预检（classes/glossary 阈值 3）', () => {
+  it('classes <3 / glossary <3 → 给出剔除原因；≥3 → null 放行', () => {
+    const cls = (n: number) => ({ classes: Array.from({ length: n }, (_, i) => ({
+      name: `C${i}`, qualifiedName: `q.C${i}`, filePath: 'src/a.ts', startLine: 1,
+      parentClass: null, methods: [],
+    })) }) as never;
+    expect(classesDropReason(cls(2))).toContain('阈值 3');
+    expect(classesDropReason(cls(3))).toBeNull();
+    expect(classesDropReason(null)).not.toBeNull();
+
+    const glos = (n: number) => ({ symbols: Array.from({ length: n }, (_, i) => ({
+      name: `S${i}`, type: 'function' as const, filePath: 'src/a.ts',
+    })), supplementalSymbols: [] }) as never;
+    expect(glossaryDropReason(glos(2))).toContain('阈值 3');
+    expect(glossaryDropReason(glos(3))).toBeNull();
+    expect(glossaryDropReason(null)).not.toBeNull();
   });
 });

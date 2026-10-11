@@ -10,8 +10,29 @@ import { existsSync, rmSync } from 'fs';
 import { join } from 'path';
 import type { WikiContextBuilder } from '../../knowledge/wiki-context-builder.js';
 import { pageRelPath } from '../../knowledge/page-registry.js';
-import type { DataFlowContext } from '../../knowledge/types.js';
+import type { ClassesContext, DataFlowContext, GlossaryContext } from '../../knowledge/types.js';
 import { archiveDroppedPage } from './archive.js';
+
+/**
+ * reference 层薄证据预检（M5）：类/类型清单低于阈值时清单页价值趋零——
+ * 固定注册表不按仓库规模裁剪会对小项目模板化摊派。宁缺毋滥，同 data-flow 模式。
+ */
+export function classesDropReason(ctx: ClassesContext | null): string | null {
+  if (!ctx) return '无类数据，跳过空壳页生成';
+  if (ctx.classes.length < 3) {
+    return `仅 ${ctx.classes.length} 个类，清单页信息量不足，跳过（阈值 3）`;
+  }
+  return null;
+}
+
+export function glossaryDropReason(ctx: GlossaryContext | null): string | null {
+  if (!ctx) return '无带文档符号，跳过空壳页生成';
+  const total = ctx.symbols.length + (ctx.supplementalSymbols?.length ?? 0);
+  if (total < 3) {
+    return `仅 ${total} 个带文档符号，关键概念页信息量不足，跳过（阈值 3）`;
+  }
+  return null;
+}
 
 /**
  * data-flow 成页预检：仅有控制流边（无签名、无调用实参、无返回类型、无 I/O 数据形态证据）
@@ -55,6 +76,30 @@ export function runPagePrechecks(
       pages = pages.filter(p => p !== 'data-flow');
       dropExistingPage(wikiDir, pageRelPath('data-flow'), agentDir, archiveLabel, legacyRemoved);
       skipped.push({ page: 'data-flow', reason: dropReason ?? '缺少数据形态证据，跳过空壳页生成' });
+    }
+  }
+
+  // classes / glossary（M5）：清单低于阈值时整页剔除，reference 层不模板化摊派
+  if (pages.includes('classes')) {
+    const clsContext = contextBuilder.buildByName('classes', pages) as ClassesContext | null;
+    const dropReason = classesDropReason(clsContext);
+    if (dropReason === null && clsContext) {
+      prebuiltContexts.set('classes', clsContext);
+    } else {
+      pages = pages.filter(p => p !== 'classes');
+      dropExistingPage(wikiDir, pageRelPath('classes'), agentDir, archiveLabel, legacyRemoved);
+      skipped.push({ page: 'classes', reason: dropReason ?? '无类数据，跳过空壳页生成' });
+    }
+  }
+  if (pages.includes('glossary')) {
+    const glosContext = contextBuilder.buildByName('glossary', pages) as GlossaryContext | null;
+    const dropReason = glossaryDropReason(glosContext);
+    if (dropReason === null && glosContext) {
+      prebuiltContexts.set('glossary', glosContext);
+    } else {
+      pages = pages.filter(p => p !== 'glossary');
+      dropExistingPage(wikiDir, pageRelPath('glossary'), agentDir, archiveLabel, legacyRemoved);
+      skipped.push({ page: 'glossary', reason: dropReason ?? '无带文档符号，跳过空壳页生成' });
     }
   }
 

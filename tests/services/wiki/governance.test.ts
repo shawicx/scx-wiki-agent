@@ -41,17 +41,21 @@ describe('页面治理与主题/章节页', () => {
       pages: ['overview', 'glossary'],
     });
 
-    expect(generated).toEqual(['01-overview/overview.md', '07-reference/glossary.md']);
+    // M5：空图谱 mock 下 glossary 薄证据预检剔除，只产出 overview
+    expect(generated).toEqual(['01-overview/overview.md']);
   });
 
-  it('should produce glossary without LLM placeholders', async () => {
+  it('规则路径产出不含 LLM 占位符；glossary 薄证据被预检剔除', async () => {
     const client = createMockClient();
     const service = new WikiService(client as any, makeBackendScanResult());
     const wikiDir = join(tmpDir, 'wiki');
     await service.buildWiki(wikiDir, { noLlm: true });
 
-    const content = readFileSync(join(wikiDir, '07-reference', 'glossary.md'), 'utf-8');
+    const content = readFileSync(join(wikiDir, '01-overview', 'overview.md'), 'utf-8');
     expect(content).not.toContain('{{LLM:');
+    expect(existsSync(join(wikiDir, '07-reference', 'glossary.md'))).toBe(false);
+    // M9：页脚携带生成路径标记（noLlm 构建为 fallback）
+    expect(content.trimEnd().endsWith('<!-- wiki:source: fallback -->')).toBe(true);
   });
 
   it('should render README index grouped by numbered directory with planned pages only', async () => {

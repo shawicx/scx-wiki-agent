@@ -67,6 +67,13 @@ export const PAGE_REGISTRY: PageDescriptor[] = [
 export const ALL_PAGE_NAMES: string[] = PAGE_REGISTRY.map(p => p.name);
 
 /**
+ * 无 LLM 叙述页（GENERATOR_PAGES 不注册这些页面，走确定性规则生成）：
+ * readme（索引页）/ calls / classes（边表/清单页，LLM 无增值）。
+ * page-dispatch-consistency.test.ts 据此校验生成器键集。
+ */
+export const LLM_EXEMPT_PAGES: readonly string[] = ['readme', 'calls', 'classes'];
+
+/**
  * Tier 2（surface 层）按项目类型动态激活的页面映射。
  *
  * surface 层文档描述"对外入口"，不同项目类型入口形态不同：

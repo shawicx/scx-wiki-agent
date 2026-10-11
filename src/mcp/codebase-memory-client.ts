@@ -202,7 +202,7 @@ export class CodebaseMemoryClient {
     return this.archCache;
   }
 
-  /** 双向调用链追踪 */
+  /** 双向调用链追踪。**experimental**：生产管线未用（CALLS 走 queryGraph），仅测试/调试。 */
   tracePath(
     functionName: string,
     direction: 'inbound' | 'outbound' | 'both' = 'both',
@@ -259,10 +259,8 @@ export class CodebaseMemoryClient {
   }
 
   /**
-   * 词法搜索的 (file, line) 命中清单（compact 模式）：
-   * 图谱符号内命中（rows[].matches 行号）+ 符号外原始命中（raw_matches.rows）合并。
-   * 断言核验的证据分类通道：调用方可读取命中行内容，区分代码实据与纯注释/配置提及。
-   * 无命中返回空数组；老版本 binary 不支持 compact JSON 时抛错（调用方 fail-open 回退）。
+   * 词法搜索的 (file, line) 命中清单（compact 模式；断言核验的证据分类通道）：
+   * 图谱符号内命中 + 符号外原始命中合并；无命中空数组，老版 binary 抛错（fail-open）。
    */
   searchCodeMatches(pattern: string, limit = 20): Array<{ file: string; line: number }> {
     const raw = this.exec('search_code', {
@@ -346,7 +344,11 @@ export class CodebaseMemoryClient {
     throw new Error(`MCP 返回无法解析 JSON: ${raw.slice(0, 200)}`);
   }
 
-  /** 仓库绝对路径 → MCP 项目标识符（`/` 和 `:` → `-`） */
+  /**
+   * 仓库绝对路径 → MCP 项目标识符（`/` 和 `:` → `-`）。
+   * 必须与 MCP 侧 repo_path 派生规则**逐字对齐**（掺哈希/改名 → project not
+   * found，实测）。已知局限（MCP 侧解决）：`:`/`-` 折叠同键，冒号目录罕见。
+   */
   private toProjectName(repoPath: string): string {
     return repoPath.replace(/^\//, '').replace(/[/:]/g, '-');
   }

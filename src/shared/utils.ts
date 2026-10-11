@@ -1,4 +1,4 @@
-import { relative, extname } from 'path';
+import { relative, resolve, extname } from 'path';
 import type { Language } from '../core/types.js';
 
 const EXT_LANGUAGE_MAP: Record<string, Language> = {
@@ -105,4 +105,41 @@ export function matchPackageForFile(filePath: string, packageNames: readonly str
 export function isMcpPlaceholder(text: string | null | undefined): boolean {
   if (!text) return false;
   return /^no\s+[\w\s-]*?(?:detected|available|found|edges?\s+traced|symbols?)\s*$/i.test(text.trim());
+}
+
+/**
+ * 图谱限定名归一化（消费端防线）：部分上游版本会把 workspace 绝对路径
+ * 拼进 parent_class / qualified_name（如 `/a/b/repo` → `a-b-repo.src.pkg.Type`），
+ * 渲染成 `Type.member` 时泄漏整条绝对路径。此处确定性剥离：
+ * 1. 路径前缀——根目录按 `/`→`-`、`/`→`.` 两种畸形形态匹配并剥除；
+ * 2. 文件段——限定名的开头连续段若与所在文件路径段逐一对应（如
+ *    `src-tauri.src.shells` ↔ `src-tauri/src/shells.rs`），一并剥除。
+ * 不匹配时原样返回（正常嵌套类型链 `Outer.Inner` 不受影响）。
+ */
+export function normalizeQualifiedName(value: string, rootDir: string, filePath?: string): string {
+  if (!value || !value.includes('.')) return value;
+  const segs = resolve(rootDir).split('/').filter(Boolean);
+  let out = value;
+  for (const sep of ['-', '.']) {
+    const prefix = segs.join(sep);
+    if (prefix && out.startsWith(`${prefix}.`)) {
+      out = out.slice(prefix.length + 1);
+      break;
+    }
+  }
+  if (!filePath || !out.includes('.')) return out;
+  const rawFileSegs = filePath.split(/[\\/]/).filter(Boolean);
+  if (rawFileSegs.length > 0) {
+    // 末段去扩展名（shells.rs → shells）后再参与对齐
+    rawFileSegs[rawFileSegs.length - 1] = rawFileSegs[rawFileSegs.length - 1].replace(/\.[^.]*$/, '');
+  }
+  const fileSegs = rawFileSegs;
+  const nameSegs = out.split('.');
+  // 末段视为符号名，其余段尝试与文件路径段前缀对齐剥除（大小写敏感，避免误伤类型链）
+  let cut = 0;
+  for (let i = 0; i < nameSegs.length - 1 && i < fileSegs.length; i++) {
+    if (nameSegs[i] === fileSegs[i]) cut = i + 1;
+    else break;
+  }
+  return cut > 0 ? nameSegs.slice(cut).join('.') : out;
 }

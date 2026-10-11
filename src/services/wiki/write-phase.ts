@@ -9,6 +9,7 @@ import { collectAbsenceSuspectNames } from '../../knowledge/ipc-consistency.js';
 import type { PageQualityReport } from '../../knowledge/wiki-quality-validator.js';
 import { buildRelatedSection, findPageDescriptor } from '../../knowledge/page-registry.js';
 import type { CrossLink } from '../../knowledge/page-registry.js';
+import { stripUnplannedPageLinks, normalizeRepoFileLinks } from '../../knowledge/ghost-links.js';
 import type { VerificationHub } from './verification.js';
 import type { ProducedEntry, WrittenPage } from './types.js';
 
@@ -23,7 +24,6 @@ export function writeProducedPages(
   wikiDir: string,
   mode: 'full' | 'update',
   producedEntries: ProducedEntry[],
-  pages: string[],
   plannedPaths: Set<string>,
   knownFiles: Set<string>,
   productionKnownFiles: Set<string>,
@@ -35,17 +35,29 @@ export function writeProducedPages(
   const qualityReports: PageQualityReport[] = [];
   const skippedPages: Array<{ page: string; reason: string }> = [];
 
+  const repoRoot = dirname(wikiDir);
+
+  // ---- 第一遍：正文装配 + 质量闸门，确定终稿页面集合 ----
+  // Related/剥离依赖「最终写出集合」，而写出集合要等闸门结果——先全部过闸，
+  // 第二遍才用通过者生成 Related，杜绝「注册有名、实际未写出」的死链 Related。
+  const gated = new Map<string, { body: string; report: PageQualityReport }>();
   for (const entry of producedEntries) {
     const { page, relPath, source } = entry;
 
     // pending marker 是确认会话期脚手架，绝不写盘（keep 项的可见「待确认」文本保留）
-    let content =
-      injectEvidenceBlock(stripPendingMarkers(entry.content), buildEvidenceBlock(entry.evidenceFiles)) +
-      buildRelatedSection(page, pages, crossLinks?.get(page));
+    // + 仓库文件链接归一化（LLM 可能把仓库根相对路径直接当链接目标）
+    let body =
+      injectEvidenceBlock(stripPendingMarkers(entry.content), buildEvidenceBlock(entry.evidenceFiles));
+    const [fixedBody, fixedLinks] = normalizeRepoFileLinks(
+      body,
+      relPath,
+      target => existsSync(join(repoRoot, target)),
+    );
+    if (fixedLinks > 0) body = fixedBody;
 
     // 写盘前质量闸门（LLM 与规则路径都过闸；注入式真锚点核验访问器）
     const report = validatePageContent(
-      content, {
+      body, {
         page, pagePath: relPath,
         knownFiles: entry.page === 'testing' ? knownFiles : productionKnownFiles,
         plannedPaths,
@@ -65,6 +77,21 @@ export function writeProducedPages(
       skippedPages.push({ page, reason: `质量闸门拦截：${errors}` });
       continue;
     }
+    gated.set(page, { body, report });
+  }
+
+  // ---- 第二遍：终稿集合上的 Related 注入 + 补充剥离 + 写盘 ----
+  const writtenNames = [...gated.keys()];
+  const writtenRelPaths = new Set(producedEntries.filter(e => gated.has(e.page)).map(e => e.relPath));
+  for (const entry of producedEntries) {
+    const gatedEntry = gated.get(entry.page);
+    if (!gatedEntry) continue;
+    const { page, relPath, source } = entry;
+    let content =
+      gatedEntry.body + buildRelatedSection(page, writtenNames, crossLinks?.get(page));
+    // 终稿集合口径的补充剥离：闸门淘汰页的页名在 service 阶段尚在产出集内，
+    // 其入链在此处补剥（只减链接，不影响已通过的闸门结论）
+    content = stripUnplannedPageLinks(content, writtenRelPaths)[0];
 
     // M9：页脚标注生成路径（闸门之后注入，不影响质量检查）——
     // 逐页混用回退时读者可预期深度差异；source 翻转（llm↔fallback）时

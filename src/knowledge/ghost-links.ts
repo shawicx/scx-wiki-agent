@@ -42,3 +42,32 @@ export function stripUnplannedPageLinks(
   });
   return [out, stripped];
 }
+
+/** Markdown 行内链接 `[label](target)`，target 为相对路径（.md 与非 .md 都匹配） */
+const ANY_LINK_RE = /\[([^\]]+)\]\(([^)\s]+)\)/g;
+
+/**
+ * 仓库文件链接归一化：LLM 正文可能把仓库根相对路径直接当链接目标
+ * （如子目录页里写 [src/main.ts](src/main.ts)，页内解析必死链）。
+ * 判定口径：目标不含 `../`/协议/锚点，且按页面相对解析不存在于 wiki 内、
+ * 按仓库根解析真实存在 → 按页面深度重写前缀（`01-overview/x.md` → `../../x`）。
+ * 返回 [改写后内容, 改写数]。纯函数：存在性由注入的 resolveRepoFile 提供。
+ */
+export function normalizeRepoFileLinks(
+  content: string,
+  relPath: string,
+  resolveRepoFile: (target: string) => boolean,
+): [string, number] {
+  // 页面在 .wiki 内的目录深度 + 1（回仓库根需先穿出 .wiki）
+  const depth = relPath.split('/').length;
+  const prefix = '../'.repeat(depth);
+  let fixed = 0;
+  const out = content.replace(ANY_LINK_RE, (match, label: string, target: string) => {
+    if (target.startsWith('../') || target.startsWith('#') || /^[a-z]+:\/\//i.test(target)) return match;
+    if (target.endsWith('.md')) return match; // wiki 页链接由 stripUnplannedPageLinks 处理
+    if (!resolveRepoFile(target)) return match;
+    fixed++;
+    return `[${label}](${prefix}${target})`;
+  });
+  return [out, fixed];
+}

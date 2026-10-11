@@ -286,7 +286,7 @@ export class WikiService {
 
     // ---- 阶段三：写盘（write-phase 模块负责闸门与 update 比较） ----
     const writeResult = writeProducedPages(
-      wikiDir, mode, producedEntries, pages, plannedPaths, knownFiles, productionKnownFiles, this.verify,
+      wikiDir, mode, producedEntries, plannedPaths, knownFiles, productionKnownFiles, this.verify,
       crossLinks,
     );
 

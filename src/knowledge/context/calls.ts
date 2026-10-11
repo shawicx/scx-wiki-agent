@@ -1,4 +1,4 @@
-import { isTestPath } from '../../shared/utils.js';
+import { isTestPath, normalizeQualifiedName } from '../../shared/utils.js';
 import { isTauriProject, scanIpcSurface } from '../tauri-ipc.js';
 import type { CallsContext, ClassesContext } from '../types.js';
 import { isTrustedCallEdge } from './data-flow.js';
@@ -70,17 +70,32 @@ export function buildCallsContext(deps: ContextDeps): CallsContext {
     }
   }
 
-  // 扇入表：被调用最多的符号（从 hotspots 取），文件列查图谱取真实 file_path
+  // 扇入表：被调用最多的符号（从 hotspots 取），文件列查图谱取真实 file_path。
+  // 部分上游版本的节点 name 存的是路径限定名（qualified_name 同形），短名查不到 →
+  // 文件列全空。查询键同时携带短名与限定名两种形态，命中后经归一化映射回短名。
   const hotspotSlice = arch.hotspots.slice(0, 15);
-  const nameList = hotspotSlice.map(n => `"${n.name.replace(/"/g, '\\"')}"`).join(',');
+  const nameList = hotspotSlice
+    .flatMap(h => [h.name, h.qualified_name])
+    .filter(n => n)
+    .map(n => `"${n.replace(/"/g, '\\"')}"`)
+    .join(',');
   const fileQ = deps.client.queryGraph(
     `MATCH (n) WHERE n.name IN [${nameList}] AND n.is_test = false
        RETURN n.name AS name, n.file_path AS file LIMIT 15`,
   );
+  const shortNameOf = new Map<string, string>();
+  for (const h of hotspotSlice) {
+    if (h.name) shortNameOf.set(h.name, h.name);
+    if (h.qualified_name) shortNameOf.set(h.qualified_name, h.name);
+  }
   const fileBySymbol = new Map<string, string>();
   for (const row of fileQ.rows) {
+    const rawName = String(row[0] ?? '');
     const file = (row[1] as string) ?? '';
-    if (isProductionGraphFile(deps, file)) fileBySymbol.set(row[0] as string, file);
+    const short = shortNameOf.get(rawName)
+      ?? shortNameOf.get(normalizeQualifiedName(rawName, deps.scanResult.rootDir, file));
+    if (!short || !isProductionGraphFile(deps, file)) continue;
+    if (!fileBySymbol.has(short)) fileBySymbol.set(short, file);
   }
   const fanIn: CallsContext['fanIn'] = hotspotSlice.map(h => ({
     symbol: h.name,
@@ -177,7 +192,15 @@ export function collectCallEdges(
       if (seen.has(edgeKey)) continue;
       seen.add(edgeKey);
 
-      edges.push({ caller: callerName, callee: calleeName, calleeParent, calleeFile, calleeLine });
+      edges.push({
+        caller: callerName,
+        callee: calleeName,
+        calleeParent: calleeParent
+          ? normalizeQualifiedName(calleeParent, deps.scanResult.rootDir, calleeFile)
+          : calleeParent,
+        calleeFile,
+        calleeLine,
+      });
 
       const calleeKey = `${calleeName}@${calleeFile}`;
       if (!visited.has(calleeKey)) {

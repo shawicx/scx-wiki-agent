@@ -1,5 +1,6 @@
 import type { ArchitectureData } from '../../mcp/types.js';
 import type { RelationType } from '../../core/types.js';
+import { isAbsolute, relative as pathRelative } from 'path';
 import { isTestPath, matchPackageForFile, isMcpPlaceholder } from '../../shared/utils.js';
 import type { ArchitectureContext, ModuleSummary } from '../types.js';
 import {
@@ -62,7 +63,12 @@ export function moduleEvidence(deps: ContextDeps, pkgName: string, files: string
   const seen = new Set<string>();
   const byFile = new Map<string, ModuleSummary['symbols']>();
   for (const row of q.rows) {
-    const file = (row[5] as string) ?? '';
+    const rawFile = (row[5] as string) ?? '';
+    // 上游以绝对路径索引时 file_path 与分包相对路径对不上 → 符号整批丢弃；
+    // 与 VerificationHub 同款归一化（绝对路径 → 仓库根相对路径）
+    const file = rawFile && isAbsolute(rawFile)
+      ? pathRelative(deps.scanResult.rootDir, rawFile).replace(/\\/g, '/')
+      : rawFile;
     if (!file || isTestPath(file) || !files.includes(file)) continue;
     const name = String(row[0] ?? '');
     // MCP 会把「No top-level symbols detected」等占位串当符号名写入图谱，消费侧丢弃

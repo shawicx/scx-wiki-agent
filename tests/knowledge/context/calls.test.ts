@@ -36,7 +36,7 @@ import { makeScanResult } from './helpers.js';
     });
 
     it('入口查无边时以高扇入热点锚定回填（kind=hotspot）', () => {
-      const fileCypher = `MATCH (n) WHERE n.name IN ["build","init"] AND n.is_test = false
+      const fileCypher = `MATCH (n) WHERE n.name IN ["build","proj.build","init","proj.init"] AND n.is_test = false
        RETURN n.name AS name, n.file_path AS file LIMIT 15`;
       const queryResults = new Map<string, QueryResult>([
         [fileCypher, { columns: [], rows: [['build', 'src/core/build.ts'], ['init', 'src/core/init.ts']], total: 2 }],
@@ -53,6 +53,27 @@ import { makeScanResult } from './helpers.js';
       expect(ctx.groups.map(g => g.entry)).toEqual(['build', 'init']);
       expect(ctx.fanIn.map(f => f.symbol)).toEqual(['build', 'init']);
       expect(ctx.fanIn.every(f => f.file !== '')).toBe(true);
+    });
+
+    it('parent_class 带绝对路径前缀时按文件段归一化', () => {
+      const root = '/Users/scx/Documents/code/scx-terminal';
+      const methodCypher2 = methodCypher('"run"');
+      const queryResults = new Map<string, QueryResult>([
+        ['MATCH (n) WHERE n.name IN ["run","proj.run"] AND n.is_test = false\n       RETURN n.name AS name, n.file_path AS file LIMIT 15', { columns: [], rows: [['run', 'src-tauri/src/lib.rs']], total: 1 }],
+        [methodCypher2, { columns: [], rows: [['run', 'src-tauri/src/lib.rs', 'default', 'src-tauri/src/shells.rs', 15, 'Users-scx-Documents-code-scx-terminal.src-tauri.src.shells.ShellInfo']], total: 1 }],
+      ]);
+      const client = createMockClient({
+        queryResults,
+        architecture: {
+          entry_points: [{ name: 'run', qualified_name: 'proj.run', file: 'src-tauri/src/lib.rs' }],
+          hotspots: [{ name: 'run', qualified_name: 'proj.run', fan_in: 4 }],
+        } as any,
+      });
+      const scan = makeScanResult({ rootDir: root });
+      const builder = new WikiContextBuilder(client as any, scan);
+      const ctx = builder.buildCallsContext();
+      const edge = ctx.groups.flatMap(g => g.edges).find(e => e.callee === 'default');
+      expect(edge?.calleeParent).toBe('ShellInfo');
     });
 
     it('Tauri 项目附加 IPC 命令对表（真实跨语言执行边）', () => {

@@ -7,11 +7,13 @@
 - README.md
 </details>
 
+> 本 Wiki 基于 commit `5844f26`（2026-10-24）生成；代码演进后请重新构建以保证内容与实现一致。
+
 从代码知识图谱生成结构化中文 Markdown Wiki 的 CLI 工具（LLM 增强叙述 + 纯规则回退）
 
 | 项 | 值 |
 | --- | --- |
-| 版本 | 0.2.0 |
+| 版本 | 0.2.2 |
 | 许可证 | ISC |
 | 运行时 | ESM |
 
@@ -88,3 +90,4 @@ Wiki 之外的既有文档，链接为仓库相对路径
 | --- | --- |
 | [README.md](../README.md) | scx-wiki-agent |
 | [AGENTS.md](../AGENTS.md) | Agents.md |
+<!-- wiki:source: fallback -->

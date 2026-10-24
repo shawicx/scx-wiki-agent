@@ -99,9 +99,10 @@ describe('cited files 与覆盖度', () => {
 });
 
 describe('evidence-coverage 闸门规则', () => {
-  it('正文引用 ≥3 且覆盖不全 → warn；全覆盖不告警', async () => {
+  it('引用未覆盖且块内存在位移（非引用文件占位）→ warn；无位移（块内全为引用文件）不告警', async () => {
     const { validatePageContent } = await import('../../src/knowledge/wiki-quality-validator.js');
-    const block = buildEvidenceBlock(['src/index.ts']);
+    // 位移形态：块内 src/knowledge/types.ts 未被正文引用，却占着名额
+    const block = buildEvidenceBlock(['src/index.ts', 'src/knowledge/types.ts']);
     const body = [
       '# 页',
       '',
@@ -124,5 +125,12 @@ describe('evidence-coverage 闸门规则', () => {
       { page: 'overview', pagePath: '01-overview/overview.md', knownFiles: known, plannedPaths: new Set(['01-overview/overview.md']) },
     );
     expect(full.issues.find(i => i.rule === 'evidence-coverage')).toBeUndefined();
+
+    // 无位移：块内文件全部被正文引用（T1 排序把引用置顶，缺失仅因超过块上限）→ 设计行为，不告警
+    const noDisplacement = validatePageContent(
+      ['# 页', '', block.replace('src/knowledge/types.ts', 'src/core/scanner.ts'), '', '引用 `src/index.ts:1`、`src/core/scanner.ts:2`、`src/services/wiki-service.ts:3`。'].join('\n'),
+      { page: 'overview', pagePath: '01-overview/overview.md', knownFiles: known, plannedPaths: new Set(['01-overview/overview.md']) },
+    );
+    expect(noDisplacement.issues.find(i => i.rule === 'evidence-coverage')).toBeUndefined();
   });
 });

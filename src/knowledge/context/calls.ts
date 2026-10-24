@@ -217,40 +217,47 @@ export function collectCallEdges(
 /**
  * classes.md 数据源：类清单 + 每类方法表（降级适配）。
  * MCP 无 INHERITS 边、Class 无 parent_class/is_abstract，故只做扁平类表。
- * 方向是 (c:Class)-[:DEFINES_METHOD]->(m:Method)。
+ * 方向是 (c:类型节点)-[:DEFINES_METHOD]->(m:Method)。
  */
 export function buildClassesContext(deps: ContextDeps): ClassesContext {
-  // 查所有类及其方法（DEFINES_METHOD 方向：Class → Method）；签名统一合并 return_type（W4）
+  // 查所有类型及其方法（DEFINES_METHOD 方向）；签名统一合并 return_type（W4）。
+  // Swift 类型主力是 struct/protocol/actor（值类型语义），只查 Class 标签会漏掉
+  // 绝大多数类型；额外纳入 .swift 文件的 Struct/Interface/Actor 节点（kind 列区分）。
+  // 行预算：类×方法对在大仓库远超客户端默认 100 行截断（ORDER BY c.name 下
+  // 字母序靠前的大类会吃光配额，实测 588 行被截成单类），提高到 2000 并同步 LIMIT。
   const q = deps.client.queryGraph(
-    `MATCH (c:Class)-[:DEFINES_METHOD]->(m:Method)
-       WHERE c.is_test = false
-       RETURN c.name AS cls, c.qualified_name AS qn, c.file_path AS cfile, c.start_line AS cline,
-              m.name AS mname, m.signature AS msig, m.visibility AS mvis,
+    `MATCH (c)-[:DEFINES_METHOD]->(m:Method)
+       WHERE ((c:Class) OR ((c:Struct OR c:Interface OR c:Actor) AND c.file_path ENDS WITH '.swift'))
+             AND c.is_test = false
+       RETURN c.label AS kind, c.name AS cls, c.qualified_name AS qn, c.file_path AS cfile,
+              c.start_line AS cline, m.name AS mname, m.signature AS msig, m.visibility AS mvis,
               m.docstring AS mdoc, m.file_path AS mfile, m.start_line AS mline, m.return_type AS mrt
-       ORDER BY c.name, m.start_line LIMIT 500`,
+       ORDER BY c.name, m.start_line LIMIT 2000`,
+    2000,
   );
 
   const classMap = new Map<string, ClassesContext['classes'][number]>();
   for (const row of q.rows) {
-    const clsName = row[0] as string;
-    if (!isProductionGraphFile(deps, (row[2] as string) ?? '')) continue;
+    const clsName = row[1] as string;
+    if (!isProductionGraphFile(deps, (row[3] as string) ?? '')) continue;
     if (!classMap.has(clsName)) {
       classMap.set(clsName, {
         name: clsName,
-        qualifiedName: row[1] as string,
-        filePath: (row[2] as string) ?? '',
-        startLine: (row[3] as number) ?? 0,
+        qualifiedName: row[2] as string,
+        filePath: (row[3] as string) ?? '',
+        startLine: (row[4] as number) ?? 0,
         parentClass: null, // MCP 未提供继承数据
+        kind: (row[0] as string) || undefined,
         methods: [],
       });
     }
     classMap.get(clsName)!.methods.push({
-      name: row[4] as string,
-      signature: mergeGraphSignature(row[5] as string | null, row[10] as string | null, (row[8] as string) ?? '') ?? '',
-      visibility: (row[6] as string) ?? 'public',
-      docstring: (row[7] as string) ?? null,
-      filePath: (row[8] as string) ?? '',
-      startLine: (row[9] as number) ?? 0,
+      name: row[5] as string,
+      signature: mergeGraphSignature(row[6] as string | null, row[11] as string | null, (row[9] as string) ?? '') ?? '',
+      visibility: (row[7] as string) ?? 'public',
+      docstring: (row[8] as string) ?? null,
+      filePath: (row[9] as string) ?? '',
+      startLine: (row[10] as number) ?? 0,
     });
   }
 

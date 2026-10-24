@@ -105,7 +105,9 @@ export function buildClasses(ctx: ClassesContext): string {
 
   for (const cls of ctx.classes) {
     const header = `${cls.filePath}:${cls.startLine}`;
-    builder.addSection(cls.name, `源文件：\`${header}\`  限定名：\`${cls.qualifiedName}\``);
+    // Swift 值类型/协议在图谱是 Struct/Interface/Actor 标签，渲染时标出实际种类
+    const kindLabel = cls.kind && cls.kind !== 'Class' ? `（${cls.kind}）` : '';
+    builder.addSection(`${cls.name}${kindLabel}`, `源文件：\`${header}\`  限定名：\`${cls.qualifiedName}\``);
 
     if (cls.parentClass) {
       builder.addParagraph(`继承自：\`${cls.parentClass}\``);

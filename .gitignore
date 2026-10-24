@@ -34,4 +34,5 @@ Thumbs.db
 
 # Intent evidence runtime cache (HEAD-keyed, machine-specific)
 .scx-wiki-agent/cache/
+.scx-wiki-agent/archive/
 .scx-wiki-agent/confirmations.json

@@ -40,6 +40,8 @@ const MAX_TOPIC_OVERLAP = 0.5;
 const GENERIC_DIR_SEGMENTS = new Set([
   'src', 'lib', 'app', 'root', 'node_modules', 'test', 'tests', '__tests__',
   'shared', 'common', 'internal',
+  // 平台/布局段：双端仓库的目录回声（android/、macos/…），不是模块语义
+  'android', 'macos', 'ios', 'windows', 'linux', 'sources', 'main', 'java', 'com', 'org',
 ]);
 
 /** ascii 标识符 → kebab-case slug（空结果返回 null） */
@@ -119,6 +121,7 @@ export class TopicDiscovery {
 
     const topics: TopicDefinition[] = [];
     const usedIds = new Set<string>();
+    const usedTitles = new Set<string>();
     for (const cluster of candidates) {
       const files = this.filesForSymbols(cluster.top_nodes);
       const pkgs = this.packagesForFiles(files, arch);
@@ -128,21 +131,23 @@ export class TopicDiscovery {
       // 与已立题主题高度重叠的簇不重复立题（同一协作面的两种聚类切法）
       if (topics.some(t => overlapRatio(t.files, files) > MAX_TOPIC_OVERLAP)) continue;
 
-      const def = this.topicDefinition(cluster, files, [...pkgs], usedIds);
+      const def = this.topicDefinition(cluster, files, [...pkgs], usedIds, usedTitles);
       if (!def) continue;
       topics.push(def);
+      usedTitles.add(def.title);
       if (topics.length >= MAX_TOPICS) break;
     }
     return topics;
   }
 
   /**
-   * 主题命名（语义优先级）：
-   * 1. cluster.label 为语义文本时直接用作标题；
-   * 2. 模块复合命名：主题文件目录段（剔通用段）按频次取前几个合成
-   *    「A · B · C 跨模块协作」——单个主导符号（如 refreshMirror）不描述
-   *    跨模块协作面，且可能与上下文符号清单脱节；模块名才是稳定语义锚；
-   * 3. 跨包名联合（packages 粒度更粗时的兑底）。
+   * 主题命名（语义优先级，标题撞名时逐级退避）：
+   * 1. cluster.label 为语义文本时直接用作标题（目录回声除外——双端仓库的簇
+   *    label 常是 "android"/"macos" 这类平台目录名，与成员路径段同名即判回声）；
+   * 2. 符号对命名：簇内前两个 PascalCase 类型符号（协作面的具体载体，比目录段
+   *    更贴近「这些文件为何被聚在一起」）；
+   * 3. 模块复合命名：目录段（剔通用段）频次前几名合成「A · B 跨模块协作」；
+   * 4. 跨包名联合（packages 粒度更粗时的兜底）。
    * id 用命名源的 kebab slug（可读、跨构建稳定），冲突时追加序号。
    */
   private topicDefinition(
@@ -150,23 +155,47 @@ export class TopicDiscovery {
     files: string[],
     pkgs: string[],
     usedIds: Set<string>,
+    usedTitles: Set<string>,
   ): TopicDefinition | null {
+    const dirSegs = new Set(files.flatMap(f => f.split('/').slice(0, -1)).map(s => s.toLowerCase()));
     const semanticLabel = cluster.label
       && !cluster.label.includes('/')
       && !this.scanResult.sourceDirs.includes(cluster.label)
+      && !dirSegs.has(cluster.label.toLowerCase())
       ? cluster.label
       : null;
+    const symbolPair = this.symbolPairTitle(cluster.top_nodes);
     const moduleTokens = this.moduleTokensForFiles(files);
-    const title = semanticLabel
-      ?? (moduleTokens.length >= 2 ? `${moduleTokens.join(' · ')} 跨模块协作` : null)
-      ?? (pkgs.length >= 2 ? `${pkgs.slice(0, 2).join(' ↔ ')} 协作` : null);
-    if (!title) return null;
-    const baseId = (moduleTokens.length >= 2 ? kebab(moduleTokens.join('-')) : kebab(pkgs.join('-')))
+    const candidates: Array<{ title: string; idBase: string | null }> = [];
+    if (semanticLabel) candidates.push({ title: semanticLabel, idBase: kebab(semanticLabel) });
+    if (symbolPair) candidates.push({ title: symbolPair.title, idBase: symbolPair.idBase });
+    if (moduleTokens.length >= 2) {
+      candidates.push({ title: `${moduleTokens.join(' · ')} 跨模块协作`, idBase: kebab(moduleTokens.join('-')) });
+    }
+    if (pkgs.length >= 2) {
+      candidates.push({ title: `${pkgs.slice(0, 2).join(' ↔ ')} 协作`, idBase: kebab(pkgs.join('-')) });
+    }
+    // 标题撞名逐级退避（双端仓库两个簇的目录段/包名完全相同是常态）
+    const picked = candidates.find(c => !usedTitles.has(c.title)) ?? null;
+    if (picked === null) return null;
+    // id 独立推导（模块 slug 优先——ASCII 稳定；语义标题可能是中文，kebab 为空）
+    const baseId = (moduleTokens.length >= 2 ? kebab(moduleTokens.join('-')) : null)
+      ?? symbolPair?.idBase
+      ?? (pkgs.length >= 2 ? kebab(pkgs.join('-')) : null)
+      ?? kebab(picked.title)
       ?? `topic-${cluster.id}`;
     let id = baseId;
     for (let n = 2; usedIds.has(id); n++) id = `${baseId}-${n}`;
     usedIds.add(id);
-    return { id, title, files: files.slice(0, MAX_TOPIC_FILES) };
+    return { id, title: picked.title, files: files.slice(0, MAX_TOPIC_FILES) };
+  }
+
+  /** 簇内前两个 PascalCase 类型符号 → 协作面命名（id 用 slug；不足两个返回 null） */
+  private symbolPairTitle(topNodes: string[]): { title: string; idBase: string } | null {
+    const types = topNodes.filter(n => /^[A-Z]\w{3,}$/.test(n)).slice(0, 2);
+    if (types.length < 2) return null;
+    const idBase = kebab(types.join('-'));
+    return idBase ? { title: `${types[0]} · ${types[1]} 协作`, idBase } : null;
   }
 
   /**

@@ -187,7 +187,7 @@ export function evidenceCoverage(
   content: string,
   knownFiles: ReadonlySet<string>,
   rootDir?: string,
-): { cited: number; covered: number; missing: string[] } {
+): { cited: number; covered: number; missing: string[]; blockHasNonCited: boolean } {
   const blockFiles = parseEvidenceBlockFiles(content);
   const blockRange = content.match(/<details>\s*<summary>Relevant source files<\/summary>[\s\S]*?<\/details>/);
   const body = blockRange ? content.replace(blockRange[0], '') : content;
@@ -198,7 +198,10 @@ export function evidenceCoverage(
     if (blockFiles.has(f)) covered++;
     else missing.push(f);
   }
-  return { cited: cited.size, covered, missing };
+  // 块内是否存在未被正文引用的文件（「位移」）：T1 排序把引用文件置顶，
+  // 无位移时缺失仅因名额用尽（>15 上限），是设计行为而非选择缺陷
+  const blockHasNonCited = [...blockFiles].some(f => !cited.has(f));
+  return { cited: cited.size, covered, missing, blockHasNonCited };
 }
 
 /** 生成页首锚定块；无证据文件时返回空串（不注入） */

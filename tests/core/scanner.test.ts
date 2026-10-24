@@ -202,3 +202,23 @@ describe('FileScanner extraIgnoredDirs', () => {
     }
   });
 });
+
+describe('动态源目录探测', () => {
+  it('未知命名的顶层目录（双端仓库 macos/）聚集 ≥3 个生产文件即入 sourceDirs', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'scanner-srcdirs-'));
+    try {
+      mkdirSync(join(tmp, 'macos', 'Sources', 'App'), { recursive: true });
+      for (const name of ['A.swift', 'B.swift', 'C.swift']) {
+        writeFileSync(join(tmp, 'macos', 'Sources', 'App', name), 'import Foundation\n');
+      }
+      mkdirSync(join(tmp, 'docs'), { recursive: true });
+      writeFileSync(join(tmp, 'docs', 'note.md'), '# note\n');
+      const scan = new FileScanner(tmp).scan();
+      expect(scan.sourceDirs).toContain('macos');
+      // 少于 3 个文件的顶层目录不入选（docs 仅 1 个文件）
+      expect(scan.sourceDirs).not.toContain('docs');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});

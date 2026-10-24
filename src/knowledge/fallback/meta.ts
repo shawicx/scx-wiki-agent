@@ -4,6 +4,20 @@ import type {
   EnvironmentContext, TestingContext, ConventionsContext, ConstraintsContext,
 } from '../types.js';
 import { hasIntent, intentTable, renderFactsAndUnknowns } from './shared.js';
+
+/**
+ * 摘录安全截断：cap 内的代码块围栏被截断吞掉闭合（未配对 ```）时补上闭合
+ * 围栏并标注截断——否则页面结构损坏（unclosed fence），incomplete-page 规则
+ * 会正确地拦下该页。纯文本截断不感知块结构是本 helper 的存在理由。
+ */
+function safeExcerpt(body: string, cap: number): string {
+  const text = body.slice(0, cap);
+  const fenceCount = (text.match(/^```/gm) ?? []).length;
+  return fenceCount % 2 === 1
+    ? `${text}\n${'`'.repeat(3)}\n\n（AGENTS.md 该段超长，此处截断）`
+    : text;
+}
+
 /**
  * environment.md：运行态信息（包名/版本/运行时/脚本/env 变量）。
  * 纯规则生成，数据来自 ConfigDetector 探测的实际配置文件。
@@ -174,8 +188,7 @@ export function buildConventions(ctx: ConventionsContext): string {
     for (const section of sections.slice(0, 5)) {
       const lines = section.trim().split('\n');
       const title = lines[0].trim();
-      const body = lines.slice(1).join('\n').trim().slice(0, 500);
-      builder.addSubSection(title, body || '（无内容）');
+      builder.addSubSection(title, safeExcerpt(lines.slice(1).join('\n').trim(), 500) || '（无内容）');
     }
   }
 

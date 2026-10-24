@@ -120,6 +120,8 @@ export interface ClassesContext {
     startLine: number;
     /** MCP 未提供继承数据，此字段恒为 null */
     parentClass: string | null;
+    /** 图谱类型标签（Class/Struct/Interface/Actor；Swift 值类型/协议语义，渲染时区分） */
+    kind?: string;
     methods: Array<{
       name: string;
       signature: string;

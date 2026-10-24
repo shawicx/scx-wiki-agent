@@ -91,9 +91,13 @@ export function checkAnchors(
         } else {
           usage++;
         }
-        // 锚点-符号关联：行内标识符唯一解析到定义文件集、而锚点文件不在其中
-        if (opts.symbolFiles) {
+        // 锚点-符号关联：锚定行词法上不含该标识符时才判「文件不符」——
+        // calls/glossary 页合法引用使用点（标识符就在锚定行上），其定义文件
+        // 在别处不是缺陷；跨语言同名符号同理。行内容与标识符完全无关才是
+        // 错锚信号（R1 真目标）。注释锚点（行内含名）同样放行。
+        if (opts.symbolFiles && content !== null) {
           for (const name of tickNames) {
+            if (content.includes(name)) continue;
             const defFiles = opts.symbolFiles.get(name);
             if (defFiles && defFiles.size > 0 && !defFiles.has(resolved!)) {
               mismatched.add(`${name} @ ${path}:${lineNo}（定义于 ${[...defFiles].slice(0, 2).join('、')}）`);

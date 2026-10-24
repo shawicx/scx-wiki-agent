@@ -148,4 +148,31 @@ describe('Swift scanner 与运行态', () => {
     expect(env.runtime).toBe('Swift');
     expect(env.packageManager).toBe('cocoapods');
   });
+
+  it('清单在子目录（macos/Package.swift）→ 根目录无清单时下探一层', () => {
+    write('subpkg/macos/Package.swift', '// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(name: "Nexvia")\n');
+    write('subpkg/macos/Sources/main.swift', 'import Foundation\n');
+    const env = new ConfigDetector(join(dir, 'subpkg')).detectEnvironment();
+    expect(env.runtime).toBe('Swift');
+    expect(env.packageManager).toBe('swift package manager');
+    expect(env.packageName).toBe('Nexvia');
+  });
+
+  it('双端仓库（macos SPM + android gradle）→ 运行时/包管理器并列，不虚构单一归属', () => {
+    write('dual/macos/Package.swift', '// swift-tools-version:5.9\nimport PackageDescription\n\nlet package = Package(name: "Nexvia")\n');
+    write('dual/android/build.gradle.kts', 'plugins { kotlin("android") }\n');
+    const env = new ConfigDetector(join(dir, 'dual')).detectEnvironment();
+    // 子目录按名称排序（android < macos）保证确定性
+    expect(env.runtime).toBe('JVM / Swift');
+    expect(env.packageManager).toBe('gradle + swift package manager');
+    expect(env.packageName).toBe('Nexvia');
+  });
+
+  it('根目录清单优先于子目录（根 go.mod 命中即不再下探）', () => {
+    write('rootwin/go.mod', 'module example.com/svc\n\ngo 1.22\n');
+    write('rootwin/tools/Package.swift', '// swift-tools-version:5.9\n');
+    const env = new ConfigDetector(join(dir, 'rootwin')).detectEnvironment();
+    expect(env.runtime).toBe('Go');
+    expect(env.packageManager).toBe('go modules');
+  });
 });

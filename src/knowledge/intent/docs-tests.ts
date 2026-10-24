@@ -2,6 +2,7 @@
 
 import type { IntentEvidence } from './shared.js';
 import { TEST_TITLE_RE, TITLES_PER_TEST_FILE } from './shared.js';
+import { headingSlug } from '../quality/anchors.js';
 
 /** markdown 文档切节：heading + 首段摘录 */
 export function docSections(rel: string, src: string): IntentEvidence[] {
@@ -30,7 +31,9 @@ export function docSections(rel: string, src: string): IntentEvidence[] {
       kind: 'doc-section',
       target: { file: rel, line: i + 1 },
       text: `${heading}：${excerpt}`,
-      anchor: `${rel}#${heading}`,
+      // 锚点片段用 GitHub slug（与校验侧 headingSlug 同口径）：原始标题大小写
+      // （如 #Features）在校验侧 slug 化后不匹配，产生 broken-anchor 误报
+      anchor: `${rel}#${headingSlug(heading)}`,
     });
   }
   return sections;

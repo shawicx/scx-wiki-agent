@@ -132,14 +132,16 @@ export function checkThinEvidence(text: string, opts: ValidateOptions, issues: Q
   return count;
 }
 
-/** evidence-coverage（warn）：正文引用文件未被锚定块覆盖（引用 ≥3 且覆盖不全时告警） */
+/** evidence-coverage（warn）：正文引用文件未被锚定块覆盖——仅在锚定块存在
+ * 位移（块内占着未被引用的文件）时告警；T1 排序已把引用文件置顶，引用数
+ * 超过块上限（15）造成的缺失是设计行为，不算选择缺陷。 */
 export function checkEvidenceCoverage(
   text: string,
   opts: ValidateOptions,
   issues: QualityIssue[],
 ): { cited: number; covered: number; missingSample: string[] } {
-  const { cited, covered, missing } = evidenceCoverage(text, opts.knownFiles);
-  if (cited >= 3 && covered < cited) {
+  const { cited, covered, missing, blockHasNonCited } = evidenceCoverage(text, opts.knownFiles);
+  if (cited >= 3 && covered < cited && blockHasNonCited) {
     issues.push({
       rule: 'evidence-coverage',
       severity: 'warn',

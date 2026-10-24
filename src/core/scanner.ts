@@ -332,6 +332,7 @@ export class FileScanner {
 
   private detectSourceDirs(files: ScannedFile[]): string[] {
     const dirSet = new Set<string>();
+    const topCounts = new Map<string, number>();
 
     for (const file of files) {
       const parts = file.relativePath.split('/');
@@ -340,8 +341,17 @@ export class FileScanner {
         if (KNOWN_SOURCE_DIRS.includes(topDir)) {
           dirSet.add(topDir);
         }
+        topCounts.set(topDir, (topCounts.get(topDir) ?? 0) + 1);
       }
     }
+
+    // 动态补充：未收录在 KNOWN_SOURCE_DIRS 的顶层目录（双端仓库 macos/、android/）
+    // 聚集 ≥3 个生产文件即视为源目录；隐藏/忽略目录在遍历时已被剔除
+    const dynamic = [...topCounts.entries()]
+      .filter(([dir, count]) => count >= 3 && !dirSet.has(dir))
+      .map(([dir]) => dir)
+      .sort();
+    for (const dir of dynamic) dirSet.add(dir);
 
     return Array.from(dirSet);
   }

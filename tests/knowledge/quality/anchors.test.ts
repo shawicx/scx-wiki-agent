@@ -39,18 +39,26 @@ describe('真锚点核验（注入式 reader/symbolFiles）', () => {
     expect(r.issues.some(i => i.rule === 'broken-anchor')).toBe(false);
   });
 
-  it('锚点文件与符号定义文件不符 → warn；歧义名（0 文件）不告警', () => {
+  it('锚点行不含标识符且定义文件在别处 → warn；锚点行词法含标识符（使用点）不告警；歧义名（0 文件）不告警', () => {
     const symbolFiles = new Map<string, ReadonlySet<string>>([
       ['realFn', new Set(['src/services/wiki-service.ts'])],
       ['nowhere', new Set()],
     ]);
+    // 行 2（const x = 1;）不含 realFn：定义在 wiki-service.ts 而锚在 index.ts → 真 mismatch
     const r = validatePageContent(
-      '# A\n\n`realFn` 见 `src/index.ts:4`；`nowhere` 见 `src/index.ts:4`',
+      '# A\n\n`realFn` 见 `src/index.ts:2`；`nowhere` 见 `src/index.ts:2`',
       optsWithReader({ symbolFiles }),
     );
     const mismatch = r.issues.filter(i => i.message.includes('定义文件不符'));
     expect(mismatch).toHaveLength(1);
     expect(mismatch[0].message).toContain('realFn');
+
+    // 行 4 含 realFn（使用点锚点）：定义文件不同但锚定行词法支撑 → 不告警
+    const usage = validatePageContent(
+      '# A\n\n`realFn` 见 `src/index.ts:4`',
+      optsWithReader({ symbolFiles }),
+    );
+    expect(usage.issues.filter(i => i.message.includes('定义文件不符'))).toHaveLength(0);
   });
 
   it('文档锚点：目标 heading 存在通过，不存在告警', () => {

@@ -90,7 +90,7 @@ export function detectEnvironment(
   return { packageName, version, runtime, nodeVersion, packageManager, scripts, envVars };
 }
 
-/** Python/Go/JVM 运行态探测（文件存在性 + 少量文本嗅探；无命中返回 null 走 node 默认） */
+/** Python/Go/JVM/Swift 运行态探测（文件存在性 + 少量文本嗅探；无命中返回 null 走 node 默认） */
 function detectNativeRuntime(rootDir: string): Omit<EnvironmentInfo, 'envVars' | 'scripts'> | null {
   const read = (p: string): string | null => {
     try { return readFileSync(join(rootDir, p), 'utf-8'); } catch { return null; }
@@ -118,6 +118,16 @@ function detectNativeRuntime(rootDir: string): Omit<EnvironmentInfo, 'envVars' |
   }
   if (existsSync(join(rootDir, 'build.gradle')) || existsSync(join(rootDir, 'build.gradle.kts'))) {
     return { packageName: '', version: '', runtime: 'JVM', nodeVersion: '', packageManager: 'gradle' };
+  }
+  // Swift：SPM 清单（name 实参 + swift-tools-version 头注释）优先，CocoaPods 兜底
+  const packageSwift = read('Package.swift');
+  if (packageSwift !== null) {
+    const name = packageSwift.match(/\bPackage\s*\(\s*name\s*:\s*"([^"]+)"/)?.[1] ?? '';
+    const ver = packageSwift.match(/^\/\/\s*swift-tools-version:\s*([^\s\n]+)/m)?.[1] ?? '';
+    return { packageName: name, version: ver, runtime: 'Swift', nodeVersion: '', packageManager: 'swift package manager' };
+  }
+  if (existsSync(join(rootDir, 'Podfile'))) {
+    return { packageName: '', version: '', runtime: 'Swift', nodeVersion: '', packageManager: 'cocoapods' };
   }
   return null;
 }

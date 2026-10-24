@@ -20,6 +20,9 @@ export const IGNORED_DIRS = [
   '__pycache__',
   '.venv',
   'venv',
+  // Swift：CocoaPods 依赖目录与 Xcode 构建产物（.build/.swiftpm 以点开头已天然跳过）
+  'Pods',
+  'DerivedData',
 ];
 
 export const SUPPORTED_EXTENSIONS = [
@@ -30,6 +33,7 @@ export const SUPPORTED_EXTENSIONS = [
   '.py',
   '.go',
   '.java', '.kt', '.kts',
+  '.swift',
   '.css',
   '.md',
   '.json',
@@ -39,4 +43,4 @@ export const SUPPORTED_EXTENSIONS = [
 ];
 
 /** import 语句可解析的扩展名（Vue SFC 的 <script> 与 TS 同语法） */
-export const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.css', '.py', '.go', '.java', '.kt', '.kts'];
+export const CODE_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.css', '.py', '.go', '.java', '.kt', '.kts', '.swift'];

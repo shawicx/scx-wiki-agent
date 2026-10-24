@@ -1,7 +1,7 @@
 /**
  * I/O 与外部边界扫描（自 data-flow-shape.ts 拆出；纯搬移，零逻辑变化）。
  *
- * 承载：TS+JS+Vue / Rust / Python / Go / JVM 的单行 I/O 规则
+ * 承载：TS+JS+Vue / Rust / Python / Go / JVM / Swift 的单行 I/O 规则
  * （fs / process / config / env / stdout），严格限定在符号函数体内调用（由 index.ts 编排）。
  */
 
@@ -73,10 +73,29 @@ const JVM_IO_RULES: IoRule[] = [
   { re: /\bSystem\.(?:getenv|getProperty)\s*\(\s*"([A-Za-z_][\w]*)/, kind: 'env', direction: 'input', envName: true },
 ];
 
+// Swift：Foundation FileManager / 构造器读取 / Process / print / ProcessInfo.environment
+// （label 实参形态下 medium 取整段首个实参，含 `contentsOf:` 标签；不做 label 解析）
+const SWIFT_IO_RULES: IoRule[] = [
+  { re: /FileManager\.default\.contents\s*\(/, kind: 'fs-read', direction: 'input', mediumArg: 0 },
+  { re: /\bString\s*\(\s*contentsOf:/, kind: 'fs-read', direction: 'input', mediumArg: 0 },
+  { re: /\bString\s*\(\s*contentsOfFile:/, kind: 'fs-read', direction: 'input', mediumArg: 0 },
+  { re: /\bData\s*\(\s*contentsOf:/, kind: 'fs-read', direction: 'input', mediumArg: 0 },
+  { re: /\.contentsOfDirectory\s*\(/, kind: 'directory-read', direction: 'input', mediumArg: 0 },
+  { re: /\.subpaths\s*\(/, kind: 'directory-read', direction: 'input', mediumArg: 0 },
+  { re: /\.write\s*\(\s*to(?:File)?:/, kind: 'fs-write', direction: 'output', mediumArg: 0 },
+  { re: /\.createDirectory\s*\(/, kind: 'directory-write', direction: 'output', mediumArg: 0 },
+  { re: /\.removeItem\s*\(/, kind: 'remove', direction: 'output', mediumArg: 0 },
+  { re: /\bProcess\s*\(\s*\)/, kind: 'process', direction: 'bidirectional' },
+  { re: /(?<![\w.])print\s*\(/, kind: 'stdout', direction: 'output' },
+  { re: /ProcessInfo\.processInfo\.environment\s*\[\s*"([A-Za-z_][\w]*)"\s*\]/, kind: 'env', direction: 'input', envName: true },
+  { re: /\bEnvironment\.get\s*\(\s*"([A-Za-z_][\w]*)"/, kind: 'env', direction: 'input', envName: true },
+];
+
 const NATIVE_IO_RULES: Record<string, IoRule[]> = {
   python: PY_IO_RULES,
   go: GO_IO_RULES,
   jvm: JVM_IO_RULES,
+  swift: SWIFT_IO_RULES,
 };
 
 const RUST_IO_RULES: IoRule[] = [
@@ -145,10 +164,11 @@ export function detectIoEvents(line: string, domain: string): IoHit[] {
       const outer = firstParen >= 0 && firstParen < m[0].length - 1
         ? readCallArgs(line, at + firstParen + 1)
         : call;
+      // 标签实参语言（Swift `contentsOf:` 等）命中不以 ( 结尾：call 为空时取外层实参
+      const args = (call ?? outer)?.args ?? [];
       const expression = (outer && outer.end >= 0
         ? line.slice(at, outer.end + 1)
         : line.slice(at, Math.min(line.length, matchEnd + 80))).trim();
-      const args = call?.args ?? [];
       const medium = rule.mediumArg !== undefined ? args[rule.mediumArg] : undefined;
       hits.push({
         kind: rule.kind,

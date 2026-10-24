@@ -30,33 +30,40 @@ export interface ScanResult {
   fileCounts: { total: number; production: number; test: number };
 }
 
-const KNOWN_SOURCE_DIRS = ['src', 'src-tauri', 'app', 'lib', 'packages', 'cmd', 'internal'];
+const KNOWN_SOURCE_DIRS = ['src', 'src-tauri', 'app', 'lib', 'packages', 'cmd', 'internal', 'Sources'];
 
 const PROJECT_TYPE_INDICATORS: Record<string, string[]> = {
   backend: ['express', '@nestjs/core', 'fastify', '@fastify',
             // 非_node 生态（import 即证据，无需 package.json 声明）
-            'flask', 'fastapi-py', 'django', 'gin', 'echo-go', 'fiber-go', 'spring-boot'],
+            'flask', 'fastapi-py', 'django', 'gin', 'echo-go', 'fiber-go', 'spring-boot',
+            'vapor'],
   frontend: ['react', 'react-dom', 'vue', 'next', 'nuxt', '@sveltejs'],
   agent: ['langgraph', '@langchain/core', 'mastra'],
-  cli: ['commander', 'yargs', 'cobra'],
-  desktop: ['@tauri-apps/api'],
+  cli: ['commander', 'yargs', 'cobra', 'argument-parser-swift'],
+  // Apple 平台应用（SwiftUI/UIKit/AppKit）归 desktop：原生应用桶（与 Tauri 同类），
+  // 不进 frontend（tier2 components/state/routing 为 react/vue 检测，只会空证据跳页）
+  desktop: ['@tauri-apps/api', 'appkit-swift', 'swiftui', 'uikit'],
 };
 
-/** 原生 import → 技术栈规范名（无 package.json 的 Python/Go/JVM 仓库：import 即证据） */
+/** 原生 import → 技术栈规范名（无 package.json 的 Python/Go/JVM/Swift 仓库：import 即证据） */
 const NATIVE_IMPORT_MAP: Record<string, string> = {
   flask: 'flask', fastapi: 'fastapi-py', django: 'django', uvicorn: 'fastapi-py',
   sqlalchemy: 'sqlalchemy', celery: 'celery', requests: 'requests',
   'gin-gonic/gin': 'gin', 'labstack/echo': 'echo-go', 'gofiber/fiber': 'fiber-go',
   'spf13/cobra': 'cobra',
+  // Swift：模块名即 import 说明符（Vapor 服务端 / SwiftUI·UIKit 客户端 / ArgumentParser CLI / AppKit macOS）
+  Vapor: 'vapor', Fluent: 'fluent', SwiftUI: 'swiftui', UIKit: 'uikit',
+  AppKit: 'appkit-swift', ArgumentParser: 'argument-parser-swift',
 };
 
-/** Python/Go 源文件 import 提取 → 规范技术栈名（去重排序；上限控成本） */
+/** Python/Go/Swift 源文件 import 提取 → 规范技术栈名（去重排序；上限控成本） */
 function detectNativeImports(files: ScannedFile[]): string[] {
   const found = new Set<string>();
   const pyImport = /^\s*(?:from\s+([\w.]+)\s+import|import\s+([\w.,\s]+))/;
   const goImport = /"((?:github\.com|gitlab\.com|golang\.org)\/[^"]+)"/;
+  const swiftImport = /^\s*(?:@testable\s+|@\w+\s+)?import\s+(?:class\s+|struct\s+|enum\s+|protocol\s+|func\s+|var\s+|let\s+|typealias\s+)?([A-Za-z_]\w*)/;
   for (const f of files.slice(0, 800)) {
-    if (f.extension !== '.py' && f.extension !== '.go') continue;
+    if (f.extension !== '.py' && f.extension !== '.go' && f.extension !== '.swift') continue;
     let src: string;
     try {
       src = readFileSync(f.absolutePath, 'utf-8');
@@ -75,6 +82,8 @@ function detectNativeImports(files: ScannedFile[]): string[] {
           if (NATIVE_IMPORT_MAP[key]) { found.add(NATIVE_IMPORT_MAP[key]); break; }
         }
       }
+      const swift = line.match(swiftImport);
+      if (swift && NATIVE_IMPORT_MAP[swift[1]]) found.add(NATIVE_IMPORT_MAP[swift[1]]);
     }
   }
   return [...found].sort();

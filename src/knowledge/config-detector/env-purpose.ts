@@ -22,7 +22,7 @@ export function extractEnvPurposes(
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (isCommentLine(line)) continue;
-        const envRegex = /process\.env\.([A-Z_][A-Z0-9_]*)|os\.environ\[?['"]([A-Z_][A-Z0-9_]*)['"]|os\.getenv\(\s*['"]([A-Z_][A-Z0-9_]*)['"]|os\.Getenv\(\s*"([A-Z_][A-Z0-9_]*)"|System\.getenv\(\s*"([A-Z_][A-Z0-9_]*)"/g;
+        const envRegex = /process\.env\.([A-Z_][A-Z0-9_]*)|os\.environ\[?['"]([A-Z_][A-Z0-9_]*)['"]|os\.getenv\(\s*['"]([A-Z_][A-Z0-9_]*)['"]|os\.Getenv\(\s*"([A-Z_][A-Z0-9_]*)"|System\.getenv\(\s*"([A-Z_][A-Z0-9_]*)"|ProcessInfo\.processInfo\.environment\[\s*"([A-Z_][A-Z0-9_]*)"\s*\]|Environment\.get\(\s*"([A-Z_][A-Z0-9_]*)"/g;
         let match: RegExpExecArray | null;
         envRegex.lastIndex = 0;
         while ((match = envRegex.exec(line)) !== null) {
@@ -36,9 +36,11 @@ export function extractEnvPurposes(
             // 上方紧邻注释行（//、*、# 形态，取最近一行）
             ?? nearestCommentAbove(lines, i))?.replace(/^\s*[*#]*\s*/, '').trim();
           // 缺省值字面量：process.env.X ?? 'z' / os.getenv('X', 'z') / os.Getenv("X", "z")
+          // / ProcessInfo.processInfo.environment["X"] ?? "z"（Swift）
           const fallback = line.match(/process\.env\.[A-Z_][A-Z0-9_]*\s*(?:\?\?|\|\|)\s*(['"`][^'"`]*['"`]|true|false|\d+)/)
             ?? line.match(/os\.getenv\(\s*['"][A-Z_][A-Z0-9_]*['"]\s*,\s*([^)]+)\)/)
-            ?? line.match(/os\.Getenv\(\s*"[A-Z_][A-Z0-9_]*"\s*,\s*([^)]+)\)/);
+            ?? line.match(/os\.Getenv\(\s*"[A-Z_][A-Z0-9_]*"\s*,\s*([^)]+)\)/)
+            ?? line.match(/ProcessInfo\.processInfo\.environment\[\s*"[A-Z_][A-Z0-9_]*"\s*\]\s*(?:\?\?|\|\|)\s*(['"`][^'"`]*['"`]|true|false|\d+)/);
           if (commentText && commentText.length >= 2) {
             entry.purpose = commentText.slice(0, 100);
           } else if (fallback) {

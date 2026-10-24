@@ -229,7 +229,8 @@ export class ConfigDetector {
   private extractEnvVars(files: string[]): EnvVarEvidence[] {
     const byName = new Map<string, Set<string>>();
     // 多语言 env 引用：process.env.X / os.environ['X'] / os.getenv('X') / os.Getenv("X") / System.getenv("X")
-    const envRegex = /process\.env\.([A-Z_][A-Z0-9_]*)|os\.environ\[?['"]([A-Z_][A-Z0-9_]*)['"]|os\.getenv\(\s*['"]([A-Z_][A-Z0-9_]*)['"]|os\.Getenv\(\s*"([A-Z_][A-Z0-9_]*)"|System\.getenv\(\s*"([A-Z_][A-Z0-9_]*)"/g;
+    // / ProcessInfo.processInfo.environment["X"] / Environment.get("X")（Swift）
+    const envRegex = /process\.env\.([A-Z_][A-Z0-9_]*)|os\.environ\[?['"]([A-Z_][A-Z0-9_]*)['"]|os\.getenv\(\s*['"]([A-Z_][A-Z0-9_]*)['"]|os\.Getenv\(\s*"([A-Z_][A-Z0-9_]*)"|System\.getenv\(\s*"([A-Z_][A-Z0-9_]*)"|ProcessInfo\.processInfo\.environment\[\s*"([A-Z_][A-Z0-9_]*)"\s*\]|Environment\.get\(\s*"([A-Z_][A-Z0-9_]*)"/g;
 
     for (const file of files) {
       try {

@@ -2,9 +2,9 @@ import { existsSync, readdirSync, statSync } from 'fs';
 import { join, extname, relative } from 'path';
 import { isTestPath } from '../../shared/utils.js';
 
-const CODE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.kt', '.kts'];
-const KNOWN_SOURCE_DIRS = ['src', 'src-tauri', 'app', 'lib', 'packages', 'cmd', 'internal'];
-const AUTO_SOURCE_DIRS = [...KNOWN_SOURCE_DIRS, 'tests', 'test', '__tests__', 'spec'];
+const CODE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.java', '.kt', '.kts', '.swift'];
+const KNOWN_SOURCE_DIRS = ['src', 'src-tauri', 'app', 'lib', 'packages', 'cmd', 'internal', 'Sources'];
+const AUTO_SOURCE_DIRS = [...KNOWN_SOURCE_DIRS, 'tests', 'test', '__tests__', 'spec', 'Tests'];
 
 /** 按生产/测试口径拆分文件清单（isTestPath 判定） */
 export function classifyFiles(rootDir: string, files: string[]): { production: string[]; test: string[] } {

@@ -27,10 +27,12 @@ describe('语言域与测试路径', () => {
     expect(getFileLanguage('a.go')).toBe('go');
     expect(getFileLanguage('A.java')).toBe('java');
     expect(getFileLanguage('a.kt')).toBe('kotlin');
+    expect(getFileLanguage('App.swift')).toBe('swift');
     expect(languageDomainOf('app.py')).toBe('python');
     expect(languageDomainOf('main.go')).toBe('go');
     expect(languageDomainOf('App.java')).toBe('jvm');
     expect(languageDomainOf('App.kt')).toBe('jvm');
+    expect(languageDomainOf('Sources/App.swift')).toBe('swift');
   });
 
   it('各语言测试路径判定', () => {
@@ -40,6 +42,10 @@ describe('语言域与测试路径', () => {
     expect(isTestPath('pkg/server_test.go')).toBe(true);
     expect(isTestPath('src/main.go')).toBe(false);
     expect(isTestPath('app.py')).toBe(false);
+    // Swift：SPM 约定 Tests/ 目录 + XxxTests.swift 文件
+    expect(isTestPath('Tests/AppTests/AppTests.swift')).toBe(true);
+    expect(isTestPath('Sources/AppTests.swift')).toBe(true);
+    expect(isTestPath('Sources/App.swift')).toBe(false);
   });
 });
 
@@ -72,6 +78,7 @@ describe('原生语言定义/常量模式', () => {
   it('名字驱动定义探测（data-flow body-range 用）', () => {
     expect(nativeDefinitionPatterns('load_config', 'python')[0].test('def load_config(path):')).toBe(true);
     expect(nativeDefinitionPatterns('Start', 'go')[0].test('func (s *Server) Start() error {')).toBe(true);
+    expect(nativeDefinitionPatterns('parseConfig', 'swift')[0].test('func parseConfig() throws {')).toBe(true);
   });
 });
 

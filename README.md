@@ -23,6 +23,7 @@
 | Python | 🧪 实验性 | 扫描/注释（含 docstring）/常量/env/I-O/包管理器（pyproject/requirements）已覆盖；图谱通道依赖 codebase-memory-mcp 的 Python 索引质量 |
 | Go | 🧪 实验性 | 同上（go.mod / gin / cobra 等指标已覆盖） |
 | Java / Kotlin | 🧪 实验性 | 同上（Maven / Gradle / Spring Boot 指标已覆盖） |
+| Swift | 🧪 实验性 | 同上（Package.swift / Podfile / Vapor / SwiftUI / ArgumentParser 指标已覆盖；Tests 目录与 `*Tests.swift` 归测试口径） |
 | 其他语言 | ❌ 未支持 | 文件不会进入扫描清单（构建产物接近空壳） |
 
 实验性语言的图谱通道（符号/调用边）取决于 codebase-memory-mcp 的索引覆盖；构建报告会输出「图谱语言覆盖」供核对。

@@ -15,6 +15,7 @@ const EXT_LANGUAGE_MAP: Record<string, Language> = {
   '.java': 'java',
   '.kt': 'kotlin',
   '.kts': 'kotlin',
+  '.swift': 'swift',
   '.css': 'css',
   '.md': 'markdown',
   '.json': 'json',
@@ -32,7 +33,7 @@ export function relativePath(root: string, absPath: string): string {
 }
 
 /** 测试路径特征：tests/ 目录、__tests__、*.test.* / *.spec.* 文件 */
-const TEST_PATH_RE = /(?:^|\/)(?:tests?|__tests__)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[\w.]+\.py$|(?:^|\/)conftest\.py$|(?:^|\/)\w+_test\.go$|(?:^|\/)src\/test\//;
+const TEST_PATH_RE = /(?:^|\/)(?:tests?|__tests__|Tests)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[\w.]+\.py$|(?:^|\/)conftest\.py$|(?:^|\/)\w+_test\.go$|(?:^|\/)\w+Tests\.swift$|(?:^|\/)src\/test\//;
 
 /** 是否测试路径（fixtures/单测文件不作为项目功能证据） */
 export function isTestPath(p: string): boolean {
@@ -46,6 +47,7 @@ const LANGUAGE_DOMAIN_EXT: Record<string, string> = {
   '.py': 'python',
   '.go': 'go',
   '.java': 'jvm', '.kt': 'jvm', '.kts': 'jvm',
+  '.swift': 'swift',
 };
 
 /** 文件的语言域；非代码文件（json/toml/md 等）返回 null */

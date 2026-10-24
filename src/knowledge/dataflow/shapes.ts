@@ -318,5 +318,6 @@ export function domainOf(file: string): string {
   if (/\.py$/i.test(file)) return 'python';
   if (/\.go$/i.test(file)) return 'go';
   if (/\.(?:java|kt|kts)$/i.test(file)) return 'jvm';
+  if (/\.swift$/i.test(file)) return 'swift';
   return 'ts';
 }
